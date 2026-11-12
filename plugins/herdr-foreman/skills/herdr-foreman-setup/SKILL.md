@@ -30,11 +30,11 @@ Run these and keep the results:
 - `python3 <hf>/scripts/config.py paths [--group <repo>]`: where each level
   lives.
 - `python3 <hf>/scripts/config.py machines`: the saved herdr machines.
-- The plugin directories this session was started with: `ps -o command= -p
-  "$CLAUDE_PID"` shows the command line, and `type claude` shows a shell
-  wrapper that adds `--plugin-dir`. Each `--plugin-dir <dir>` is a candidate
-  for `plugin_dirs`. Scripts run the bare `claude`, so they see these
-  plugins only through `plugin_dirs`.
+- `python3 <hf>/scripts/config.py plugin-dir-candidates`: the plugin
+  directories this session was started with (`--plugin-dir`, including the
+  ones a `claude` shell wrapper adds), herdr-foreman's own left out. These
+  are the candidates for `plugin_dirs`; offer only them. Scripts run the bare
+  `claude`, so they see these plugins only through `plugin_dirs`.
 - `python3 <hf>/scripts/config.py skills`: every skill this machine's Claude
   Code can load with the saved `plugin_dirs`, as `plugin:skill` or `skill`,
   with its directory. Run it again after `plugin_dirs` changes.

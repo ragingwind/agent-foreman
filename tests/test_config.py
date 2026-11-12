@@ -164,6 +164,21 @@ class Skills(unittest.TestCase):
         found = config.local_skills(plugins=plugins, user_skills_dir=user)
         self.assertEqual(sorted(found), ["plug:tidy", "real"])
 
+    def test_herdr_foreman_is_never_a_candidate_or_a_skill(self):
+        other = os.path.dirname(os.path.dirname(self.home.write("other/.claude-plugin/plugin.json", {"name": "other"})))
+        self.home.write("other/skills/tidy/SKILL.md", "x")
+        copy = os.path.dirname(os.path.dirname(self.home.write("copy/.claude-plugin/plugin.json",
+                                                               {"name": "herdr-foreman"})))
+        argv = ["claude", "--plugin-dir", other, f"--plugin-dir={config.SELF_DIR}", "--plugin-dir", copy,
+                "--plugin-dir", "/no/such/dir", "--model", "x"]
+        self.assertEqual(config.session_plugin_dirs(argv), [other])
+        plugins = [{"id": "other@inline", "enabled": True, "installPath": other},
+                   {"id": "herdr-foreman@herdr-skills", "enabled": True, "installPath": config.SELF_DIR}]
+        found = config.local_skills(plugins, user_skills_dir=os.path.join(self.home.root, "none"))
+        self.assertEqual(list(found), ["other:tidy"])
+        p = config.validate(config.merge(config.load(), {"plugin_dirs": [config.SELF_DIR, copy]}))
+        self.assertEqual(sum("is herdr-foreman itself" in x for x in p), 2)
+
     def test_plugin_dirs_go_to_claude_plugin_list(self):
         listing = mock.Mock(stdout="[]")
         with mock.patch.object(config.subprocess, "run", return_value=listing) as fake:

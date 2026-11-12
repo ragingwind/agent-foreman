@@ -18,6 +18,7 @@ Usage:
   config.py save user|group [--group OWNER/REPO] [--dry-run]   (full settings as JSON on stdin)
   config.py stages --group OWNER/REPO --task TASK [--agent KIND]
   config.py member MACHINE PATH [--agent KIND]   (is the checkout there and ready for that agent kind)
+  config.py plugin-dir-candidates   (this session's --plugin-dir directories, herdr-foreman left out)
   config.py profiles | groups | machines | skills
 
 `plugin_dirs` in the settings lists plugin directories the person loads with
@@ -61,6 +62,9 @@ EXIT_TOKEN_MISSING = 4
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(HERE)
+# This plugin. Its skills are the foreman's own, never bundled for agents.
+SELF = "herdr-foreman"
+SELF_DIR = os.path.dirname(os.path.dirname(SKILL_DIR))
 
 
 def _xdg(var, fallback):
@@ -225,6 +229,9 @@ def validate(cfg, machines=None, skills=None, group=False):
         for d in dirs:
             if not os.path.isfile(os.path.join(os.path.expanduser(d), ".claude-plugin", "plugin.json")):
                 problems.append(f"plugin_dirs: {d} has no .claude-plugin/plugin.json")
+            elif is_self(d):
+                problems.append(f"plugin_dirs: {d} is herdr-foreman itself; its skills are the foreman's, "
+                                f"not the agents'")
 
     loop = cfg.get("loop", {})
     stages = loop.get("stages")
@@ -360,6 +367,46 @@ def member_state(label, path, machines=None, kind=adapters.DEFAULT):
     return json.loads(out.stdout)
 
 
+def is_self(plugin_dir):
+    """Whether a plugin directory is this plugin (by path or by manifest name)."""
+    path = os.path.realpath(os.path.expanduser(plugin_dir))
+    if path == os.path.realpath(SELF_DIR):
+        return True
+    manifest = read_json(os.path.join(path, ".claude-plugin", "plugin.json"))
+    return manifest.get("name") == SELF
+
+
+def session_plugin_dirs(cmdline=None):
+    """The --plugin-dir directories the Claude Code session running this script
+    was started with (a `claude` shell wrapper's flags show up here too), kept
+    to real plugin directories, herdr-foreman left out."""
+    if cmdline is None:
+        pid = os.environ.get("CLAUDE_PID", "")
+        if not pid.isdigit():
+            return []
+        proc = f"/proc/{pid}/cmdline"
+        if os.path.exists(proc):
+            with open(proc, "rb") as f:
+                args = [a.decode() for a in f.read().split(b"\0") if a]
+        else:
+            out = subprocess.run(["ps", "-o", "command=", "-p", pid], capture_output=True, text=True)
+            args = out.stdout.split()
+    else:
+        args = list(cmdline)
+    found = []
+    for i, a in enumerate(args):
+        if a == "--plugin-dir" and i + 1 < len(args):
+            d = args[i + 1]
+        elif a.startswith("--plugin-dir="):
+            d = a.split("=", 1)[1]
+        else:
+            continue
+        if os.path.isfile(os.path.join(os.path.expanduser(d), ".claude-plugin", "plugin.json")) \
+                and not is_self(d) and d not in found:
+            found.append(d)
+    return found
+
+
 def plugin_list(plugin_dirs=()):
     """Claude Code's plugin list, with the settings' `plugin_dirs` loaded the
     way `claude --plugin-dir` loads them for a session."""
@@ -384,6 +431,8 @@ def local_skills(plugins=None, user_skills_dir=None):
         if not p.get("enabled") or not p.get("installPath"):
             continue
         name = p["id"].split("@", 1)[0]
+        if name == SELF or is_self(p["installPath"]):
+            continue
         root = os.path.join(p["installPath"], "skills")
         if not os.path.isdir(root):
             continue
@@ -465,7 +514,7 @@ def plugin_dirs(cfg):
 def _cli(argv):
     ap = argparse.ArgumentParser(prog="config.py", description="herdr-foreman settings")
     ap.add_argument("command", choices=["paths", "show", "check", "save", "stages", "member", "profiles",
-                                        "groups", "machines", "skills"])
+                                        "groups", "machines", "skills", "plugin-dir-candidates"])
     ap.add_argument("rest", nargs="*", help="save: user or group; member: MACHINE PATH")
     ap.add_argument("--group", metavar="OWNER/REPO")
     ap.add_argument("--task", default="<task>")
@@ -542,6 +591,9 @@ def _cli(argv):
     elif args.command == "machines":
         for name, m in herdr_machines().items():
             print(f"{name:24} {m['target']:32} {'enabled' if m['enabled'] else 'disabled'}")
+    elif args.command == "plugin-dir-candidates":
+        for d in session_plugin_dirs():
+            print(d)
     elif args.command == "skills":
         for ref, path in local_skills(plugin_list(plugin_dirs(load(args.group)))).items():
             print(f"{ref:44} {path}")
