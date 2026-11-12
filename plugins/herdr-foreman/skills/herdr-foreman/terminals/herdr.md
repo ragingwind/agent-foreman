@@ -1,4 +1,7 @@
-# herdr commands
+# Terminal: herdr
+
+Agents in herdr tabs and panes, on this machine or another through
+`--machine`. The other terminal is `prompt.md`.
 
 `H` is `herdr` for the member `local` and `herdr --machine <label>` for any
 other; every command below works both ways. Commands print JSON. Pane and tab

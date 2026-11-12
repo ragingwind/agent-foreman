@@ -42,7 +42,7 @@ are first-class; tmux and ghostty come later behind the same interface.
 | --- | --- | --- |
 | machines | saved herdr machines (SSH targets) | SSH targets |
 | open a session | tab in the project's workspace | a run directory |
-| start an agent | `pane run` of `launch.py` | `launch.py --print` locally or over `ssh`, output to a JSON file |
+| start an agent | `pane run` of `launch.py` | `launch.py --print`, on another machine through `remote.py` (its login shell), output to a JSON file |
 | send | `agent prompt`, `send-text`, `send-keys` | not possible: one prompt per run |
 | read | `pane read`, transcript | the JSON result, transcript |
 | wait | `agent wait` | the process exits |
@@ -191,9 +191,10 @@ Pass conditions are code, not prose.
 - Every agent that touches files works in its own clone:
   `~/.cache/herdr-foreman/work/<project>/<task>/<agent>`. It starts inside
   that clone, never in a shared checkout.
-- A new clone is an untrusted folder. When Claude Code shows the trust
-  question in a pane whose folder is a clone the foreman made under that work
-  root, the foreman answers "Yes, I trust this folder" with herdr keys. Any
+- A new clone is an untrusted folder. Prompt mode needs no trust step there
+  and still loads the clone's project skills (checked 2026-11-13). When Claude
+  Code shows the trust question in a pane whose folder is a clone the foreman
+  made under that work root, the foreman answers "Yes, I trust this folder" with herdr keys. Any
   other folder's trust question goes to the person. (The person allowed this
   on 2026-11-13.)
 - Cleanup removes the task's clones, run directory and stacks.

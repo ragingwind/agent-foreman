@@ -2,7 +2,7 @@
 
 What is particular to Claude Code agents. The code side is
 `scripts/adapters/claude.py`; this page is the screen side. `H` is as in
-`herdr.md`.
+`terminals/herdr.md`.
 
 | Item | Claude Code |
 | --- | --- |
@@ -10,6 +10,7 @@ What is particular to Claude Code agents. The code side is
 | Command | `claude -w <name> --name <name> --session-id <id> --model <model> [--dangerously-skip-permissions] --plugin-dir <bundle>` |
 | Skills in a brief | `foreman-kit:<skill>` |
 | Transcript | `~/.claude/projects/*/<session id>.jsonl`, read by `transcript.py` |
+| Prompt mode | `claude -p --output-format json` with the prompt on stdin; `launch.py --print` runs it and keeps the JSON |
 | Checkout ready | A git checkout that Claude Code has been trusted in (`config.py member`) |
 
 ## Start errors

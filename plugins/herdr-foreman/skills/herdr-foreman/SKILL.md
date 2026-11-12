@@ -27,8 +27,9 @@ Its work is the agents, the ledger and the reports to the person.
 | `scripts/bundle.py` | `push <machine>`: builds the group's bundle and puts it on the machine once |
 | `scripts/launch.py` | Starts one agent from a profile; run it from the bundle |
 | `scripts/transcript.py` | Prints a session's last answers from its transcript |
+| `scripts/remote.py` | Runs a command on a project machine inside its login shell, where `PATH` and token variables are set |
 | `defaults.json` | The standard settings |
-| `herdr.md` | The herdr commands, for this machine and `--machine`; the same for every agent kind |
+| `terminals/herdr.md`, `terminals/prompt.md` | The terminal layer: how to open, start, send to, read, wait on and close an agent, with herdr panes or in prompt mode; the same for every agent kind |
 | `adapters/<kind>.md`, `scripts/adapters/` | What differs per agent kind: start errors, input line, exit, command, skill names, transcript. Only `claude` today |
 | `agent/loop.md` | The agents' loop; every bundle carries it as `loop.md` |
 
@@ -51,7 +52,7 @@ Its work is the agents, the ledger and the reports to the person.
 
 ## When this file is read
 
-Read this file, `herdr.md` and each group's ledger at the start, and again
+Read this file, `terminals/herdr.md`, `terminals/prompt.md` and each group's ledger at the start, and again
 after the conversation is summarized.
 
 ## Preflight, per group
@@ -71,7 +72,7 @@ after the conversation is summarized.
    <label> <checkout> --agent <kind>` (the checkout is there and ready for
    that agent kind; it prints the reason when not),
    then `H workspace list` and find the `workspace` label. When the
-   workspace is missing, create it (`herdr.md`) and note in the ledger that
+   workspace is missing, create it (`terminals/herdr.md`) and note in the ledger that
    the foreman made it. A member that fails either check, or does not
    answer, is reported to the person and gets no new task until it passes.
 6. **Bundle**: `python3 <skill>/scripts/bundle.py push <label> --project <repo>`
@@ -109,7 +110,7 @@ agent renames the tab at each stage with the label the settings give.
 
 ## Launch
 
-`herdr.md` "Start an agent" has the commands:
+`terminals/herdr.md` "Start an agent" has the commands:
 
 1. Open the task's tab on the chosen member.
 2. Make a session id with `uuidgen | tr A-Z a-z`.
@@ -131,7 +132,7 @@ errors".
 ## Brief
 
 Write the brief to `<cache>/briefs/<group>/<name>.md` on the agent's machine
-(`herdr.md` "Send the brief"), then send one line: "Read <absolute path> and
+(`terminals/herdr.md` "Send the brief"), then send one line: "Read <absolute path> and
 do what it says." Long prompt text gets refused or mangled; the file carries
 everything. Every brief holds:
 
@@ -181,7 +182,7 @@ everything. Every brief holds:
 | --- | --- | --- |
 | started | the first wait after launch returns idle | Records the row, sends the brief |
 | stage | the agent renames its tab | Updates the row's stage |
-| done | a wait returns `done` or `idle` | Reads the last lines (`herdr.md` "Read"); a `REPORT:` line is its event; a cut report is read from the transcript; a question in scope is answered with the recommended option |
+| done | a wait returns `done` or `idle` | Reads the last lines (`terminals/herdr.md` "Read"); a `REPORT:` line is its event; a cut report is read from the transcript; a question in scope is answered with the recommended option |
 | blocked | a wait returns `blocked` | Reads the screen. A permission prompt goes to the person with the agent and the command. A question dialog is closed only when the person already answered it, and the answer is sent as a message. Renames the tab with the `blocked` label and puts the stage label back when it clears |
 | owner-decision | `REPORT: owner-decision` | Adds it to "Waiting on the person" |
 | approved | `REPORT: approved` | Marks the row; starts the next task when `ops.batch` allows |
@@ -215,7 +216,7 @@ setting name or a rebase after a merge, message the other agent and log it.
 
 ## Clean up after a merge
 
-Run `ops.after_merge` in order. Closing an agent and its tab is `herdr.md`
+Run `ops.after_merge` in order. Closing an agent and its tab is `terminals/herdr.md`
 "Close". Also remove the task's brief files. With `ops.disk_check`, check
 `df -h /` on the task's machine (`ssh <target> df -h /` for a remote one)
 and record it.

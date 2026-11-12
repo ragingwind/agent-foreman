@@ -19,6 +19,7 @@ REQUIRED = [
     "HERDR_KIND",      # the kind `herdr agent start --kind` and herdr's detection use
     "EXECUTABLE",      # the program launch.py replaces itself with
     "command",         # (cfg, profile name, ...) -> (argv, variables to set, variable names to clear)
+    "parse_print",     # prompt-mode stdout -> {"ok", "result", "session_id", "cost", "denials"}
     "bundle_layout",   # {skill name: {relative path: bytes}} -> {bundle path: bytes}, manifest included
     "skill_name",      # skill ref -> the name the agent calls it by
     "last_answers",    # (session id, n) -> the final text of the last n turns

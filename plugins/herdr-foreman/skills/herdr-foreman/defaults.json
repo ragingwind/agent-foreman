@@ -107,7 +107,7 @@
     "after_merge": [
       "Set the issue to `status:done`.",
       "Check that the local branch head equals the merged pull request's head, then delete the remote and the local branch.",
-      "Stop each agent of the task and remove its worktree (herdr.md \"Close\").",
+      "Stop each agent of the task and remove its worktree (terminals/herdr.md \"Close\").",
       "Close the task's tab.",
       "Remove the task's containers and build directories on its machine.",
       "Check `df -h /` on the task's machine and record it in the ledger.",

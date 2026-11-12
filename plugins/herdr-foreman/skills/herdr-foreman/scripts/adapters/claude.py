@@ -47,8 +47,11 @@ def gateway_env(gateway, profile, environ):
     return env, clear
 
 
-def command(cfg, profile_name, name=None, session_id=None, worktree=True, bundle=None, environ=None):
-    """Return (argv, variables to set, variable names to clear)."""
+def command(cfg, profile_name, name=None, session_id=None, worktree=True, bundle=None, environ=None,
+            print_mode=False):
+    """Return (argv, variables to set, variable names to clear). In print mode
+    the agent answers one prompt read from stdin and prints JSON (`claude -p`);
+    it runs where it is started, never in a worktree of its own."""
     profile = cfg["profiles"][profile_name]
     gateway = cfg["gateways"][profile["gateway"]]
     env, clear = gateway_env(gateway, profile, os.environ if environ is None else environ)
@@ -56,7 +59,9 @@ def command(cfg, profile_name, name=None, session_id=None, worktree=True, bundle
     # `-w` takes an optional name, so it goes first and is followed by an
     # option; otherwise it would swallow the next argument as the worktree name.
     argv = [EXECUTABLE]
-    if worktree:
+    if print_mode:
+        argv += ["-p", "--output-format", "json"]
+    elif worktree:
         argv += ["-w"] + ([name] if name else [])
     if name:
         argv += ["--name", name]
@@ -68,6 +73,21 @@ def command(cfg, profile_name, name=None, session_id=None, worktree=True, bundle
     if bundle:
         argv += ["--plugin-dir", bundle]
     return argv, env, clear
+
+
+def parse_print(text):
+    """The parts of a `claude -p --output-format json` result the foreman uses."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return {"ok": False, "result": text.strip()[-500:], "session_id": None, "cost": None, "denials": []}
+    return {
+        "ok": not data.get("is_error") and data.get("subtype") == "success",
+        "result": data.get("result", ""),
+        "session_id": data.get("session_id"),
+        "cost": data.get("total_cost_usd"),
+        "denials": data.get("permission_denials") or [],
+    }
 
 
 def skill_name(ref):

@@ -63,6 +63,7 @@ REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # Exit codes shared by the scripts, so the foreman can tell the cases apart.
 EXIT_SETUP_NEEDED = 3
 EXIT_TOKEN_MISSING = 4
+EXIT_AGENT_ERROR = 5  # a prompt-mode run failed: a usage limit, a gateway error, or no result
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(HERE)
