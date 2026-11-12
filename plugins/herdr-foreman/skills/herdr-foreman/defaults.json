@@ -1,0 +1,93 @@
+{
+  "plugin_dirs": [],
+  "gateways": {
+    "anthropic": {"kind": "anthropic"}
+  },
+  "profiles": {
+    "sonnet": {"gateway": "anthropic", "model": "sonnet"},
+    "opus": {"gateway": "anthropic", "model": "opus"},
+    "haiku": {"gateway": "anthropic", "model": "haiku"}
+  },
+  "launch": {
+    "profile": "sonnet",
+    "permission": "bypass",
+    "worktree": true
+  },
+  "bundle": {
+    "skills": []
+  },
+  "loop": {
+    "tier_profiles": {"S": "sonnet", "M": "sonnet", "L": "opus"},
+    "stages": [
+      {
+        "name": "start",
+        "skills": [],
+        "method": "Set the issue to `status:in-progress`, cut `<prefix>/issue-<N>-<name>` from the base (`main` unless the brief names another), and post one handoff comment on the issue: owner, branch, tier."
+      },
+      {
+        "name": "implement",
+        "skills": [],
+        "method": "Follow the repository's `CLAUDE.md` and rules, and read the ADRs the issue links."
+      },
+      {
+        "name": "clean",
+        "skills": [],
+        "method": "Clean the diff for readability and structure without changing behavior. When this stage names skills, run them on the diff and apply what they accept."
+      },
+      {
+        "name": "test",
+        "skills": [],
+        "method": "Run the tier's tests and fix a failing test here. Tier S (docs, text, messages, test-only changes): the tests the change touches, and CI. Tier M (a behavior change in one component): new tests shown failing before the change and passing after it, the related tests, and CI. Tier L (security, network, several processes, an interface): everything in M, plus a stack build, a load measurement and mutation of the new checks where they apply."
+      },
+      {
+        "name": "PR",
+        "skills": [],
+        "method": "One commit, pushed, and a pull request into the base. Body: a summary, `## Decisions` (one line per in-scope choice and its reason), `## Tests` (the commands and their pass counts) and the closing keyword. Set the issue and the pull request to `status:review`."
+      },
+      {
+        "name": "review",
+        "skills": [],
+        "method": "Dispatch a fresh subagent with the Agent tool, model opus, and this prompt filled in: \"Red-team review of pull request #<PR> of <repo>, closing #<issue>, tier <tier>. You did not write this change. Read the issue with its comments, the repository's CLAUDE.md and rules, and the diff <of the whole pull request | since <SHA>, the head of the last round>. Try to break it: correctness under every input and timing the code allows, a test that would pass without the change, scope beyond or short of the issue, and the repository's rules. Run what the tier calls for and no more. Mark each finding blocking (wrong behavior, a security hole, a missing test for new behavior, a broken rule) or non-blocking. The verdict is changes requested only when a blocking finding exists. Post one comment headed `## Red-team review of #<PR> at <short SHA>`: the verdict, then each finding with one line of evidence; keep it under 3000 characters. Set `status:approved` or `status:changes-requested` on the issue and the pull request. Remove every worktree, container and temporary directory you made. Return the verdict and the findings.\" You never review your own change."
+      },
+      {
+        "name": "fix",
+        "skills": [],
+        "method": "Fix every blocking finding and the non-blocking ones you can fix in the same commit, push, and go back to review with the reviewed SHA so the next round reads only the new diff. Answer a finding you think is wrong on the pull request with evidence."
+      },
+      {
+        "name": "approved",
+        "skills": [],
+        "method": "Wait for the pull request's checks. When they pass, update the handoff comment once (done, the pull request, what is left) and report `approved`."
+      }
+    ]
+  },
+  "labels": {
+    "default": "{task} {stage}",
+    "events": {
+      "blocked": "{task} blocked",
+      "exited": "{task} exited",
+      "owner-decision": "{task} owner decision"
+    }
+  },
+  "report": {
+    "language": "the person's language",
+    "address": "",
+    "template": "## Status {time} UTC · {group}\n{members: one line per machine: label, working/blocked/idle counts, free disk}\n| Tab | Issue / PR | Stage | Waiting on | Note |\n| --- | --- | --- | --- | --- |\n| <machine>:<tab> | #<issue> / #<PR> | <stage> | none · reviewer · CI · owner decision · owner merge | <under 30 characters> |\n**For you**: <the person's actions with the tab: permission prompts, open dialogs, merges, decisions, setup; or \"none\">\n**Foreman did**: <what the foreman unblocked, merged or cleaned since the last report, or \"none\">\n**Links**:\n- <the full URL of each pull request in the table>"
+  },
+  "ops": {
+    "check_minutes": 10,
+    "backoff": {"first_hours": 1, "factor": 2},
+    "batch": null,
+    "placement": "least-busy",
+    "disk_check": true,
+    "after_merge": [
+      "Set the issue to `status:done`.",
+      "Check that the local branch head equals the merged pull request's head, then delete the remote and the local branch.",
+      "Stop each agent of the task and remove its worktree (herdr.md \"Close\").",
+      "Close the task's tab.",
+      "Remove the task's containers and build directories on its machine.",
+      "Check `df -h /` on the task's machine and record it in the ledger.",
+      "Remove the task's rows from the ledger and log the event."
+    ]
+  }
+}

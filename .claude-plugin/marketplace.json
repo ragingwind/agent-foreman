@@ -1,0 +1,15 @@
+{
+  "name": "herdr-skills",
+  "description": "Agent skills and plugins for herdr, the terminal workspace manager for coding agents.",
+  "owner": {
+    "name": "Jimmy Moon",
+    "url": "https://github.com/ragingwind"
+  },
+  "plugins": [
+    {
+      "name": "herdr-foreman",
+      "source": "./plugins/herdr-foreman",
+      "description": "A foreman session that runs coding agents across herdr machines, one project group at a time."
+    }
+  ]
+}

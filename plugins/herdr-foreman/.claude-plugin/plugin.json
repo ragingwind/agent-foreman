@@ -1,0 +1,12 @@
+{
+  "name": "herdr-foreman",
+  "version": "0.1.0",
+  "description": "A foreman session that runs coding agents across herdr machines, one project group at a time, with settings kept per person and per group.",
+  "author": {
+    "name": "Jimmy Moon",
+    "url": "https://github.com/ragingwind"
+  },
+  "homepage": "https://github.com/ragingwind/herdr-skills/tree/main/plugins/herdr-foreman",
+  "repository": "https://github.com/ragingwind/herdr-skills",
+  "license": "MIT"
+}
