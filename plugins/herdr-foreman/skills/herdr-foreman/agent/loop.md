@@ -8,9 +8,8 @@ its first stage.
 ## Stages
 
 Work through the brief's stage table in order. Each row gives the stage, the
-tab label, the skills to use and the method. Skills are named
-`foreman-kit:<skill>`; use those names, not a skill of the same name from
-another plugin. `review` and `fix` repeat, with a round number, until the
+tab label, the skills to use and the method. Use the skill names exactly
+as the table writes them, not a skill of the same name from somewhere else. `review` and `fix` repeat, with a round number, until the
 review approves.
 
 **Tab label**: when `HERDR_TAB_ID` is set, at the start of every stage run
@@ -50,8 +49,8 @@ REPORT: <approved | owner-decision | blocked | done> — <one line: the pull req
 ```
 
 Put the details on the issue or the pull request and link it. Keep the
-report under five lines. Do not end a turn for progress, and do not use
-SendMessage.
+report under five lines. Do not end a turn for progress, and do not message
+the foreman any other way.
 
 ## Records
 

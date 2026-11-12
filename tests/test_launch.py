@@ -29,7 +29,7 @@ class Launch(unittest.TestCase):
     def test_bundle_mode_adds_plugin_dir_and_uses_bundle_settings(self):
         root = os.path.join(self.home.root, "bundle")
         shutil.copytree(SCRIPTS, os.path.join(root, "scripts"))
-        self.home.write("bundle/.claude-plugin/plugin.json", {"name": "foreman-kit"})
+        self.home.write("bundle/bundle.json", {"agent": "claude"})
         self.home.write("bundle/config.json", {"gateways": {"anthropic": {"kind": "anthropic"}},
                                                "profiles": {"opus": {"gateway": "anthropic", "model": "opus"}},
                                                "launch": {"profile": "opus", "permission": "default",
@@ -37,6 +37,24 @@ class Launch(unittest.TestCase):
         r = run("launch.py", "--dry-run", cwd=os.path.join(root, "scripts"))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(f"command: claude --model opus --plugin-dir {root}", r.stdout)
+
+    def test_profile_for_another_agent_than_the_bundle_is_setup(self):
+        root = os.path.join(self.home.root, "bundle")
+        shutil.copytree(SCRIPTS, os.path.join(root, "scripts"))
+        self.home.write("bundle/bundle.json", {"agent": "elsewhere"})
+        self.home.write("bundle/config.json", {"gateways": {"anthropic": {"kind": "anthropic"}},
+                                               "profiles": {"opus": {"gateway": "anthropic", "model": "opus"}},
+                                               "launch": {"profile": "opus", "permission": "default",
+                                                          "worktree": False}})
+        r = run("launch.py", "--dry-run", cwd=os.path.join(root, "scripts"))
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("this bundle is for elsewhere", r.stderr)
+
+    def test_unknown_agent_kind_is_setup(self):
+        self.home.write("config/herdr-foreman/config.json", {"profiles": {"sonnet": {"agent": "nope"}}})
+        r = run("launch.py", "--dry-run")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("agent 'nope' is not supported", r.stderr)
 
     def test_unknown_profile_is_setup(self):
         self.assertEqual(run("launch.py", "nope", "--dry-run").returncode, 3)

@@ -16,8 +16,8 @@ Usage:
   config.py show [--group OWNER/REPO]
   config.py check [--group OWNER/REPO]
   config.py save user|group [--group OWNER/REPO] [--dry-run]   (full settings as JSON on stdin)
-  config.py stages --group OWNER/REPO --task TASK
-  config.py member MACHINE PATH     (does the checkout exist, does Claude Code trust it there)
+  config.py stages --group OWNER/REPO --task TASK [--agent KIND]
+  config.py member MACHINE PATH [--agent KIND]   (is the checkout there and ready for that agent kind)
   config.py profiles | groups | machines | skills
 
 `plugin_dirs` in the settings lists plugin directories the person loads with
@@ -34,6 +34,8 @@ import string
 import subprocess
 import sys
 import tempfile
+
+import adapters
 
 APP = "herdr-foreman"
 KINDS = ["anthropic", "anthropic-compatible"]
@@ -177,6 +179,9 @@ def validate_launch(cfg):
             if not isinstance(m.get("context"), int) or m["context"] <= 0:
                 problems.append(f"gateway {name}: model {alias} needs a positive context size")
     for name, p in profiles.items():
+        if adapters.kind_of(p) not in adapters.KINDS:
+            problems.append(f"profile {name}: agent {adapters.kind_of(p)!r} is not supported; "
+                            f"supported: {', '.join(adapters.KINDS)}")
         g = gateways.get(p.get("gateway"))
         if g is None:
             problems.append(f"profile {name}: gateway {p.get('gateway')!r} does not exist")
@@ -254,7 +259,7 @@ def validate(cfg, machines=None, skills=None, group=False):
     for ref in refs:
         short = str(ref).split(":")[-1]
         if seen.get(short, ref) != ref:
-            problems.append(f"skills {seen[short]} and {ref} would share the name foreman-kit:{short}")
+            problems.append(f"skills {seen[short]} and {ref} would share the name {short} in the bundle")
         seen[short] = ref
         if skills is not None and ref not in skills:
             problems.append(f"skill {ref!r} is not available on this machine")
@@ -336,30 +341,19 @@ def herdr_machines():
     return machines
 
 
-MEMBER_PROBE = """
-import json, os, sys
-path = os.path.expanduser(sys.argv[1])
-try:
-    with open(os.path.join(os.path.expanduser("~"), ".claude.json"), encoding="utf-8") as f:
-        projects = json.load(f).get("projects", {})
-except (OSError, ValueError):
-    projects = {}
-print(json.dumps({"checkout": os.path.isdir(os.path.join(path, ".git")),
-                  "trusted": bool(projects.get(path, {}).get("hasTrustDialogAccepted"))}))
-"""
-
-
-def member_state(label, path, machines=None):
-    """Whether a member's checkout exists and Claude Code trusts it there
-    (a worktree session cannot start in an untrusted checkout)."""
+def member_state(label, path, machines=None, kind=adapters.DEFAULT):
+    """Whether a member's checkout is there and ready for that agent kind:
+    {"checkout": bool, "ready": bool, "reason": text}. The check itself is the
+    adapter's CHECKOUT_PROBE, run on the member's machine."""
+    probe = adapters.get(kind).CHECKOUT_PROBE
     if label == LOCAL:
-        argv = [sys.executable, "-c", MEMBER_PROBE, path]
+        argv = [sys.executable, "-c", probe, path]
     else:
         machines = herdr_machines() if machines is None else machines
         if label not in machines:
             raise ValueError(f"{label} is not a saved herdr machine")
         argv = ["ssh", "-o", "BatchMode=yes", machines[label]["target"],
-                "python3 -c " + shlex.quote(MEMBER_PROBE) + " " + shlex.quote(path)]
+                "python3 -c " + shlex.quote(probe) + " " + shlex.quote(path)]
     out = subprocess.run(argv, capture_output=True, text=True)
     if out.returncode != 0:
         raise RuntimeError(f"{label}: {out.stderr.strip()[:300]}")
@@ -425,14 +419,14 @@ def label(cfg, event, **values):
     return " ".join(fmt.format(**fields).split())
 
 
-def stages_markdown(cfg, task):
-    """The stage table a brief carries."""
+def stages_markdown(cfg, task, kind=adapters.DEFAULT):
+    """The stage table a brief carries, with skills named the way that agent kind calls them."""
     lines = ["| Stage | Tab label | Skills | Method |", "| --- | --- | --- | --- |"]
     for s in cfg["loop"]["stages"]:
         stage = s["name"] + (" <N>" if s["name"] in ("review", "fix") else "")
         tab = label(cfg, s["name"], task=task, stage=stage, round="<N>" if "<N>" in stage else "",
                     group=cfg.get("workspace", ""))
-        skills = ", ".join("foreman-kit:" + r.split(":")[-1] for r in s.get("skills", [])) or "-"
+        skills = ", ".join(adapters.get(kind).skill_name(r) for r in s.get("skills", [])) or "-"
         lines.append(f"| {s['name']} | `{tab}` | {skills} | {s['method'].replace('|', '/')} |")
     return "\n".join(lines)
 
@@ -475,6 +469,7 @@ def _cli(argv):
     ap.add_argument("rest", nargs="*", help="save: user or group; member: MACHINE PATH")
     ap.add_argument("--group", metavar="OWNER/REPO")
     ap.add_argument("--task", default="<task>")
+    ap.add_argument("--agent", default=adapters.DEFAULT, choices=adapters.KINDS)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
     if args.group and not REPO.match(args.group):
@@ -518,18 +513,18 @@ def _cli(argv):
         if not args.group:
             print("config.py: stages needs --group OWNER/REPO", file=sys.stderr)
             return 2
-        print(stages_markdown(load(args.group), args.task))
+        print(stages_markdown(load(args.group), args.task, args.agent))
     elif args.command == "member":
         if len(args.rest) != 2:
             print("config.py: member needs MACHINE PATH", file=sys.stderr)
             return 2
         try:
-            state = member_state(*args.rest)
+            state = member_state(*args.rest, kind=args.agent)
         except (ValueError, RuntimeError) as e:
             print(f"config.py: {e}", file=sys.stderr)
             return 1
         print(json.dumps(state))
-        return 0 if state["checkout"] and state["trusted"] else EXIT_SETUP_NEEDED
+        return 0 if state["ready"] else EXIT_SETUP_NEEDED
     elif args.command == "profiles":
         cfg = load(args.group)
         default = cfg["launch"].get("profile")

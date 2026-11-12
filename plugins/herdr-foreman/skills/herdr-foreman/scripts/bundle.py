@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Build a group's skill bundle and put it on a herdr machine once.
 
-A bundle is a Claude Code plugin named foreman-kit: the group's skills (each
-skill directory whole, with its scripts), the agents' loop, launch.py with
-the group's launch settings, and transcript.py. Its name is a hash of its
-content: a machine that already holds it is not sent it again, and any
-change makes a new one.
+A bundle holds the group's skills (each skill directory whole, with its
+scripts) in the layout the agent kind loads (its adapter's bundle_layout; for
+claude, a plugin named foreman-kit), the agents' loop, launch.py with the
+group's launch settings and the adapters, and transcript.py. `bundle.json`
+names the agent kind. Its name is a hash of its content: a machine that
+already holds it is not sent it again, and any change makes a new one.
 
 Usage:
-  bundle.py build --group OWNER/REPO [--skills REF,...]
-  bundle.py push MACHINE --group OWNER/REPO [--skills REF,...]
+  bundle.py build --group OWNER/REPO [--skills REF,...] [--agent KIND]
+  bundle.py push MACHINE --group OWNER/REPO [--skills REF,...] [--agent KIND]
 
 MACHINE is a herdr machine label, or `local`. --skills adds skills for one
 task to the group's own. Prints one JSON object.
@@ -29,11 +30,11 @@ import sys
 import tempfile
 import zipfile
 
+import adapters
 from config import (EXIT_SETUP_NEEDED, LOCAL, REPO, SKILL_DIR, cache_dir, group_path, group_skills,
                     herdr_machines, load, local_skills, plugin_list, plugin_dirs, validate)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PLUGIN = "foreman-kit"
 REMOTE_CACHE = "~/.cache/herdr-foreman"
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv"}
 SKIP_FILES = {".DS_Store"}
@@ -50,29 +51,32 @@ def _read(path):
         return f.read()
 
 
-def contents(cfg, skill_dirs):
+def _tree(src):
+    """Every file under a skill directory: relative path -> bytes."""
+    out = {}
+    for root, dirs, names in os.walk(src, followlinks=True):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
+        for name in sorted(names):
+            if name in SKIP_FILES or name.endswith(".pyc"):
+                continue
+            out[os.path.relpath(os.path.join(root, name), src)] = _read(os.path.join(root, name))
+    return out
+
+
+def contents(cfg, skill_dirs, kind=adapters.DEFAULT):
     """Every file of the bundle: relative path -> bytes."""
+    adapter = adapters.get(kind)
     files = {
-        ".claude-plugin/plugin.json": json.dumps({
-            "name": PLUGIN,
-            "version": "1.0.0",
-            "description": "Skills and scripts herdr-foreman gives its agents",
-        }, indent=2).encode() + b"\n",
+        "bundle.json": json.dumps({"agent": kind}).encode() + b"\n",
         "config.json": json.dumps({k: cfg[k] for k in ("gateways", "profiles", "launch")},
                                   indent=2, sort_keys=True).encode() + b"\n",
         "loop.md": _read(os.path.join(SKILL_DIR, "agent", "loop.md")),
     }
     for name in ("config.py", "launch.py", "transcript.py"):
         files[f"scripts/{name}"] = _read(os.path.join(HERE, name))
-    for ref, src in skill_dirs.items():
-        short = ref.split(":")[-1]
-        for root, dirs, names in os.walk(src, followlinks=True):
-            dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
-            for name in sorted(names):
-                if name in SKIP_FILES or name.endswith(".pyc"):
-                    continue
-                rel = os.path.relpath(os.path.join(root, name), src)
-                files[f"skills/{short}/{rel}"] = _read(os.path.join(root, name))
+    for rel, data in _tree(os.path.join(HERE, "adapters")).items():
+        files[f"scripts/adapters/{rel}"] = data
+    files.update(adapter.bundle_layout({ref.split(":")[-1]: _tree(src) for ref, src in skill_dirs.items()}))
     return files
 
 
@@ -87,7 +91,7 @@ def write_local(bundle_hash, files):
     """Unpack the bundle into this machine's cache once. Returns (path, status)."""
     root = os.path.join(cache_dir(), "bundles")
     path = os.path.join(root, bundle_hash)
-    if os.path.isfile(os.path.join(path, ".claude-plugin", "plugin.json")):
+    if os.path.isfile(os.path.join(path, "bundle.json")):
         return path, "cached"
     os.makedirs(root, exist_ok=True)
     tmp = tempfile.mkdtemp(dir=root, prefix=f".{bundle_hash}.")
@@ -124,7 +128,7 @@ def push_remote(target, bundle_hash, files):
     """Put the bundle on a remote machine once. Returns (absolute path, status)."""
     h = shlex.quote(bundle_hash)
     probe = (f"mkdir -p {REMOTE_CACHE}/bundles {REMOTE_CACHE}/briefs && cd {REMOTE_CACHE}/bundles && pwd && "
-             f"if test -f {h}/.claude-plugin/plugin.json; then echo cached; else echo missing; fi")
+             f"if test -f {h}/bundle.json; then echo cached; else echo missing; fi")
     lines = ssh(target, probe).split()
     if len(lines) != 2:
         fail(1, f"unexpected answer from {target}: {lines!r}")
@@ -141,11 +145,11 @@ def push_remote(target, bundle_hash, files):
             fail(1, f"scp to {target} failed: {r.stderr.strip()[:300]}")
     ssh(target, f"cd {shlex.quote(remote_root)} && rm -rf {h}.tmp && python3 -m zipfile -e {h}.zip {h}.tmp && "
                 f"{{ test -d {h} || mv {h}.tmp {h}; }} && rm -rf {h}.tmp {h}.zip && "
-                f"test -f {h}/.claude-plugin/plugin.json")
+                f"test -f {h}/bundle.json")
     return path, "uploaded"
 
 
-def build(repo, extra):
+def build(repo, extra, kind=adapters.DEFAULT):
     if not os.path.exists(group_path(repo)):
         fail(EXIT_SETUP_NEEDED, f"group {repo} has no settings yet; run herdr-foreman-setup")
     cfg = load(repo)
@@ -161,9 +165,9 @@ def build(repo, extra):
                                 f"goes in plugin_dirs: /herdr-foreman-setup plugin dirs)")
     shorts = [r.split(":")[-1] for r in refs]
     if len(set(shorts)) != len(shorts):
-        fail(EXIT_SETUP_NEEDED, f"two skills share one name in {PLUGIN}: {', '.join(refs)}")
-    files = contents(cfg, {r: available[r] for r in refs})
-    return digest(files), files, [f"{PLUGIN}:{s}" for s in shorts]
+        fail(EXIT_SETUP_NEEDED, f"two skills share one name in the bundle: {', '.join(refs)}")
+    files = contents(cfg, {r: available[r] for r in refs}, kind)
+    return digest(files), files, [adapters.get(kind).skill_name(r) for r in refs]
 
 
 def main(argv):
@@ -172,6 +176,7 @@ def main(argv):
     ap.add_argument("machine", nargs="?")
     ap.add_argument("--group", required=True, metavar="OWNER/REPO")
     ap.add_argument("--skills", default="", metavar="REF,...")
+    ap.add_argument("--agent", default=adapters.DEFAULT, choices=adapters.KINDS)
     args = ap.parse_args(argv)
     if not REPO.match(args.group):
         fail(2, f"--group must look like owner/name, not {args.group!r}")
@@ -179,8 +184,8 @@ def main(argv):
         fail(2, "push needs a machine label, or local")
     extra = [s.strip() for s in args.skills.split(",") if s.strip()]
 
-    bundle_hash, files, skills = build(args.group, extra)
-    out = {"hash": bundle_hash, "skills": skills}
+    bundle_hash, files, skills = build(args.group, extra, args.agent)
+    out = {"hash": bundle_hash, "agent": args.agent, "skills": skills}
     if args.command == "build" or args.machine == LOCAL:
         path, status = write_local(bundle_hash, files)
         out.update(machine=LOCAL, path=path, status=status, cache=cache_dir())

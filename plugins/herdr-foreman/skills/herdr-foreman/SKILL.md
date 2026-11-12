@@ -28,7 +28,8 @@ Its work is the agents, the ledger and the reports to the person.
 | `scripts/launch.py` | Starts one agent from a profile; run it from the bundle |
 | `scripts/transcript.py` | Prints a session's last answers from its transcript |
 | `defaults.json` | The standard settings |
-| `herdr.md` | The herdr commands, for this machine and `--machine` |
+| `herdr.md` | The herdr commands, for this machine and `--machine`; the same for every agent kind |
+| `adapters/<kind>.md`, `scripts/adapters/` | What differs per agent kind: start errors, input line, exit, command, skill names, transcript. Only `claude` today |
 | `agent/loop.md` | The agents' loop; every bundle carries it as `loop.md` |
 
 ## Words
@@ -38,6 +39,9 @@ Its work is the agents, the ledger and the reports to the person.
 - **Member**: one machine of a group: a herdr machine label (`local` is this
   machine), the checkout path there, and that machine's herdr workspace
   labelled with the group's `workspace`.
+- **Agent kind**: the coding agent a profile runs (`agent`, standard
+  `claude`, the only kind today). Wherever this file says "the adapter
+  page", read `adapters/<kind>.md` for that agent's kind.
 - **`H`**: `herdr` for `local`, `herdr --machine <label>` for any other.
   Pane and tab ids are per machine: always record the machine with them.
 - **Settings**: the standard values, then the person's, then the group's
@@ -64,7 +68,8 @@ after the conversation is summarized.
 4. **Ledger**: `config.py paths --group <repo>` gives its path. Create it
    from "Ledger" when it does not exist.
 5. **Members**: for each member, `python3 <skill>/scripts/config.py member
-   <label> <checkout>` (the checkout exists and Claude Code trusts it there),
+   <label> <checkout> --agent <kind>` (the checkout is there and ready for
+   that agent kind; it prints the reason when not),
    then `H workspace list` and find the `workspace` label. When the
    workspace is missing, create it (`herdr.md`) and note in the ledger that
    the foreman made it. A member that fails either check, or does not
@@ -116,8 +121,8 @@ agent renames the tab at each stage with the label the settings give.
 `launch.py` exit 3: the settings are wrong; run herdr-foreman-setup. Exit
 4: the gateway's token variable is not set on that machine; name the
 variable and the machine to the person. Never ask for, read, print or store
-a token value. `Workspace trust not yet accepted` on the pane: see
-`herdr.md` "Start an agent".
+a token value. An error the agent prints at start: the adapter page, "Start
+errors".
 
 ## Brief
 
@@ -129,9 +134,10 @@ everything. Every brief holds:
 - The task: the issue or pull request, the ADRs, what is out of scope, and
   the tier the foreman sets.
 - "Follow `<bundle>/loop.md`." (absolute path)
-- The stage table, as `config.py stages --group <repo> --task <N>` prints it.
+- The stage table, as `config.py stages --group <repo> --task <N> --agent <kind>`
+  prints it; skills appear under the names that agent kind calls them by.
 - The `owner-decision` label from the settings, filled in.
-- Any extra skill for this task, as `foreman-kit:<skill>`.
+- Any extra skill for this task, named as `bundle.py push` printed it.
 - "This brief confirms the whole loop." An agent may still show its plan
   once at the start; the foreman judges it and answers at once, and never
   passes it to the person.
@@ -142,8 +148,8 @@ everything. Every brief holds:
   the brief, with a one-line pointer.
 - It is refused with `agent_blocked` while a dialog is open: read the
   screen first.
-- It types into the agent's input line. Read that line first (`herdr.md`
-  "Input line"); text the person typed there and did not send is theirs:
+- It types into the agent's input line. Read that line first (the adapter
+  page, "Input line"); text the person typed there and did not send is theirs:
   report it, do not send or clear it.
 - A note that needs no answer ends with "No reply needed."
 - A message cannot answer a permission prompt.

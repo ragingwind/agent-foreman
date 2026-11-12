@@ -54,6 +54,10 @@ class Problems(unittest.TestCase):
     def problems(self, over, group=False, skills=None):
         return config.validate(config.merge(self.cfg, over), machines=MACHINES, skills=skills, group=group)
 
+    def test_unknown_agent_kind(self):
+        p = self.problems({"profiles": {"sonnet": {"agent": "nope"}}})
+        self.assertTrue(any("agent 'nope' is not supported" in x for x in p))
+
     def test_unknown_setting(self):
         self.assertIn("unknown setting 'opps'", self.problems({"opps": {}}))
 
@@ -82,7 +86,7 @@ class Problems(unittest.TestCase):
         over = {"bundle": {"skills": ["p:clean", "clean", "p:gone"]}}
         p = self.problems(over, skills={"p:clean": "/x", "clean": "/y"})
         self.assertIn("skill 'p:gone' is not available on this machine", p)
-        self.assertTrue(any("share the name foreman-kit:clean" in x for x in p))
+        self.assertTrue(any("share the name clean in the bundle" in x for x in p))
 
     def test_profile_and_gateway(self):
         p = self.problems({"launch": {"profile": "nope"},
@@ -233,10 +237,12 @@ class Cli(unittest.TestCase):
         os.makedirs(home)
         env = {"HOME": home}
         r = run("config.py", "member", "local", repo, env=env)
-        self.assertEqual((r.returncode, json.loads(r.stdout)), (3, {"checkout": True, "trusted": False}))
+        state = json.loads(r.stdout)
+        self.assertEqual((r.returncode, state["checkout"], state["ready"]), (3, True, False))
+        self.assertIn("not trusted", state["reason"])
         self.home.write("home/.claude.json", {"projects": {repo: {"hasTrustDialogAccepted": True}}})
         r = run("config.py", "member", "local", repo, env=env)
-        self.assertEqual((r.returncode, json.loads(r.stdout)), (0, {"checkout": True, "trusted": True}))
+        self.assertEqual((r.returncode, json.loads(r.stdout)), (0, {"checkout": True, "ready": True, "reason": ""}))
         r = run("config.py", "member", "local", os.path.join(self.home.root, "nope"), env=env)
         self.assertEqual(json.loads(r.stdout)["checkout"], False)
         self.assertEqual(run("config.py", "member", "local").returncode, 2)

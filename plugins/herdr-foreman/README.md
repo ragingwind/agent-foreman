@@ -13,7 +13,7 @@ status report per project. It writes no code itself.
 | `herdr-foreman` skill | The foreman: prepares a project group, places tasks on machines, launches agents, sends briefs, watches state, drives the task loop and reports |
 | `herdr-foreman-setup` skill | Asks for your settings and a project group's machines, validates them and saves only what differs from the standard |
 | `herdr-foreman` agent | Starts a session as the foreman: `claude --agent herdr-foreman` |
-| `scripts/` | `config.py` (settings), `bundle.py` (skill bundles), `launch.py` (start an agent from a profile), `transcript.py` (read an agent's answers) |
+| `scripts/` | `config.py` (settings), `bundle.py` (skill bundles), `launch.py` (start an agent from a profile), `transcript.py` (read an agent's answers), `adapters/` (what differs per agent kind; Claude Code today) |
 
 ## Requirements
 
@@ -95,7 +95,7 @@ below; delete a key to fall back.
 | Section | Standard |
 | --- | --- |
 | `plugin_dirs` | none |
-| `gateways`, `profiles` | Anthropic; `sonnet`, `opus`, `haiku` |
+| `gateways`, `profiles` | Anthropic; `sonnet`, `opus`, `haiku`. Each profile's `agent` kind is `claude`, the only kind today |
 | `launch` | profile `sonnet`, permission `bypass`, worktree on |
 | `loop` | eight stages; tier S and M on sonnet, L on opus |
 | `bundle` | no skills besides the stages' own |

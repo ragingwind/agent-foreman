@@ -59,7 +59,7 @@ environment variable that carries it.
 | Section | Ask |
 | --- | --- |
 | Plugin dirs | The plugin directories to load the way `claude --plugin-dir` does, so their skills can be bundled. Offer the ones found in step 1. Ask this section first: the skill choices below depend on it |
-| Gateways and profiles | Each gateway's kind, base URL, auth and token variable name, its models (id, context size); each profile's gateway, model and role models |
+| Gateways and profiles | Each gateway's kind, base URL, auth and token variable name, its models (id, context size); each profile's agent kind (only `claude` today), gateway, model and role models |
 | Launch | Default profile, permission mode (`bypass` or `default`), worktree on or off |
 | Loop | For each stage in order: the skills it uses (from step 1's list, or none) and its method (standard, or the person's text). Then the tier → profile table. Stages can be removed, renamed or added |
 | Bundle | Skills every agent carries besides the stages' |
@@ -71,8 +71,9 @@ environment variable that carries it.
 
 - Members: for each machine (`local` or a label from step 1), the checkout
   path there. Check it with `python3 <hf>/scripts/config.py member <machine>
-  <path>`: it prints whether the checkout exists and whether Claude Code
-  trusts it there, and exits 0 only when both hold. A missing checkout is
+  <path> --agent <kind>`: it prints whether the checkout exists, whether it is
+  ready for that agent kind (for `claude`: Claude Code trusts it there) and
+  the reason when not, and exits 0 only when it is ready. A missing checkout is
   reported; this setup does not clone. An untrusted one cannot start a
   worktree session: tell the person to run `claude` once in that checkout
   on that machine and accept the trust question. Never accept it for them.

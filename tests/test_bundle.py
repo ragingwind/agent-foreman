@@ -32,8 +32,9 @@ class Bundle(unittest.TestCase):
         self.assertEqual(skills, ["foreman-kit:tidy"])
         self.assertIn("skills/tidy/scripts/run.py", files)
         self.assertNotIn("skills/tidy/__pycache__/x.pyc", files)
-        for rel in (".claude-plugin/plugin.json", "config.json", "loop.md", "scripts/launch.py",
-                    "scripts/config.py", "scripts/transcript.py"):
+        for rel in ("bundle.json", ".claude-plugin/plugin.json", "config.json", "loop.md", "scripts/launch.py",
+                    "scripts/config.py", "scripts/transcript.py", "scripts/adapters/__init__.py",
+                    "scripts/adapters/base.py", "scripts/adapters/claude.py"):
             self.assertIn(rel, files)
         self.home.write("skills/tidy/SKILL.md", "---\nname: tidy\n---\nTidy more.")
         h3, _, _ = bundle.build("o/r", [])

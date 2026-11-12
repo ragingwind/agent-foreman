@@ -5,6 +5,10 @@ other; every command below works both ways. Commands print JSON. Pane and tab
 ids (`wA:p3`, `wA:t2`) are per machine. `herdr --skill` prints herdr's own
 skill; read it once per session.
 
+This page holds what is the same for every agent kind. What depends on the
+agent (its start errors, its input line, how to exit it) is in
+`adapters/<kind>.md`, for the kind the agent's profile names.
+
 ## Machines and workspaces
 
 ```bash
@@ -53,11 +57,8 @@ H agent rename <pane> <name>
   start is seen for a moment, then exits. `H agent rename` succeeding is the
   proof; on `agent_not_found`, read the pane.
 - When the pane shows `launch.py:` and a shell prompt instead of the agent,
-  read the exit line and go to `SKILL.md` "Launch".
-- `Workspace trust not yet accepted`: Claude Code has never been trusted in
-  that checkout on that machine, and a worktree session cannot start. Tell
-  the person to run `claude` once in the checkout there and accept the
-  trust question. Never accept it for them.
+  read the exit line and go to `SKILL.md` "Launch". Errors the agent itself
+  prints at start are in its adapter page, "Start errors".
 
 ## Send the brief
 
@@ -82,28 +83,16 @@ H agent prompt <pane> "Read <cache>/briefs/<group>/<name>.md and do what it says
 H pane read <pane> --source recent-unwrapped --lines 40
 ```
 
-- `--lines` reaches back about 1000 rows. The bottom rows hold the input
-  line and the status line (model and branch). Text on the input line can be
-  a suggestion Claude Code shows, not the person's input; see "Input line".
+- `--lines` reaches back about 1000 rows. What the bottom rows hold, and how
+  to tell the person's unsent input from a suggestion, is in the agent's
+  adapter page ("Screen", "Input line").
 - When a report is cut, read the session's transcript instead. It holds every
   answer whole:
 
   ```bash
-  python3 <skill>/scripts/transcript.py <session id> --last 1                      # local
-  ssh -o BatchMode=yes <target> python3 <bundle>/scripts/transcript.py <session id> --last 1
+  python3 <skill>/scripts/transcript.py <session id> --last 1 --agent <kind>        # local
+  ssh -o BatchMode=yes <target> python3 <bundle>/scripts/transcript.py <session id> --last 1 --agent <kind>
   ```
-
-## Input line
-
-Before typing into an agent, read its last rows:
-
-```bash
-H pane read <pane> --source visible --lines 6 --format ansi
-```
-
-On the `❯` line, text drawn dim (`ESC[2m`, as in `ESC[2mTry "…"`) is Claude
-Code's placeholder or suggestion and is typed over. Plain text there is the
-person's unsent input: leave it and report it.
 
 ## Watch
 
@@ -129,15 +118,8 @@ prompt.
 
 ## Close
 
-1. Type the command and press Enter as two calls:
-   `H pane send-text <pane> '/exit'`, then `H pane send-keys <pane> Enter`.
-   (`send-keys <pane> '/exit'` fails with `unsupported key`.)
-2. Read the pane. A worktree session asks "Keep worktree" (1) or "Remove
-   worktree" (2). When the agent's changes are pushed, `H pane send-keys
-   <pane> Down` then `Enter`; the pane prints `Worktree removed.`.
-3. `H agent list`: the agent is gone. When it is still there, close the tab
-   (`H tab close <tab>`), which ends the process, then remove the worktree on
-   that machine with `git -C <checkout> worktree remove <path>`.
-4. `H pane close <pane>` for a helper pane, `H tab close <tab>` for the task
+1. Exit the agent as its adapter page says ("Exit").
+2. `H agent list`: the agent is gone.
+3. `H pane close <pane>` for a helper pane, `H tab close <tab>` for the task
    tab.
-5. Remove the task's brief file.
+4. Remove the task's brief file.
