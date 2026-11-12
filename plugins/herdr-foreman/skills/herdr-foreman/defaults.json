@@ -30,6 +30,81 @@
       "opus"
     ]
   },
+  "difficulty": {
+    "lines": 400,
+    "files": 10,
+    "top_dirs": 3,
+    "fix_days": 90,
+    "fix_words": [
+      "fix",
+      "fixes",
+      "fixed",
+      "bug",
+      "hotfix",
+      "regression"
+    ],
+    "critical": [
+      "**/auth/**",
+      "**/authn/**",
+      "**/authz/**",
+      "**/security/**",
+      "**/secrets/**",
+      "**/credentials/**",
+      "**/payment/**",
+      "**/payments/**",
+      "**/billing/**",
+      "**/migrations/**",
+      "**/migration/**",
+      "**/*.sql",
+      "**/schema/**",
+      "**/.github/workflows/**",
+      "**/.gitlab-ci.yml",
+      "**/Jenkinsfile",
+      "**/Dockerfile",
+      "**/Dockerfile.*",
+      "**/docker-compose*.yml",
+      "**/deploy/**",
+      "**/helm/**",
+      "**/k8s/**",
+      "**/terraform/**",
+      "**/*.tf"
+    ],
+    "public": [
+      "**/api/**",
+      "**/*.proto",
+      "**/openapi*.*",
+      "**/cli/**",
+      "**/cmd/**",
+      "**/include/**",
+      "**/sdk/**"
+    ],
+    "docs_tests": [
+      "**/*.md",
+      "**/*.rst",
+      "**/*.txt",
+      "**/docs/**",
+      "**/doc/**",
+      "**/tests/**",
+      "**/test/**",
+      "**/__tests__/**",
+      "**/*_test.*",
+      "**/test_*.*",
+      "**/*.test.*",
+      "**/*.spec.*",
+      "**/spec/**",
+      "**/testdata/**",
+      "**/fixtures/**"
+    ],
+    "docs": [
+      "**/*.md",
+      "**/*.rst",
+      "**/*.txt",
+      "**/docs/**",
+      "**/doc/**",
+      "**/LICENSE*",
+      "**/CHANGELOG*"
+    ]
+  },
   "launch": {
     "profile": "sonnet",
     "permission": "bypass",

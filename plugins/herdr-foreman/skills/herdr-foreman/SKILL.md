@@ -27,6 +27,7 @@ Its work is the agents, the ledger and the reports to the person.
 | `scripts/bundle.py` | `push <machine>`: builds the group's bundle and puts it on the machine once |
 | `scripts/launch.py` | Starts one agent from a profile; run it from the bundle |
 | `scripts/transcript.py` | Prints a session's last answers from its transcript |
+| `scripts/score.py` | A task's difficulty: `estimate` from an issue, `diff` from a change (only goes up); the foreman adds judgment |
 | `scripts/remote.py` | Runs a command on a project machine inside its login shell, where `PATH` and token variables are set |
 | `defaults.json` | The standard settings |
 | `terminals/herdr.md`, `terminals/prompt.md` | The terminal layer: how to open, start, send to, read, wait on and close an agent, with herdr panes or in prompt mode; the same for every agent kind |

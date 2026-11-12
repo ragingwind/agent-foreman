@@ -69,11 +69,11 @@ def contents(cfg, skill_dirs, kind=adapters.DEFAULT):
     adapter = adapters.get(kind)
     files = {
         "bundle.json": json.dumps({"agent": kind}).encode() + b"\n",
-        "config.json": json.dumps({k: cfg[k] for k in ("gateways", "profiles", "launch")},
+        "config.json": json.dumps({k: cfg[k] for k in ("gateways", "profiles", "launch", "difficulty")},
                                   indent=2, sort_keys=True).encode() + b"\n",
         "lead.md": _read(os.path.join(SKILL_DIR, "agent", "lead.md")),
     }
-    for name in ("config.py", "launch.py", "transcript.py"):
+    for name in ("config.py", "launch.py", "transcript.py", "score.py"):
         files[f"scripts/{name}"] = _read(os.path.join(HERE, name))
     for rel, data in _tree(os.path.join(HERE, "adapters")).items():
         files[f"scripts/adapters/{rel}"] = data

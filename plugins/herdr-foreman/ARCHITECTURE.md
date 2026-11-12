@@ -90,10 +90,17 @@ The foreman sets each task's difficulty from a score and its own judgment.
 - **Level** = I when L is 0 or 1, else I + 1 (at most 3).
 - **Difficulty**: low = level 0, mid = level 1, high = level 2-3. The person
   merges every high-difficulty pull request.
-- `score.py` computes L and the path part of I from the issue and, later, the
-  diff. The foreman adds what code cannot see (does a user or caller observe it?) and
-  decides. After the diff exists the score is taken again and the difficulty
-  only ever goes up.
+- `score.py estimate` scores an issue before any code, from the paths and
+  size the foreman expects and the issue's labels. `score.py diff` scores the
+  change once it exists (`git diff BASE...HEAD` and the touched files' fix
+  history); run it in the lead's clone, through `remote.py` on another
+  machine. With `--previous` the difficulty only ever goes up.
+- The thresholds (400 lines, 10 files, 3 top-level directories, 90 days) and
+  the path patterns for critical, public, docs and test paths are the
+  `difficulty` settings; a project adds its own critical paths there.
+- The foreman adds what paths cannot show (does a user or caller observe the
+  change? does it change a public API or a shared library?) and decides.
+  `score.py` also flags a docs-only change as a trivial candidate.
 
 Sources: Kamei et al. 2013 (just-in-time defect prediction), Meta Diff Risk
 Score, ISTQB risk-based testing, Rigby & Bird 2013 (two reviewers), Google

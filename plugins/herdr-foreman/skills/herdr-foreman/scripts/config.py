@@ -50,7 +50,7 @@ EVENTS = ["started", "stage", "done", "blocked", "stalled", "exited",
           "owner-decision", "approved", "merged", "all-approved"]
 LABEL_EVENTS = ["blocked", "exited", "owner-decision"]
 PLACEHOLDERS = ["task", "stage", "round", "machine", "profile", "project"]
-SECTIONS = ["plugin_dirs", "gateways", "profiles", "tiers", "launch", "bundle", "loop", "labels", "report", "ops"]
+SECTIONS = ["plugin_dirs", "gateways", "profiles", "tiers", "difficulty", "launch", "bundle", "loop", "labels", "report", "ops"]
 PROJECT_KEYS = ["repo", "workspace", "machines"]
 # Model tiers, lowest first. Reviewers and retracers take one tier above the lead.
 TIERS = loops.LEVELS
@@ -316,6 +316,15 @@ def validate(cfg, saved=None, skills=None, project=False):
                                 f"not the agents'")
 
     problems += loops.validate_loop(cfg.get("loop", {}))
+
+    diff = cfg.get("difficulty", {})
+    for key in ("lines", "files", "top_dirs", "fix_days"):
+        if not isinstance(diff.get(key), int) or isinstance(diff.get(key), bool) or diff[key] <= 0:
+            problems.append(f"difficulty: {key} must be a positive whole number")
+    for key in ("fix_words", "critical", "public", "docs_tests", "docs"):
+        value = diff.get(key)
+        if not isinstance(value, list) or not all(isinstance(x, str) and x for x in value):
+            problems.append(f"difficulty: {key} must be a list of patterns or words")
     stage_names = loops.stage_ids(cfg.get("loop", {})) if isinstance(cfg.get("loop"), dict) else []
 
     refs = list(cfg.get("bundle", {}).get("skills", []))
