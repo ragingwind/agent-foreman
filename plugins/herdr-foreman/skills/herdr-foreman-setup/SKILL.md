@@ -27,7 +27,7 @@ file. Run its scripts with `python3`.
 
 Run these and keep the results:
 
-- `python3 <hf>/scripts/config.py paths [--group <repo>]`: where each level
+- `python3 <hf>/scripts/config.py paths [--project <repo>]`: where each level
   lives.
 - `python3 <hf>/scripts/config.py machines`: the saved herdr machines.
 - `python3 <hf>/scripts/config.py plugin-dir-candidates`: the plugin
@@ -45,7 +45,7 @@ Run these and keep the results:
 
 ## 2. Load the current settings
 
-`python3 <hf>/scripts/config.py show [--group <repo>]` prints the settings in
+`python3 <hf>/scripts/config.py show [--project <repo>]` prints the settings in
 effect. Treat them as the current answers.
 
 ## 3. Ask
@@ -67,7 +67,7 @@ environment variable that carries it.
 | Report | Language, how to address the person (or not at all), and the status template |
 | Ops | Check interval, back-off (first hours, factor), batch size, placement (`least-busy` or `ask`), disk check, the steps after a merge |
 
-**A group's level** (`save group --group <repo>`):
+**A group's level** (`save project --project <repo>`):
 
 - Members: for each machine (`local` or a label from step 1), the checkout
   path there. Check it with `python3 <hf>/scripts/config.py member <machine>
@@ -94,7 +94,7 @@ object, and pass it on stdin:
 
 ```bash
 python3 <hf>/scripts/config.py save user --dry-run < <file>
-python3 <hf>/scripts/config.py save group --group <repo> --dry-run < <file>
+python3 <hf>/scripts/config.py save project --project <repo> --dry-run < <file>
 ```
 
 A non-zero exit prints the problems; fix them with the person and run it
@@ -104,7 +104,7 @@ second run gives the same file.
 
 ## 5. Confirm
 
-Run `python3 <hf>/scripts/config.py check [--group <repo>]` and show its
+Run `python3 <hf>/scripts/config.py check [--project <repo>]` and show its
 result. Tell the person what changed, that a running foreman picks it up at
 its next preflight, and that agents already running keep the bundle they
 started with.

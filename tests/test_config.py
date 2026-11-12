@@ -22,19 +22,19 @@ class Levels(unittest.TestCase):
         self.assertEqual(cfg["launch"]["profile"], "sonnet")
         self.assertEqual(config.validate(cfg), [])
 
-    def test_user_over_standard_and_group_over_user(self):
+    def test_user_over_standard_and_project_over_user(self):
         self.home.write("config/herdr-foreman/config.json",
                         {"launch": {"profile": "opus"}, "ops": {"check_minutes": 5}})
-        self.home.write("state/herdr-foreman/groups/o-r/group.json",
-                        {"repo": "o/r", "members": {"m1": "/src/r"}, "ops": {"check_minutes": 20}})
+        self.home.write("state/herdr-foreman/projects/o-r/project.json",
+                        {"repo": "o/r", "machines": {"m1": "/src/r"}, "ops": {"check_minutes": 20}})
         user = config.load()
         self.assertEqual(user["launch"]["profile"], "opus")
         self.assertEqual(user["launch"]["permission"], "bypass")  # untouched key falls back
-        group = config.load("o/r")
-        self.assertEqual(group["ops"]["check_minutes"], 20)
-        self.assertEqual(group["launch"]["profile"], "opus")
-        self.assertEqual(group["workspace"], "r")
-        self.assertEqual(config.validate(group, machines=MACHINES, group=True), [])
+        project = config.load("o/r")
+        self.assertEqual(project["ops"]["check_minutes"], 20)
+        self.assertEqual(project["launch"]["profile"], "opus")
+        self.assertEqual(project["workspace"], "r")
+        self.assertEqual(config.validate(project, saved=MACHINES, project=True), [])
 
     def test_diff_then_merge_gives_the_full_settings(self):
         base = config.standard()
@@ -51,8 +51,8 @@ class Problems(unittest.TestCase):
     def tearDown(self):
         self.home.close()
 
-    def problems(self, over, group=False, skills=None):
-        return config.validate(config.merge(self.cfg, over), machines=MACHINES, skills=skills, group=group)
+    def problems(self, over, project=False, skills=None):
+        return config.validate(config.merge(self.cfg, over), saved=MACHINES, skills=skills, project=project)
 
     def test_unknown_agent_kind(self):
         p = self.problems({"profiles": {"sonnet": {"agent": "nope"}}})
@@ -96,14 +96,55 @@ class Problems(unittest.TestCase):
         for word in ("launch: profile", "base_url", "token_env", "auth", "model 'm'", "role opus"):
             self.assertTrue(any(word in x for x in p), word)
 
-    def test_group_members(self):
-        over = {"repo": "bad", "members": {"m1": "relative/path", "off": "/x", "ghost": "/y"}}
-        p = self.problems(over, group=True)
-        self.assertIn("group: repo must look like owner/name", p)
-        self.assertIn("group: member m1: checkout path must start with / or ~", p)
-        self.assertIn("group: member off is disabled in herdr", p)
-        self.assertTrue(any("member ghost is not a saved herdr machine" in x for x in p))
-        self.assertTrue(any("members must name" in x for x in self.problems({"repo": "o/r"}, group=True)))
+    def test_project_machines(self):
+        over = {"repo": "bad", "machines": {"m1": "relative/path", "off": "/x", "ghost": "/y"}}
+        p = self.problems(over, project=True)
+        self.assertIn("project: repo must look like owner/name", p)
+        self.assertIn("project: machine m1: project path must start with / or ~", p)
+        self.assertIn("project: machine off is disabled in herdr", p)
+        self.assertTrue(any("machine ghost is not a saved herdr machine" in x for x in p))
+        self.assertTrue(any("machines must name" in x for x in self.problems({"repo": "o/r"}, project=True)))
+
+
+class Tiers(unittest.TestCase):
+    def setUp(self):
+        self.home = TempHome()
+
+    def tearDown(self):
+        self.home.close()
+
+    def test_standard_tiers_are_the_harness_models_without_fable(self):
+        tiers = config.load()["tiers"]
+        self.assertEqual(tiers, {"low": ["haiku"], "mid": ["sonnet"], "high": ["opus"]})
+        self.assertNotIn("fable", json.dumps(tiers))
+
+    def test_role_tier(self):
+        self.assertEqual(config.role_tier("low"), "low")
+        self.assertEqual(config.role_tier("low", "reviewer"), "mid")
+        self.assertEqual(config.role_tier("mid", "retracer"), "high")
+        self.assertEqual(config.role_tier("high", "reviewer"), "high")
+        self.assertEqual(config.role_tier("mid", "tester"), "mid")
+        with self.assertRaises(ValueError):
+            config.role_tier("huge")
+
+    def test_order_and_fallback(self):
+        cfg = config.merge(config.load(), {"tiers": {"mid": ["sonnet", "haiku"]}})
+        self.assertEqual(config.tier_profiles(cfg, "mid"), ["sonnet", "haiku"])
+        self.assertEqual(config.tier_profiles(cfg, "mid", skip=["sonnet"]), ["haiku"])
+
+    def test_tier_problems(self):
+        cfg = config.load()
+        p = config.validate(config.merge(cfg, {"tiers": {"huge": ["opus"], "mid": [], "high": ["ghost"]}}))
+        self.assertTrue(any("unknown tier 'huge'" in x for x in p))
+        self.assertIn("tiers: mid must list at least one profile", p)
+        self.assertIn("tiers: high names profile 'ghost', which does not exist", p)
+
+    def test_tier_cli(self):
+        r = run("config.py", "tier", "--difficulty", "mid", "--role", "reviewer")
+        self.assertEqual(json.loads(r.stdout), {"tier": "high", "profiles": ["opus"], "pick": "opus"})
+        r = run("config.py", "tier", "--difficulty", "mid", "--role", "reviewer", "--skip", "opus")
+        self.assertEqual(r.returncode, 3)
+        self.assertEqual(run("config.py", "tier").returncode, 2)
 
 
 class Save(unittest.TestCase):
@@ -115,32 +156,32 @@ class Save(unittest.TestCase):
 
     def test_user_save_stores_only_differences_and_repeats(self):
         full = config.merge(config.standard(), {"ops": {"batch": 3}})
-        path, written, problems = config.save("user", full, machines=MACHINES, skills={})
+        path, written, problems = config.save("user", full, saved=MACHINES, skills={})
         self.assertEqual(problems, [])
         self.assertEqual(written, {"ops": {"batch": 3}})
         with open(path) as f:
             first = f.read()
-        config.save("user", full, machines=MACHINES, skills={})
+        config.save("user", full, saved=MACHINES, skills={})
         with open(path) as f:
             self.assertEqual(f.read(), first)
 
     def test_invalid_save_writes_nothing(self):
         full = config.merge(config.standard(), {"ops": {"batch": -1}})
-        path, _, problems = config.save("user", full, machines=MACHINES, skills={})
+        path, _, problems = config.save("user", full, saved=MACHINES, skills={})
         self.assertTrue(problems)
         self.assertFalse(os.path.exists(path))
 
-    def test_group_save_leaves_out_user_values(self):
+    def test_project_save_leaves_out_user_values(self):
         self.home.write("config/herdr-foreman/config.json", {"ops": {"batch": 3}})
-        full = config.merge(config.load(), {"members": {"m1": "/src/r"}, "labels": {"default": "{task}"}})
-        _, written, problems = config.save("group", full, repo="o/r", machines=MACHINES, skills={})
+        full = config.merge(config.load(), {"machines": {"m1": "/src/r"}, "labels": {"default": "{task}"}})
+        _, written, problems = config.save("project", full, repo="o/r", saved=MACHINES, skills={})
         self.assertEqual(problems, [])
-        self.assertEqual(written, {"members": {"m1": "/src/r"}, "labels": {"default": "{task}"}, "repo": "o/r"})
+        self.assertEqual(written, {"machines": {"m1": "/src/r"}, "labels": {"default": "{task}"}, "repo": "o/r"})
         self.assertEqual(config.load("o/r")["ops"]["batch"], 3)
 
     def test_dry_run_writes_nothing(self):
         full = config.merge(config.standard(), {"ops": {"batch": 3}})
-        path, _, problems = config.save("user", full, machines=MACHINES, skills={}, dry_run=True)
+        path, _, problems = config.save("user", full, saved=MACHINES, skills={}, dry_run=True)
         self.assertEqual(problems, [])
         self.assertFalse(os.path.exists(path))
 
@@ -197,10 +238,10 @@ class Skills(unittest.TestCase):
                       config.validate(config.merge(cfg, {"plugin_dirs": "/a"})))
         self.assertEqual(config.plugin_dirs({"plugin_dirs": [plug, "/no/such/dir"]}), [plug])
 
-    def test_group_skills_order_without_repeats(self):
+    def test_project_skills_order_without_repeats(self):
         cfg = config.merge(config.load(), {"bundle": {"skills": ["a"]}})
         cfg["loop"]["stages"][2]["skills"] = ["b", "a"]
-        self.assertEqual(config.group_skills(cfg, ["c", "b"]), ["a", "b", "c"])
+        self.assertEqual(config.project_skills(cfg, ["c", "b"]), ["a", "b", "c"])
 
 
 class Labels(unittest.TestCase):
@@ -229,20 +270,20 @@ class Cli(unittest.TestCase):
     def tearDown(self):
         self.home.close()
 
-    def test_bad_group_name(self):
-        r = run("config.py", "show", "--group", "not-a-repo")
+    def test_bad_project_name(self):
+        r = run("config.py", "show", "--project", "not-a-repo")
         self.assertEqual(r.returncode, 2)
 
     def test_paths_and_show(self):
-        r = run("config.py", "paths", "--group", "o/r")
+        r = run("config.py", "paths", "--project", "o/r")
         self.assertEqual(r.returncode, 0)
-        self.assertTrue(json.loads(r.stdout)["ledger"].endswith("groups/o-r/ledger.md"))
+        self.assertTrue(json.loads(r.stdout)["ledger"].endswith("projects/o-r/ledger.md"))
         r = run("config.py", "show")
         self.assertEqual(json.loads(r.stdout)["launch"]["profile"], "sonnet")
 
     def test_save_needs_level(self):
         self.assertEqual(run("config.py", "save", stdin="{}").returncode, 2)
-        self.assertEqual(run("config.py", "save", "group", stdin="{}").returncode, 2)
+        self.assertEqual(run("config.py", "save", "project", stdin="{}").returncode, 2)
         self.assertEqual(run("config.py", "save", "everyone", stdin="{}").returncode, 2)
 
     def test_member_state_local(self):

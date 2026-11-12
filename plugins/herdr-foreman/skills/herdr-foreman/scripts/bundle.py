@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Build a group's skill bundle and put it on a herdr machine once.
+"""Build a project's skill bundle and put it on a herdr machine once.
 
-A bundle holds the group's skills (each skill directory whole, with its
+A bundle holds the project's skills (each skill directory whole, with its
 scripts) in the layout the agent kind loads (its adapter's bundle_layout; for
 claude, a plugin named foreman-kit), the agents' loop, launch.py with the
-group's launch settings and the adapters, and transcript.py. `bundle.json`
+project's launch settings and the adapters, and transcript.py. `bundle.json`
 names the agent kind. Its name is a hash of its content: a machine that
 already holds it is not sent it again, and any change makes a new one.
 
 Usage:
-  bundle.py build --group OWNER/REPO [--skills REF,...] [--agent KIND]
-  bundle.py push MACHINE --group OWNER/REPO [--skills REF,...] [--agent KIND]
+  bundle.py build --project OWNER/REPO [--skills REF,...] [--agent KIND]
+  bundle.py push MACHINE --project OWNER/REPO [--skills REF,...] [--agent KIND]
 
 MACHINE is a herdr machine label, or `local`. --skills adds skills for one
-task to the group's own. Prints one JSON object.
+task to the project's own. Prints one JSON object.
 
 Exit codes: 1 = a machine could not be reached or written, 2 = bad
-arguments, 3 = setup needed (group settings, an unknown skill).
+arguments, 3 = setup needed (project settings, an unknown skill).
 """
 import argparse
 import hashlib
@@ -31,7 +31,7 @@ import tempfile
 import zipfile
 
 import adapters
-from config import (EXIT_SETUP_NEEDED, LOCAL, REPO, SKILL_DIR, cache_dir, group_path, group_skills,
+from config import (EXIT_SETUP_NEEDED, LOCAL, REPO, SKILL_DIR, cache_dir, project_path, project_skills,
                     herdr_machines, load, local_skills, plugin_list, plugin_dirs, validate)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -150,13 +150,13 @@ def push_remote(target, bundle_hash, files):
 
 
 def build(repo, extra, kind=adapters.DEFAULT):
-    if not os.path.exists(group_path(repo)):
-        fail(EXIT_SETUP_NEEDED, f"group {repo} has no settings yet; run herdr-foreman-setup")
+    if not os.path.exists(project_path(repo)):
+        fail(EXIT_SETUP_NEEDED, f"project {repo} has no settings yet; run herdr-foreman-setup")
     cfg = load(repo)
-    problems = validate(cfg, group=True)
+    problems = validate(cfg, project=True)
     if problems:
-        fail(EXIT_SETUP_NEEDED, f"group {repo}: {problems[0]}")
-    refs = group_skills(cfg, extra)
+        fail(EXIT_SETUP_NEEDED, f"project {repo}: {problems[0]}")
+    refs = project_skills(cfg, extra)
     available = local_skills(plugin_list(plugin_dirs(cfg))) if refs else {}
     missing = [r for r in refs if r not in available]
     if missing:
@@ -174,17 +174,17 @@ def main(argv):
     ap = argparse.ArgumentParser(prog="bundle.py", description="herdr-foreman skill bundles")
     ap.add_argument("command", choices=["build", "push"])
     ap.add_argument("machine", nargs="?")
-    ap.add_argument("--group", required=True, metavar="OWNER/REPO")
+    ap.add_argument("--project", required=True, metavar="OWNER/REPO")
     ap.add_argument("--skills", default="", metavar="REF,...")
     ap.add_argument("--agent", default=adapters.DEFAULT, choices=adapters.KINDS)
     args = ap.parse_args(argv)
-    if not REPO.match(args.group):
-        fail(2, f"--group must look like owner/name, not {args.group!r}")
+    if not REPO.match(args.project):
+        fail(2, f"--project must look like owner/name, not {args.project!r}")
     if args.command == "push" and not args.machine:
         fail(2, "push needs a machine label, or local")
     extra = [s.strip() for s in args.skills.split(",") if s.strip()]
 
-    bundle_hash, files, skills = build(args.group, extra, args.agent)
+    bundle_hash, files, skills = build(args.project, extra, args.agent)
     out = {"hash": bundle_hash, "agent": args.agent, "skills": skills}
     if args.command == "build" or args.machine == LOCAL:
         path, status = write_local(bundle_hash, files)

@@ -76,8 +76,8 @@ class Launch(unittest.TestCase):
         self.assertIn("ANTHROPIC_AUTH_TOKEN", r.stdout)
         self.assertNotIn("secret-value-xyz", r.stdout + r.stderr)
 
-    def test_bad_group_argument(self):
-        self.assertEqual(run("launch.py", "--group", "bad", "--dry-run").returncode, 2)
+    def test_bad_project_argument(self):
+        self.assertEqual(run("launch.py", "--project", "bad", "--dry-run").returncode, 2)
 
 
 if __name__ == "__main__":

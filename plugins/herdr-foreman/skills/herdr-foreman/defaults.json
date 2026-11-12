@@ -1,12 +1,34 @@
 {
   "plugin_dirs": [],
   "gateways": {
-    "anthropic": {"kind": "anthropic"}
+    "anthropic": {
+      "kind": "anthropic"
+    }
   },
   "profiles": {
-    "sonnet": {"gateway": "anthropic", "model": "sonnet"},
-    "opus": {"gateway": "anthropic", "model": "opus"},
-    "haiku": {"gateway": "anthropic", "model": "haiku"}
+    "sonnet": {
+      "gateway": "anthropic",
+      "model": "sonnet"
+    },
+    "opus": {
+      "gateway": "anthropic",
+      "model": "opus"
+    },
+    "haiku": {
+      "gateway": "anthropic",
+      "model": "haiku"
+    }
+  },
+  "tiers": {
+    "low": [
+      "haiku"
+    ],
+    "mid": [
+      "sonnet"
+    ],
+    "high": [
+      "opus"
+    ]
   },
   "launch": {
     "profile": "sonnet",
@@ -17,7 +39,6 @@
     "skills": []
   },
   "loop": {
-    "tier_profiles": {"S": "sonnet", "M": "sonnet", "L": "opus"},
     "stages": [
       {
         "name": "start",
@@ -76,7 +97,10 @@
   },
   "ops": {
     "check_minutes": 10,
-    "backoff": {"first_hours": 1, "factor": 2},
+    "backoff": {
+      "first_hours": 1,
+      "factor": 2
+    },
     "batch": null,
     "placement": "least-busy",
     "disk_check": true,

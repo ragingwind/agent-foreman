@@ -16,8 +16,8 @@ class Bundle(unittest.TestCase):
         self.skill = os.path.dirname(self.home.write("skills/tidy/SKILL.md", "---\nname: tidy\n---\nTidy."))
         self.home.write("skills/tidy/scripts/run.py", "print('hi')")
         self.home.write("skills/tidy/__pycache__/x.pyc", "junk")
-        self.home.write("state/herdr-foreman/groups/o-r/group.json",
-                        {"repo": "o/r", "members": {"local": "/src/r"}, "bundle": {"skills": ["p:tidy"]}})
+        self.home.write("state/herdr-foreman/projects/o-r/project.json",
+                        {"repo": "o/r", "machines": {"local": "/src/r"}, "bundle": {"skills": ["p:tidy"]}})
         patcher = mock.patch.object(bundle, "local_skills", return_value={"p:tidy": self.skill})
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -69,7 +69,7 @@ class Bundle(unittest.TestCase):
                 bundle.build("o/r", ["tidy"])
         self.assertEqual(e.exception.code, config.EXIT_SETUP_NEEDED)
 
-    def test_group_without_settings_stops(self):
+    def test_project_without_settings_stops(self):
         with self.assertRaises(SystemExit) as e:
             bundle.build("o/other", [])
         self.assertEqual(e.exception.code, config.EXIT_SETUP_NEEDED)
@@ -79,11 +79,11 @@ class Bundle(unittest.TestCase):
         with mock.patch.object(bundle, "herdr_machines", return_value=machines):
             for label in ("ghost", "off"):
                 with self.assertRaises(SystemExit) as e:
-                    bundle.main(["push", label, "--group", "o/r"])
+                    bundle.main(["push", label, "--project", "o/r"])
                 self.assertEqual(e.exception.code, 2)
 
     def test_bad_arguments(self):
-        for argv in (["push", "--group", "o/r"], ["build", "--group", "bad"]):
+        for argv in (["push", "--project", "o/r"], ["build", "--project", "bad"]):
             with self.assertRaises(SystemExit) as e:
                 bundle.main(argv)
             self.assertEqual(e.exception.code, 2)

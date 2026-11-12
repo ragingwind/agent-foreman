@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""Settings of herdr-foreman: standard values, user settings and group settings.
+"""Settings of herdr-foreman: standard values, user settings and project settings.
 
 Three levels, each laid over the one before:
 
   standard  defaults.json in this skill's directory
   user      $XDG_CONFIG_HOME/herdr-foreman/config.json   (~/.config/...)
-  group     $XDG_STATE_HOME/herdr-foreman/groups/<owner>-<repo>/group.json
+  project   $XDG_STATE_HOME/herdr-foreman/projects/<owner>-<repo>/project.json
 
-The user and group files hold only the values that differ from the level
+The user and project files hold only the values that differ from the level
 below; a missing key falls back. Settings hold token variable names only,
 never token values.
 
 Usage:
-  config.py paths [--group OWNER/REPO]
-  config.py show [--group OWNER/REPO]
-  config.py check [--group OWNER/REPO]
-  config.py save user|group [--group OWNER/REPO] [--dry-run]   (full settings as JSON on stdin)
-  config.py stages --group OWNER/REPO --task TASK [--agent KIND]
+  config.py paths [--project OWNER/REPO]
+  config.py show [--project OWNER/REPO]
+  config.py check [--project OWNER/REPO]
+  config.py save user|project [--project OWNER/REPO] [--dry-run]   (full settings as JSON on stdin)
+  config.py stages --project OWNER/REPO --task TASK [--agent KIND]
   config.py member MACHINE PATH [--agent KIND]   (is the checkout there and ready for that agent kind)
   config.py plugin-dir-candidates   (this session's --plugin-dir directories, herdr-foreman left out)
-  config.py profiles | groups | machines | skills
+  config.py tier --difficulty low|mid|high --role ROLE [--skip PROFILE,...]
+  config.py profiles | projects | machines | skills
 
 `plugin_dirs` in the settings lists plugin directories the person loads with
 `--plugin-dir` (often through a `claude` shell wrapper). Skill lookups pass
@@ -48,9 +49,12 @@ PLACEMENTS = ["least-busy", "ask"]
 EVENTS = ["started", "stage", "done", "blocked", "stalled", "exited",
           "owner-decision", "approved", "merged", "all-approved"]
 LABEL_EVENTS = ["blocked", "exited", "owner-decision"]
-PLACEHOLDERS = ["task", "stage", "round", "machine", "profile", "group"]
-SECTIONS = ["plugin_dirs", "gateways", "profiles", "launch", "bundle", "loop", "labels", "report", "ops"]
-GROUP_KEYS = ["repo", "workspace", "members"]
+PLACEHOLDERS = ["task", "stage", "round", "machine", "profile", "project"]
+SECTIONS = ["plugin_dirs", "gateways", "profiles", "tiers", "launch", "bundle", "loop", "labels", "report", "ops"]
+PROJECT_KEYS = ["repo", "workspace", "machines"]
+# Model tiers, lowest first. Reviewers and retracers take one tier above the lead.
+TIERS = ["low", "mid", "high"]
+ROLE_STEP = {"reviewer": 1, "retracer": 1}
 LOCAL = "local"
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -87,16 +91,25 @@ def cache_dir():
     return os.path.join(_xdg("XDG_CACHE_HOME", ".cache"), APP)
 
 
-def group_dir(repo):
-    return os.path.join(state_dir(), "groups", repo.replace("/", "-"))
+def project_dir(repo):
+    return os.path.join(state_dir(), "projects", repo.replace("/", "-"))
 
 
-def group_path(repo):
-    return os.path.join(group_dir(repo), "group.json")
+def project_path(repo):
+    return os.path.join(project_dir(repo), "project.json")
 
 
 def ledger_path(repo):
-    return os.path.join(group_dir(repo), "ledger.md")
+    return os.path.join(project_dir(repo), "ledger.md")
+
+
+def log_path(repo):
+    return os.path.join(project_dir(repo), "log.jsonl")
+
+
+def memory_path(repo):
+    """What only this project has (tag format, docs steps, disk floor); the foreman keeps it."""
+    return os.path.join(project_dir(repo), "memory.md")
 
 
 def read_json(path, default=None):
@@ -147,10 +160,10 @@ def standard():
 
 
 def load(repo=None):
-    """Settings in effect: standard, then user, then the group's when `repo` is given."""
+    """Settings in effect: standard, then user, then the project's when `repo` is given."""
     cfg = merge(standard(), read_json(user_path()))
     if repo:
-        cfg = merge(cfg, read_json(group_path(repo)))
+        cfg = merge(cfg, read_json(project_path(repo)))
         cfg.setdefault("repo", repo)
         cfg.setdefault("workspace", repo.split("/", 1)[1])
     return cfg
@@ -201,6 +214,21 @@ def validate_launch(cfg):
             if p.get("roles", {}).get(role) not in models:
                 problems.append(f"profile {name}: role {role} has no model of gateway {p['gateway']}")
 
+    tiers = cfg.get("tiers", {})
+    if not isinstance(tiers, dict):
+        problems.append("tiers must map low, mid and high to lists of profiles")
+        tiers = {}
+    for tier, names in tiers.items():
+        if tier not in TIERS:
+            problems.append(f"tiers: unknown tier {tier!r}; use {', '.join(TIERS)}")
+            continue
+        if not isinstance(names, list) or not names:
+            problems.append(f"tiers: {tier} must list at least one profile")
+            continue
+        for name in names:
+            if name not in profiles:
+                problems.append(f"tiers: {tier} names profile {name!r}, which does not exist")
+
     launch = cfg.get("launch", {})
     if launch.get("profile") not in profiles:
         problems.append(f"launch: profile {launch.get('profile')!r} does not exist")
@@ -211,11 +239,11 @@ def validate_launch(cfg):
     return problems
 
 
-def validate(cfg, machines=None, skills=None, group=False):
+def validate(cfg, saved=None, skills=None, project=False):
     """Problems in merged settings, as lines. `machines` (label -> info) and
     `skills` (ref -> path) are checked against when given."""
     problems = []
-    allowed = SECTIONS + (GROUP_KEYS if group else [])
+    allowed = SECTIONS + (PROJECT_KEYS if project else [])
     for key in cfg:
         if key not in allowed:
             problems.append(f"unknown setting {key!r}")
@@ -251,9 +279,6 @@ def validate(cfg, machines=None, skills=None, group=False):
             problems.append(f"loop: stage {name} has no method")
         if not isinstance(s.get("skills", []), list):
             problems.append(f"loop: stage {name}: skills must be a list")
-    for tier, profile in loop.get("tier_profiles", {}).items():
-        if profile not in profiles:
-            problems.append(f"loop: tier {tier} uses profile {profile!r}, which does not exist")
 
     refs = list(cfg.get("bundle", {}).get("skills", []))
     if not isinstance(cfg.get("bundle", {}).get("skills", []), list):
@@ -316,24 +341,24 @@ def validate(cfg, machines=None, skills=None, group=False):
     if not isinstance(ops.get("after_merge", []), list):
         problems.append("ops: after_merge must be a list of steps")
 
-    if group:
+    if project:
         if not REPO.match(str(cfg.get("repo", ""))):
-            problems.append("group: repo must look like owner/name")
+            problems.append("project: repo must look like owner/name")
         if not str(cfg.get("workspace", "")).strip():
-            problems.append("group: workspace label is empty")
-        members = cfg.get("members")
-        if not isinstance(members, dict) or not members:
-            problems.append("group: members must name at least one machine and its checkout path")
-            members = {}
-        for label, path in members.items():
+            problems.append("project: workspace label is empty")
+        hosts = cfg.get("machines")
+        if not isinstance(hosts, dict) or not hosts:
+            problems.append("project: machines must name at least one machine and the project path there")
+            hosts = {}
+        for label, path in hosts.items():
             if not str(path).startswith(("/", "~")):
-                problems.append(f"group: member {label}: checkout path must start with / or ~")
-            if label == LOCAL or machines is None:
+                problems.append(f"project: machine {label}: project path must start with / or ~")
+            if label == LOCAL or saved is None:
                 continue
-            if label not in machines:
-                problems.append(f"group: member {label} is not a saved herdr machine (herdr machine list)")
-            elif not machines[label]["enabled"]:
-                problems.append(f"group: member {label} is disabled in herdr")
+            if label not in saved:
+                problems.append(f"project: machine {label} is not a saved herdr machine (herdr machine list)")
+            elif not saved[label]["enabled"]:
+                problems.append(f"project: machine {label} is disabled in herdr")
     return problems
 
 
@@ -446,8 +471,8 @@ def local_skills(plugins=None, user_skills_dir=None):
     return found
 
 
-def group_skills(cfg, extra=()):
-    """Every skill ref a group's bundle carries: bundle.skills, each stage's
+def project_skills(cfg, extra=()):
+    """Every skill ref a project's bundle carries: bundle.skills, each stage's
     skills, then `extra`, without repeats, in that order."""
     refs = list(cfg.get("bundle", {}).get("skills", []))
     for s in cfg.get("loop", {}).get("stages", []):
@@ -460,8 +485,23 @@ def group_skills(cfg, extra=()):
     return seen
 
 
+def role_tier(difficulty, role="lead"):
+    """The model tier a role takes for a task of that difficulty: the lead and
+    most roles take the difficulty's tier; reviewers and retracers one above,
+    capped at high."""
+    if difficulty not in TIERS:
+        raise ValueError(f"difficulty must be one of {', '.join(TIERS)}")
+    return TIERS[min(len(TIERS) - 1, TIERS.index(difficulty) + ROLE_STEP.get(role, 0))]
+
+
+def tier_profiles(cfg, tier, skip=()):
+    """The tier's profiles in order, without the skipped ones (a usage limit or
+    a gateway error moves on to the next)."""
+    return [p for p in cfg.get("tiers", {}).get(tier, []) if p not in skip]
+
+
 def label(cfg, event, **values):
-    """Tab label for an event or a stage, from the group's label formats."""
+    """Tab label for an event or a stage, from the project's label formats."""
     fmt = cfg["labels"].get("events", {}).get(event) or cfg["labels"]["default"]
     fields = {p: "" for p in PLACEHOLDERS}
     fields.update({k: str(v) for k, v in values.items()})
@@ -474,28 +514,28 @@ def stages_markdown(cfg, task, kind=adapters.DEFAULT):
     for s in cfg["loop"]["stages"]:
         stage = s["name"] + (" <N>" if s["name"] in ("review", "fix") else "")
         tab = label(cfg, s["name"], task=task, stage=stage, round="<N>" if "<N>" in stage else "",
-                    group=cfg.get("workspace", ""))
+                    project=cfg.get("workspace", ""))
         skills = ", ".join(adapters.get(kind).skill_name(r) for r in s.get("skills", [])) or "-"
         lines.append(f"| {s['name']} | `{tab}` | {skills} | {s['method'].replace('|', '/')} |")
     return "\n".join(lines)
 
 
-def save(level, full, repo=None, machines=None, skills=None, dry_run=False):
+def save(level, full, repo=None, saved=None, skills=None, dry_run=False):
     """Write the part of `full` (settings as they should be in effect at that
     level) that differs from the level below. Returns (path, written, problems)."""
     base = standard()
-    if level == "group":
+    if level == "project":
         base = merge(base, read_json(user_path()))
-        path = group_path(repo)
+        path = project_path(repo)
     else:
         path = user_path()
     effective = merge(base, full)
-    if level == "group":
+    if level == "project":
         effective.setdefault("repo", repo)
         effective.setdefault("workspace", repo.split("/", 1)[1])
-    problems = validate(effective, machines=machines, skills=skills, group=level == "group")
+    problems = validate(effective, saved=saved, skills=skills, project=level == "project")
     written = diff(base, full)
-    if level == "group":
+    if level == "project":
         written["repo"] = repo
     if not problems and not dry_run:
         write_json(path, written)
@@ -514,30 +554,34 @@ def plugin_dirs(cfg):
 def _cli(argv):
     ap = argparse.ArgumentParser(prog="config.py", description="herdr-foreman settings")
     ap.add_argument("command", choices=["paths", "show", "check", "save", "stages", "member", "profiles",
-                                        "groups", "machines", "skills", "plugin-dir-candidates"])
-    ap.add_argument("rest", nargs="*", help="save: user or group; member: MACHINE PATH")
-    ap.add_argument("--group", metavar="OWNER/REPO")
+                                        "projects", "machines", "skills", "plugin-dir-candidates", "tier"])
+    ap.add_argument("rest", nargs="*", help="save: user or project; member: MACHINE PATH")
+    ap.add_argument("--project", metavar="OWNER/REPO")
+    ap.add_argument("--difficulty", choices=TIERS)
+    ap.add_argument("--role", default="lead")
+    ap.add_argument("--skip", default="", metavar="PROFILE,...")
     ap.add_argument("--task", default="<task>")
     ap.add_argument("--agent", default=adapters.DEFAULT, choices=adapters.KINDS)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
-    if args.group and not REPO.match(args.group):
-        print(f"config.py: --group must look like owner/name, not {args.group!r}", file=sys.stderr)
+    if args.project and not REPO.match(args.project):
+        print(f"config.py: --project must look like owner/name, not {args.project!r}", file=sys.stderr)
         return 2
 
     if args.command == "paths":
         info = {"standard": defaults_path(), "user": user_path(), "state": state_dir(), "cache": cache_dir()}
-        if args.group:
-            info.update(group=group_path(args.group), ledger=ledger_path(args.group))
+        if args.project:
+            info.update(project=project_path(args.project), ledger=ledger_path(args.project),
+                        log=log_path(args.project), memory=memory_path(args.project))
         print(json.dumps(info, indent=2))
     elif args.command == "show":
-        print(json.dumps(load(args.group), indent=2, ensure_ascii=False))
+        print(json.dumps(load(args.project), indent=2, ensure_ascii=False))
     elif args.command == "check":
-        cfg = load(args.group)
-        problems = validate(cfg, machines=herdr_machines(), group=bool(args.group),
+        cfg = load(args.project)
+        problems = validate(cfg, saved=herdr_machines(), project=bool(args.project),
                             skills=local_skills(plugin_list(plugin_dirs(cfg))))
-        if args.group and not os.path.exists(group_path(args.group)):
-            problems.insert(0, f"group {args.group} has no settings yet ({group_path(args.group)})")
+        if args.project and not os.path.exists(project_path(args.project)):
+            problems.insert(0, f"project {args.project} has no settings yet ({project_path(args.project)})")
         for p in problems:
             print(p)
         if problems:
@@ -545,12 +589,12 @@ def _cli(argv):
         print("ok")
     elif args.command == "save":
         level = args.rest[0] if len(args.rest) == 1 else None
-        if level not in ("user", "group") or (level == "group" and not args.group):
-            print("config.py: save needs user, or group with --group OWNER/REPO", file=sys.stderr)
+        if level not in ("user", "project") or (level == "project" and not args.project):
+            print("config.py: save needs user, or project with --project OWNER/REPO", file=sys.stderr)
             return 2
         full = json.load(sys.stdin)
-        dirs = plugin_dirs(full) if "plugin_dirs" in full else plugin_dirs(load(args.group))
-        path, written, problems = save(level, full, repo=args.group, machines=herdr_machines(),
+        dirs = plugin_dirs(full) if "plugin_dirs" in full else plugin_dirs(load(args.project))
+        path, written, problems = save(level, full, repo=args.project, saved=herdr_machines(),
                                        skills=local_skills(plugin_list(dirs)), dry_run=args.dry_run)
         for p in problems:
             print(p)
@@ -559,10 +603,10 @@ def _cli(argv):
         print(json.dumps({"path": path, "written": written, "dry_run": args.dry_run}, indent=2,
                          ensure_ascii=False))
     elif args.command == "stages":
-        if not args.group:
-            print("config.py: stages needs --group OWNER/REPO", file=sys.stderr)
+        if not args.project:
+            print("config.py: stages needs --project OWNER/REPO", file=sys.stderr)
             return 2
-        print(stages_markdown(load(args.group), args.task, args.agent))
+        print(stages_markdown(load(args.project), args.task, args.agent))
     elif args.command == "member":
         if len(args.rest) != 2:
             print("config.py: member needs MACHINE PATH", file=sys.stderr)
@@ -575,19 +619,30 @@ def _cli(argv):
         print(json.dumps(state))
         return 0 if state["ready"] else EXIT_SETUP_NEEDED
     elif args.command == "profiles":
-        cfg = load(args.group)
+        cfg = load(args.project)
         default = cfg["launch"].get("profile")
         for name, p in cfg["profiles"].items():
             roles = p.get("roles")
             role_text = "  roles " + "/".join(roles[r] for r in ROLES) if roles else ""
             mark = "*" if name == default else " "
             print(f"{mark}{name:12} {p['gateway']:24} {p['model']}{role_text}")
-    elif args.command == "groups":
-        root = os.path.join(state_dir(), "groups")
+    elif args.command == "projects":
+        root = os.path.join(state_dir(), "projects")
         for entry in sorted(os.listdir(root)) if os.path.isdir(root) else []:
-            g = read_json(os.path.join(root, entry, "group.json"))
-            if g.get("repo"):
-                print(f"{g['repo']:40} {' '.join(g.get('members', {}))}")
+            p = read_json(os.path.join(root, entry, "project.json"))
+            if p.get("repo"):
+                print(f"{p['repo']:40} {' '.join(p.get('machines', {}))}")
+    elif args.command == "tier":
+        if not args.difficulty:
+            print("config.py: tier needs --difficulty low|mid|high", file=sys.stderr)
+            return 2
+        cfg = load(args.project)
+        tier = role_tier(args.difficulty, args.role)
+        skip = [x for x in args.skip.split(",") if x]
+        profiles = tier_profiles(cfg, tier, skip)
+        print(json.dumps({"tier": tier, "profiles": profiles, "pick": profiles[0] if profiles else None}))
+        if not profiles:
+            return EXIT_SETUP_NEEDED
     elif args.command == "machines":
         for name, m in herdr_machines().items():
             print(f"{name:24} {m['target']:32} {'enabled' if m['enabled'] else 'disabled'}")
@@ -595,7 +650,7 @@ def _cli(argv):
         for d in session_plugin_dirs():
             print(d)
     elif args.command == "skills":
-        for ref, path in local_skills(plugin_list(plugin_dirs(load(args.group)))).items():
+        for ref, path in local_skills(plugin_list(plugin_dirs(load(args.project)))).items():
             print(f"{ref:44} {path}")
     return 0
 

@@ -2,14 +2,14 @@
 """Start a coding agent from a herdr-foreman profile.
 
 Usage:
-  python3 launch.py [PROFILE] [--name NAME] [--session-id UUID] [--group OWNER/REPO]
+  python3 launch.py [PROFILE] [--name NAME] [--session-id UUID] [--project OWNER/REPO]
                     [--no-worktree] [--dry-run]
 
 The profile's `agent` kind (default `claude`) picks the adapter that builds
 the command (scripts/adapters/). Run from a bundle (a directory that holds
 `bundle.json` and `config.json` next to `scripts/`), it uses the bundle's
 settings and loads the bundle's skills into the agent. Run from the skill, it
-uses the merged settings (`--group` adds the group's).
+uses the merged settings (`--project` adds the project's).
 
 PROFILE defaults to the settings' launch profile. The script sets the
 gateway's environment for this process only and replaces itself with the
@@ -50,19 +50,19 @@ def main():
     parser.add_argument("profile", nargs="?")
     parser.add_argument("--name", help="session name; also the worktree name")
     parser.add_argument("--session-id", help="session id (a UUID) the foreman chose, so it can find the transcript")
-    parser.add_argument("--group", help="OWNER/REPO whose settings apply (ignored in a bundle)")
+    parser.add_argument("--project", help="OWNER/REPO whose settings apply (ignored in a bundle)")
     parser.add_argument("--no-worktree", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    if args.group and not REPO.match(args.group):
-        fail(2, f"--group must look like owner/name, not {args.group!r}")
+    if args.project and not REPO.match(args.project):
+        fail(2, f"--project must look like owner/name, not {args.project!r}")
 
     bundle, bundle_kind = bundle_root()
     if bundle:
         cfg = read_json(os.path.join(bundle, "config.json"))
         where = os.path.join(bundle, "config.json")
     else:
-        cfg = load(args.group)
+        cfg = load(args.project)
         where = user_path()
     problems = validate_launch(cfg)
     if problems:

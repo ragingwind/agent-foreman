@@ -55,7 +55,7 @@ To try it without installing: `claude --plugin-dir /path/to/herdr-skills/plugins
    Your answers go to `~/.config/herdr-foreman/config.json`.
 2. Set up a project group in the same run: the repository (`owner/name`),
    each machine and its checkout path. It checks each checkout and saves
-   `~/.local/state/herdr-foreman/groups/<owner>-<repo>/group.json`.
+   `~/.local/state/herdr-foreman/projects/<owner>-<repo>/project.json`.
 3. Start the foreman: `claude --agent herdr-foreman`, and tell it the
    repository and the work.
 
@@ -103,7 +103,7 @@ below; delete a key to fall back.
 | `report` | a status table per group |
 | `ops` | check every 10 minutes, least-busy placement, disk check, seven after-merge steps |
 
-`python3 <plugin>/skills/herdr-foreman/scripts/config.py show --group owner/name`
+`python3 <plugin>/skills/herdr-foreman/scripts/config.py show --project owner/name`
 prints the settings in effect; `check` validates them.
 
 ## Security

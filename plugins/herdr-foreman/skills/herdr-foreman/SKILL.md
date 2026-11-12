@@ -45,7 +45,7 @@ Its work is the agents, the ledger and the reports to the person.
 - **`H`**: `herdr` for `local`, `herdr --machine <label>` for any other.
   Pane and tab ids are per machine: always record the machine with them.
 - **Settings**: the standard values, then the person's, then the group's
-  (`config.py show --group <repo>`). This file's procedure is fixed; the
+  (`config.py show --project <repo>`). This file's procedure is fixed; the
   stages, labels, report template and operating values come from the
   settings.
 
@@ -60,12 +60,12 @@ after the conversation is summarized.
    checkout, `gh repo view --json nameWithOwner -q .nameWithOwner`. One
    foreman may run several groups; each keeps its own settings, ledger and
    report.
-2. **Check**: `python3 <skill>/scripts/config.py check --group <repo>`. On a
+2. **Check**: `python3 <skill>/scripts/config.py check --project <repo>`. On a
    non-zero exit, run the herdr-foreman-setup skill for that group, then
    continue.
-3. **Settings**: `config.py show --group <repo>`. Keep `loop`, `labels`,
+3. **Settings**: `config.py show --project <repo>`. Keep `loop`, `labels`,
    `report` and `ops` at hand.
-4. **Ledger**: `config.py paths --group <repo>` gives its path. Create it
+4. **Ledger**: `config.py paths --project <repo>` gives its path. Create it
    from "Ledger" when it does not exist.
 5. **Members**: for each member, `python3 <skill>/scripts/config.py member
    <label> <checkout> --agent <kind>` (the checkout is there and ready for
@@ -74,7 +74,7 @@ after the conversation is summarized.
    workspace is missing, create it (`herdr.md`) and note in the ledger that
    the foreman made it. A member that fails either check, or does not
    answer, is reported to the person and gets no new task until it passes.
-6. **Bundle**: `python3 <skill>/scripts/bundle.py push <label> --group <repo>`
+6. **Bundle**: `python3 <skill>/scripts/bundle.py push <label> --project <repo>`
    for each member. Record each member's `hash`, `path` and `cache`.
 7. **Reconcile** the ledger with live state before acting: each member's
    `H agent list`, kept to the group's workspace id, and
@@ -88,11 +88,15 @@ after the conversation is summarized.
   group's workspace (ties: the first member); `ask` asks the person.
 - **Batch**: `ops.batch` is the most tasks running at once in the group; a
   task counts as finished at `approved`. `null` means no limit.
-- **Profile**: for a loop task, `loop.tier_profiles[<tier>]`; otherwise
-  `launch.profile`. The person may name another. The model that runs is the
-  one the agent's status line shows; record that.
+- **Profile**: from the task's difficulty (low, mid, high) and the agent's
+  role, `python3 <skill>/scripts/config.py tier --difficulty <d> --role <role>`
+  gives the tier and its profiles in order; use the first, and on a usage
+  limit or gateway error the next (`--skip`). Reviewers and retracers take
+  one tier above the lead. A task with no difficulty uses `launch.profile`.
+  The person may name another profile. The model that runs is the one the
+  agent's status line shows; record that.
 - **Skills**: the bundle carries the group's skills. A task that needs
-  more gets `bundle.py push <label> --group <repo> --skills <ref,...>`
+  more gets `bundle.py push <label> --project <repo> --skills <ref,...>`
   first; the output path is that task's bundle. Skills come from the plugins
   Claude Code has here plus the settings' `plugin_dirs`.
 
@@ -134,7 +138,7 @@ everything. Every brief holds:
 - The task: the issue or pull request, the ADRs, what is out of scope, and
   the tier the foreman sets.
 - "Follow `<bundle>/loop.md`." (absolute path)
-- The stage table, as `config.py stages --group <repo> --task <N> --agent <kind>`
+- The stage table, as `config.py stages --project <repo> --task <N> --agent <kind>`
   prints it; skills appear under the names that agent kind calls them by.
 - The `owner-decision` label from the settings, filled in.
 - Any extra skill for this task, named as `bundle.py push` printed it.
