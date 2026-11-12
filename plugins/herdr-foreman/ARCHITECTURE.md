@@ -182,18 +182,25 @@ A stage names its skills. For each, the lead's machine is checked:
 
 ## 8. Gates
 
-Pass conditions are code, not prose.
+Pass conditions are code, not prose (`scripts/gate.py`).
 
-- `gate.py` holds tested checks that read git and GitHub: pull request
-  exists and is ready, CI green, each verdict present at the head SHA, a
-  scenario comment with raw output or a one-line skip reason, `## Tests`,
-  base freshness, `git range-diff` unchanged after a rebase, labels, size
-  limits, forbidden paths, commands that must pass.
-- For each task the foreman writes `gate.json`: which checks, with what
-  values. A one-off script is allowed when no check fits.
-- The lead runs `gate.py gate.json` before it reports ready, and posts the
-  result to the status file and the pull request. The foreman runs the same
-  gate again before it merges.
+- **Checks**, each reading git and GitHub: `pr-open`, `sections` (`## Purpose`,
+  `## Decisions`, `## Tests`), `ci` (every check finished and passed),
+  `base-fresh` (the head contains the base's head), `verdict` (enough comments
+  under a role's fixed title at the head SHA, or at an earlier SHA whose
+  change is the same after a clean rebase, by `git patch-id`), `scenario` (the
+  `## Manual scenario` comment with raw output, or a skip reason under
+  `## Tests` for a trivial change), `tests-weakened` (a removed test file, an
+  added skip or focus marker, an edited CI file, a changed coverage
+  threshold), `size`, `ready`, and `command` (a command that must pass, such as
+  a main-only check). A check can be a warning instead of a block.
+- `gate.py template` writes a task's gate file from its loop: one verdict
+  check per judging stage that runs, with that stage's count. The foreman
+  adds commands or allowances (`tests-weakened` may allow what the issue asks
+  for) and puts the file in the brief.
+- The lead runs `gate.py run <file> --cwd <clone> --before-ready` before it
+  marks the pull request ready, and posts the result. The foreman runs the
+  same gate, `ready` included, before it merges. Exit 6 lists what blocks.
 
 ## 9. Reporting
 

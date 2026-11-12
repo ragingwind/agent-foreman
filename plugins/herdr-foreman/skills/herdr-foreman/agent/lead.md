@@ -50,6 +50,18 @@ count, each for this round only:
 
 How many rounds a loop takes is the foreman's call; report every round.
 
+## Gate
+
+The brief names a gate file. Before you report ready, run it in your clone:
+
+```bash
+python3 <bundle>/scripts/gate.py run <gate file> --cwd <your clone> --before-ready
+```
+
+Exit 0: mark the pull request ready and post the result. Exit 6: fix what it
+lists under `blocked`, then run it again. Do not edit the gate file; a check
+you think is wrong goes in your report.
+
 ## Status file
 
 Append one JSON line to your status file at the start and the end of every

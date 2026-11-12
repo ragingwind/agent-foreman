@@ -4,7 +4,8 @@ they change with a task's difficulty.
 
 Settings shape (`loop` in the settings):
 
-  roles    name -> {"mode": "prompt"|"pane", "step": 0|1, "prompt": key, "deny_tools": [...]}
+  roles    name -> {"mode": "prompt"|"pane", "step": 0|1, "prompt": key, "deny_tools": [...],
+                   "verdict_title": title of its verdict comment, "accept": [passing verdicts]}
   prompts  key -> fixed prompt text a role gets, filled in
   work     the work loop's stages (one issue, one pull request), run by a lead
   manage   the foreman's loop
@@ -64,6 +65,11 @@ def validate_loop(loop):
             problems.append(f"loop: role {name}: step must be 0 or more")
         if "prompt" in role and role["prompt"] not in prompts:
             problems.append(f"loop: role {name}: prompt {role['prompt']!r} does not exist")
+        if "verdict_title" in role and not (isinstance(role["verdict_title"], str) and role["verdict_title"].strip()):
+            problems.append(f"loop: role {name}: verdict_title must be text")
+        accept = role.get("accept", [])
+        if not isinstance(accept, list) or not all(isinstance(x, str) and x for x in accept):
+            problems.append(f"loop: role {name}: accept must be a list of verdicts")
         deny = role.get("deny_tools", [])
         if not isinstance(deny, list) or not all(isinstance(t, str) and t for t in deny):
             problems.append(f"loop: role {name}: deny_tools must be a list of tool names")

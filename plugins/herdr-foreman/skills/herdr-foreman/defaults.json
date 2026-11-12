@@ -123,6 +123,10 @@
           "Edit",
           "Write",
           "NotebookEdit"
+        ],
+        "verdict_title": "Code review",
+        "accept": [
+          "approved"
         ]
       },
       "retracer": {
@@ -133,6 +137,10 @@
           "Edit",
           "Write",
           "NotebookEdit"
+        ],
+        "verdict_title": "Scenario retrace",
+        "accept": [
+          "pass"
         ]
       },
       "helper": {
@@ -218,7 +226,7 @@
       {
         "id": "pull-request",
         "actor": "lead",
-        "does": "Open a draft pull request into the base, or push in a fix round. Body: ## Purpose (what the change is for), ## Decisions (each choice, the alternatives ruled out and why), ## Tests (the commands and their pass counts; for a trivial change, the one-line reason it has no scenario). Keep it small: over 400 changed lines, split it or say why not. Post or update the scenario comment with its raw output.",
+        "does": "Open a draft pull request into the base, or push in a fix round. Body: ## Purpose (what the change is for), ## Decisions (each choice, the alternatives ruled out and why), ## Tests (the commands and their pass counts; for a trivial change, the one-line reason it has no scenario). Keep it small: over 400 changed lines, split it or say why not. Post or update one comment titled `## Manual scenario`: each step with its raw output in code blocks.",
         "skills": [],
         "next": {
           "done": "code-review"
@@ -258,7 +266,7 @@
       {
         "id": "ready",
         "actor": "lead",
-        "does": "Run the gate, mark the pull request ready, update the handoff comment, and report.",
+        "does": "Run the gate in your clone (`gate.py run <gate file> --cwd <clone> --before-ready`) and fix what it blocks; when it passes, mark the pull request ready, update the handoff comment, post the gate result, and report.",
         "skills": [],
         "next": {
           "done": "stop"

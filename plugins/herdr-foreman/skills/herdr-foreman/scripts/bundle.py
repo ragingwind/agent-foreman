@@ -73,7 +73,7 @@ def contents(cfg, skill_dirs, kind=adapters.DEFAULT):
                                   indent=2, sort_keys=True).encode() + b"\n",
         "lead.md": _read(os.path.join(SKILL_DIR, "agent", "lead.md")),
     }
-    for name in ("config.py", "launch.py", "transcript.py", "score.py"):
+    for name in ("config.py", "launch.py", "transcript.py", "score.py", "gate.py"):
         files[f"scripts/{name}"] = _read(os.path.join(HERE, name))
     for rel, data in _tree(os.path.join(HERE, "adapters")).items():
         files[f"scripts/adapters/{rel}"] = data
