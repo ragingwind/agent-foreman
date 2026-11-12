@@ -96,7 +96,8 @@ if mode == "garbage":
     sys.exit(1)
 out = {"type": "result", "subtype": "success", "is_error": False, "session_id": "s-1",
        "total_cost_usd": 0.01, "permission_denials": [],
-       "result": "|".join([prompt, " ".join(sys.argv[1:]), os.environ.get("ANTHROPIC_BASE_URL", "-")])}
+       "result": "|".join([prompt, " ".join(sys.argv[1:]), os.environ.get("ANTHROPIC_BASE_URL", "-")]),
+       "status": [os.environ.get("HF_STATUS_FILE", "-"), os.environ.get("HF_AGENT", "-")]}
 if mode == "error":
     out.update(is_error=True, subtype="error_during_execution", result="rate limited")
 print(json.dumps(out))
@@ -148,6 +149,22 @@ class PromptMode(unittest.TestCase):
             summary = json.loads(r.stdout)
             self.assertFalse(summary["ok"])
             self.assertIn(words, summary["error"])
+
+    def test_status_file_is_handed_over_or_cleared(self):
+        r = self.launch("opus", "--status", "~/runs/o-r/7/status.jsonl", HOME=self.home.root)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.load(open(self.out))["status"],
+                         [os.path.join(self.home.root, "runs", "o-r", "7", "status.jsonl"), "opus"])
+        r = self.launch("opus", HF_STATUS_FILE="/lead/status.jsonl", HF_AGENT="lead")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.load(open(self.out))["status"], ["-", "-"])  # never the starter's file
+
+    def test_status_in_dry_run_names_only(self):
+        r = run("launch.py", "opus", "--name", "t-7", "--status", "/x/status.jsonl", "--dry-run", env=self.env)
+        self.assertIn("HF_STATUS_FILE", r.stdout.split("set:")[1].split("\n")[0])
+        self.assertNotIn("/x/status.jsonl", r.stdout)
+        r = run("launch.py", "opus", "--dry-run", env=self.env)
+        self.assertIn("HF_STATUS_FILE", r.stdout.split("clear:")[1].split("\n")[0])
 
     def test_print_needs_files(self):
         self.assertEqual(run("launch.py", "--print", "--prompt-file", self.prompt, env=self.env).returncode, 2)

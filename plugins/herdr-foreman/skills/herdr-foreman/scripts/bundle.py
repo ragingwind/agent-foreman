@@ -40,6 +40,8 @@ REMOTE_CACHE = "~/.cache/herdr-foreman"
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv"}
 SKIP_FILES = {".DS_Store"}
 SSH = ["ssh", "-o", "BatchMode=yes"]
+# The scripts an agent runs, and every module they import (config imports loop).
+BUNDLED = ("config.py", "loop.py", "launch.py", "transcript.py", "score.py", "gate.py", "status.py", "heartbeat.py")
 
 
 def fail(code, message):
@@ -73,7 +75,7 @@ def contents(cfg, skill_dirs, kind=adapters.DEFAULT):
                                   indent=2, sort_keys=True).encode() + b"\n",
         "lead.md": _read(os.path.join(SKILL_DIR, "agent", "lead.md")),
     }
-    for name in ("config.py", "launch.py", "transcript.py", "score.py", "gate.py"):
+    for name in BUNDLED:
         files[f"scripts/{name}"] = _read(os.path.join(HERE, name))
     for rel, data in _tree(os.path.join(HERE, "adapters")).items():
         files[f"scripts/adapters/{rel}"] = data

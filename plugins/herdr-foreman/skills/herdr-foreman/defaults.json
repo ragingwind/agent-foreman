@@ -420,6 +420,8 @@
   },
   "ops": {
     "check_minutes": 10,
+    "report_minutes": 15,
+    "stall_minutes": 30,
     "backoff": {
       "first_hours": 1,
       "factor": 2

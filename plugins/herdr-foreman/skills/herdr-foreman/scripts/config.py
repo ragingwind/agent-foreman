@@ -368,8 +368,12 @@ def validate(cfg, saved=None, skills=None, project=False):
             problems.append(f"report: {key} must be text")
 
     ops = cfg.get("ops", {})
-    if not isinstance(ops.get("check_minutes"), int) or ops["check_minutes"] <= 0:
-        problems.append("ops: check_minutes must be a positive whole number")
+    for key in ("check_minutes", "report_minutes", "stall_minutes"):
+        if not isinstance(ops.get(key), int) or isinstance(ops[key], bool) or ops[key] <= 0:
+            problems.append(f"ops: {key} must be a positive whole number")
+    if (isinstance(ops.get("report_minutes"), int) and isinstance(ops.get("stall_minutes"), int)
+            and ops["stall_minutes"] <= ops["report_minutes"]):
+        problems.append("ops: stall_minutes must be more than report_minutes, or every report interval is a stall")
     backoff = ops.get("backoff", {})
     if not isinstance(backoff.get("first_hours"), (int, float)) or backoff["first_hours"] <= 0:
         problems.append("ops: backoff.first_hours must be a positive number")

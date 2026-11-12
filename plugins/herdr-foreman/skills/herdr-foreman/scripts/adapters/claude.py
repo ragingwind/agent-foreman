@@ -10,6 +10,7 @@ HERDR_KIND = "claude"
 EXECUTABLE = "claude"
 PLUGIN = "foreman-kit"
 ROLES = ["opus", "sonnet", "haiku"]
+HEARTBEAT = 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/heartbeat.py"'
 
 # Variables a gateway may set. They are cleared first, so a value inherited
 # from the parent shell never leaks into another gateway's agent.
@@ -97,12 +98,18 @@ def skill_name(ref):
 
 
 def bundle_layout(skills):
-    """A Claude Code plugin that holds the skills; `--plugin-dir` loads it."""
+    """A Claude Code plugin that holds the skills and the heartbeat hooks;
+    `--plugin-dir` loads it. The hooks run the bundle's scripts/heartbeat.py,
+    which writes only when launch.py --status set HF_STATUS_FILE."""
     files = {".claude-plugin/plugin.json": json.dumps({
         "name": PLUGIN,
         "version": "1.0.0",
         "description": "Skills and scripts herdr-foreman gives its agents",
     }, indent=2).encode() + b"\n"}
+    files["hooks/hooks.json"] = json.dumps({"hooks": {
+        "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": HEARTBEAT + " post"}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": HEARTBEAT + " stop"}]}],
+    }}, indent=2).encode() + b"\n"
     for short, contents in skills.items():
         for rel, data in contents.items():
             files[f"skills/{short}/{rel}"] = data

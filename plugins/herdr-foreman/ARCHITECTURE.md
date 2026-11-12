@@ -205,15 +205,23 @@ Pass conditions are code, not prose (`scripts/gate.py`).
 ## 9. Reporting
 
 - **Status file**, on the agent's machine:
-  `~/.cache/herdr-foreman/runs/<project>/<task>/status.jsonl`.
-  - A hook in the bundle appends a heartbeat on every tool call and every
-    turn end (time, tool, stage).
-  - The lead appends a line at the start and end of every stage: what was
-    done, what is next, what blocks it, each sub-agent run with its verdict
-    and cost.
-- **The foreman** reads the last lines on every check (one SSH call per
-  machine). No new line for 30 minutes (twice the 15-minute interval) is a
-  stall.
+  `~/.cache/herdr-foreman/runs/<project>/<task>/status.jsonl`
+  (`status.py path`). `launch.py --status` hands it to an agent as
+  `HF_STATUS_FILE`; without `--status` the variable is cleared, so an agent
+  never writes into its starter's file.
+  - The bundle's hooks (claude: `PostToolUse` and `Stop`) run
+    `heartbeat.py`: a `heartbeat` line at most once a minute while tools run,
+    and a `turn-end` line at every turn's end (time, agent, tool). The lead
+    starts its role agents with its own status file, so a long review shows
+    as heartbeats too. Checked 2026-11-13: plugin hooks fire in `claude -p`,
+    `${CLAUDE_PLUGIN_ROOT}` resolves, and the variable reaches the hook.
+  - The lead appends a stage line (`status.py note`) at the start and end of
+    every stage, at least every `ops.report_minutes` (15) during a long
+    one, and a `stop` line at a stop point: what was done, what is next,
+    what blocks it, each sub-agent run with its verdict and cost.
+- **The foreman** runs `status.py read` on every check (one SSH call per
+  machine). No line for `ops.stall_minutes` (30) is a stall, unless the last
+  stage line is a `stop`.
 - **`REPORT:`** at the end of a turn only at stop points: ready, a decision
   for the person, blocked.
 - **Prompt-mode runs** leave their JSON result (`result`, `session_id`,
@@ -235,8 +243,9 @@ Pass conditions are code, not prose (`scripts/gate.py`).
 ## 11. Records
 
 - **Log**: `~/.local/state/herdr-foreman/projects/<owner>-<repo>/log.jsonl`,
-  append only: every event, instruction sent, report received, decision of
-  the person, sub-agent run, difficulty and outcome. No secret values.
+  append only (`log.py add`, `log.py tail`): every event, instruction sent,
+  report received, decision of the person, sub-agent run, difficulty and
+  outcome. No secret values.
 - **Ledger**: `ledger.md` in the same folder, the summary a new foreman reads
   to take over.
 

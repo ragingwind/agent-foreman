@@ -224,6 +224,9 @@ def render(cfg, task, difficulty, trivial, resolved, profiles, call_name):
     loop = cfg["loop"]
     stages = plan(loop, difficulty, trivial)
     lines = [f"# Loop for {task} (difficulty {difficulty}{', trivial' if trivial else ''})", ""]
+    ops = cfg["ops"]
+    lines += [f"**Status**: a line at the start and end of every stage and at least every "
+              f"{ops['report_minutes']} minutes; {ops['stall_minutes']} minutes without a line counts as a stall.", ""]
     missing = sorted({v for src, v in resolved.values() if src == "missing"})
     if missing:
         lines += ["**Missing skills** (go on without them and say so in your report):", ""]

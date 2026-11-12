@@ -3,11 +3,18 @@
 
 Usage:
   python3 launch.py [PROFILE] [--name NAME] [--session-id UUID] [--project OWNER/REPO]
-                    [--no-worktree] [--dry-run]
-  python3 launch.py [PROFILE] --print --prompt-file FILE --out FILE [--session-id UUID] [--dry-run]
+                    [--no-worktree] [--status FILE] [--disallow TOOL,...] [--dry-run]
+  python3 launch.py [PROFILE] --print --prompt-file FILE --out FILE [--session-id UUID]
+                    [--status FILE] [--disallow TOOL,...] [--dry-run]
 
 --disallow TOOL,... removes tools from the agent (a reviewer gets no edit
 tools). It narrows what the agent can do; it is not a sandbox.
+
+--status FILE gives the agent its task's status file (`status.py path`): it
+sets HF_STATUS_FILE, with `~` expanded on this machine, and HF_AGENT (the
+--name, or the profile). The bundle's hooks then append heartbeats there, and
+`status.py note` writes there. Without --status both variables are cleared,
+so an agent never writes into the status file of the agent that started it.
 
 The profile's `agent` kind (default `claude`) picks the adapter that builds
 the command (scripts/adapters/). Run from a bundle (a directory that holds
@@ -43,6 +50,7 @@ from config import (EXIT_AGENT_ERROR, EXIT_SETUP_NEEDED, EXIT_TOKEN_MISSING, REP
                     validate_launch)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STATUS_VARS = ("HF_STATUS_FILE", "HF_AGENT")
 
 
 def fail(code, message):
@@ -70,6 +78,7 @@ def main():
     parser.add_argument("--prompt-file", help="with --print: the prompt")
     parser.add_argument("--out", help="with --print: where the agent's JSON result goes")
     parser.add_argument("--disallow", default="", metavar="TOOL,...", help="tools the agent may not use")
+    parser.add_argument("--status", metavar="FILE", help="the task's status file, for heartbeats and stage notes")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.print_mode and not (args.prompt_file and args.out):
@@ -105,6 +114,10 @@ def main():
                                            disallowed=[t.strip() for t in args.disallow.split(",") if t.strip()])
     except adapters.TokenMissing as e:
         fail(EXIT_TOKEN_MISSING, f"token variable {e.variable} is not set in this environment")
+    if args.status:
+        env.update(HF_STATUS_FILE=os.path.abspath(os.path.expanduser(args.status)), HF_AGENT=args.name or profile_name)
+    else:
+        clear = set(clear) | set(STATUS_VARS)
 
     if args.dry_run:
         print(f"profile: {profile_name}")

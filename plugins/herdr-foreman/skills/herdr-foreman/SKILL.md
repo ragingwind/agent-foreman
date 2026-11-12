@@ -30,6 +30,9 @@ Its work is the agents, the ledger and the reports to the person.
 | `scripts/gate.py` | Pass conditions as code: `template` writes a task's gate file, `run` checks it (the lead before ready, the foreman before merge) |
 | `scripts/score.py` | A task's difficulty: `estimate` from an issue, `diff` from a change (only goes up); the foreman adds judgment |
 | `scripts/remote.py` | Runs a command on a project machine inside its login shell, where `PATH` and token variables are set |
+| `scripts/status.py` | Status files: `path` for a task, `note` (the lead's stage lines), `read` (every task on the project's machines: last stage, last heartbeat, minutes since, stalled) |
+| `scripts/heartbeat.py` | The bundle's hook command: appends heartbeats to the status file launch.py `--status` gave the agent |
+| `scripts/log.py` | The project's log: `add` an event, `tail` the last ones |
 | `defaults.json` | The standard settings |
 | `terminals/herdr.md`, `terminals/prompt.md` | The terminal layer: how to open, start, send to, read, wait on and close an agent, with herdr panes or in prompt mode; the same for every agent kind |
 | `adapters/<kind>.md`, `scripts/adapters/` | What differs per agent kind: start errors, input line, exit, command, skill names, transcript. Only `claude` today |
@@ -117,8 +120,9 @@ agent renames the tab at each stage with the label the settings give.
 
 1. Open the task's tab on the chosen member.
 2. Make a session id with `uuidgen | tr A-Z a-z`.
-3. Run `python3 <bundle>/scripts/launch.py <profile> --name <name> --session-id <id>`
-   in the tab's pane.
+3. Run `python3 <bundle>/scripts/launch.py <profile> --name <name> --session-id <id>
+   --status <path>` in the tab's pane, with the path `status.py path --project
+   <repo> --task <task>` prints.
 4. Wait until the agent is idle, then rename it to `<name>`. The rename
    succeeding is the proof the agent runs.
 5. Send the brief.
@@ -173,9 +177,11 @@ everything. Every brief holds:
   `H agent wait <pane> --timeout 3600000` in the background.
 - When a wait returns, handle the event below, then update the ledger.
 - Every `ops.check_minutes` minutes (a recurring `CronCreate`), check each
-  group: each member's `H agent list` and `H tab list --workspace <id>`, the
-  ledger, and `gh` for the pull requests. Find stalled and exited agents
-  and tab labels that do not match the stage.
+  group: `status.py read --project <repo>`, each member's `H agent list` and
+  `H tab list --workspace <id>`, the ledger, and `gh` for the pull requests.
+  Find stalled and exited agents and tab labels that do not match the stage.
+- Log every event, message sent, report received and decision of the person
+  with `log.py add --project <repo> --event <event> --task <task> --text "<one line>"`.
 - The report's Stage column takes the real stage from the screen and the
   pull request, not the label.
 
@@ -189,7 +195,7 @@ everything. Every brief holds:
 | blocked | a wait returns `blocked` | Reads the screen. A permission prompt goes to the person with the agent and the command. A question dialog is closed only when the person already answered it, and the answer is sent as a message. Renames the tab with the `blocked` label and puts the stage label back when it clears |
 | owner-decision | `REPORT: owner-decision` | Adds it to "Waiting on the person" |
 | approved | `REPORT: approved` | Marks the row; starts the next task when `ops.batch` allows |
-| stalled | the check finds an agent idle outside a stop point with no report | Moves it on: a plan or a review round waiting for a yes, a "shall I proceed?" the brief covers |
+| stalled | `status.py read` marks the task `stalled` (no line for `ops.stall_minutes` outside a stop point), or the check finds an agent idle outside a stop point with no report | Moves it on: a plan or a review round waiting for a yes, a "shall I proceed?" the brief covers |
 | exited | the agent is gone from `H agent list` while its row is active | Renames the tab with the `exited` label and tells the person |
 | merged | `gh` shows the pull request merged | Runs `ops.after_merge` in order |
 | all-approved | every task is at a stop point and no agent works | See below |

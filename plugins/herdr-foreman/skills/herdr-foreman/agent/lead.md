@@ -7,7 +7,7 @@ brief holds:
 - the task, its difficulty and base, and your clone (work only there);
 - the loop for this task: a table of stages, the roles with their profiles in
   order, and each role's fixed prompt;
-- the gate file and your status file.
+- the gate file. Your status file is `$HF_STATUS_FILE`, which launch.py set.
 
 The brief confirms the whole loop: do not stop between stages to ask whether
 to go on.
@@ -36,11 +36,16 @@ count, each for this round only:
    the table's last column says (a reviewer gets no edit tools):
    - mode `prompt`, from inside its clone:
      `python3 <bundle>/scripts/launch.py <profile> --print --prompt-file <prompt>
-     --out <run dir>/<role>-<n>.json --session-id <uuid> [--disallow <tools>]`
+     --out <run dir>/<role>-<n>.json --session-id <uuid> --status "$HF_STATUS_FILE"
+     [--disallow <tools>]`
    - mode `pane`: `herdr pane split "$HERDR_PANE_ID" --direction right --cwd
-     <its clone> --no-focus`, run `launch.py <profile> --name <task>-<role>-<n>`
-     in the new pane, then `herdr agent prompt <pane> "Read <prompt> and do
-     what it says." --wait`. Close the pane when it has answered.
+     <its clone> --no-focus`, run `launch.py <profile> --name <task>-<role>-<n>
+     --status <your status file>` in the new pane, then `herdr agent prompt
+     <pane> "Read <prompt> and do what it says." --wait`. Close the pane when
+     it has answered.
+
+   `--status` lets its hooks add heartbeats to your status file, so the
+   foreman sees the task alive while you wait on it.
 4. Exit code 5 (a usage limit or a gateway error): start it again with the
    next profile in the table's Fallback column.
 5. Its verdict is the last `Verdict:` line of its answer. Check that its
@@ -64,17 +69,19 @@ you think is wrong goes in your report.
 
 ## Status file
 
-Append one JSON line to your status file at the start and the end of every
-stage, and at least every 15 minutes during a long stage:
+Your hooks add heartbeats to `$HF_STATUS_FILE` on their own. You add a stage
+line at the start and the end of every stage, during a long stage as often
+as the loop's **Status** line says, and a `stop` line at a stop point:
 
-```json
-{"time": "<UTC>", "stage": "<id>", "event": "start|end|progress", "round": 1,
- "done": "<one line>", "next": "<one line>", "blocked": "<what, or empty>",
- "runs": [{"role": "<role>", "profile": "<profile>", "verdict": "<verdict>", "cost": 0.0, "out": "<file>"}]}
+```bash
+python3 <bundle>/scripts/status.py note --stage <id> --event start|end|progress|stop \
+  [--round <N>] --done "<one line>" --next "<one line>" [--blocked "<what>"] \
+  [--runs '[{"role": "<role>", "profile": "<profile>", "verdict": "<verdict>", "cost": 0.0, "out": "<file>"}]']
 ```
 
-The foreman reads it on every check. A missing line for 30 minutes counts as
-a stall.
+The foreman reads the file on every check. No line for as long as the
+**Status** line says counts as a stall, unless your last stage line is a
+`stop`.
 
 ## Stop points
 
@@ -95,7 +102,8 @@ option you would recommend, and record it in the pull request's
 
 ## Report
 
-At a stop point, end your turn with one line:
+At a stop point, write the `stop` status line with the report in `--done`,
+then end your turn with one line:
 
 ```
 REPORT: <ready | decision | blocked> — <one line: the pull request, the verdicts and rounds, or what you need>

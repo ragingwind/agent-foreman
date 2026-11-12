@@ -62,7 +62,7 @@ class Claude(unittest.TestCase):
     def test_skill_name_and_layout(self):
         self.assertEqual(claude.skill_name("local-skills:deep-clean-code"), "foreman-kit:deep-clean-code")
         files = claude.bundle_layout({"tidy": {"SKILL.md": b"x", "scripts/run.py": b"y"}})
-        self.assertEqual(sorted(files), [".claude-plugin/plugin.json", "skills/tidy/SKILL.md",
+        self.assertEqual(sorted(files), [".claude-plugin/plugin.json", "hooks/hooks.json", "skills/tidy/SKILL.md",
                                          "skills/tidy/scripts/run.py"])
         self.assertEqual(json.loads(files[".claude-plugin/plugin.json"])["name"], "foreman-kit")
 

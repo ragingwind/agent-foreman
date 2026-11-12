@@ -1,10 +1,11 @@
 import io
+import json
 import os
 import unittest
 import zipfile
 from unittest import mock
 
-from helpers import TempHome
+from helpers import TempHome, run
 
 import bundle
 import config
@@ -39,6 +40,24 @@ class Bundle(unittest.TestCase):
         self.home.write("skills/tidy/SKILL.md", "---\nname: tidy\n---\nTidy more.")
         h3, _, _, _ = bundle.build("o/r", [])
         self.assertNotEqual(h1, h3)
+
+    def test_every_script_starts_from_the_bundle(self):
+        h, files, _, _ = bundle.build("o/r", [])
+        path, _ = bundle.write_local(h, files)
+        for name in bundle.BUNDLED:
+            if name == "heartbeat.py":
+                continue  # a hook command with no --help; test_status runs it
+            r = run(name, "--help", cwd=os.path.join(path, "scripts"))
+            self.assertEqual(r.returncode, 0, f"{name}: {r.stderr[-300:]}")
+
+    def test_heartbeat_hooks_point_at_the_bundled_script(self):
+        _, files, _, _ = bundle.build("o/r", [])
+        hooks = json.loads(files["hooks/hooks.json"])["hooks"]
+        commands = [h["command"] for event in ("PostToolUse", "Stop") for group in hooks[event] for h in group["hooks"]]
+        self.assertEqual(commands, ['python3 "${CLAUDE_PLUGIN_ROOT}/scripts/heartbeat.py" post',
+                                    'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/heartbeat.py" stop'])
+        self.assertIn("scripts/heartbeat.py", files)
+        self.assertIn(".claude-plugin/plugin.json", files)  # the bundle root is the plugin root
 
     def test_settings_change_makes_new_hash(self):
         h1, _, _, _ = bundle.build("o/r", [])
