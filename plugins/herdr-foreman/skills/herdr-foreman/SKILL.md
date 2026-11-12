@@ -31,7 +31,8 @@ Its work is the agents, the ledger and the reports to the person.
 | `defaults.json` | The standard settings |
 | `terminals/herdr.md`, `terminals/prompt.md` | The terminal layer: how to open, start, send to, read, wait on and close an agent, with herdr panes or in prompt mode; the same for every agent kind |
 | `adapters/<kind>.md`, `scripts/adapters/` | What differs per agent kind: start errors, input line, exit, command, skill names, transcript. Only `claude` today |
-| `agent/loop.md` | The agents' loop; every bundle carries it as `loop.md` |
+| `agent/lead.md` | The lead's guide; every bundle carries it as `lead.md` |
+| `scripts/loop.py` | Loops: `show` the stages, `skills` (where each stage skill comes from on a machine), `render` one task's loop for its brief |
 
 ## Words
 
@@ -138,8 +139,8 @@ everything. Every brief holds:
 
 - The task: the issue or pull request, the ADRs, what is out of scope, and
   the tier the foreman sets.
-- "Follow `<bundle>/loop.md`." (absolute path)
-- The stage table, as `config.py stages --project <repo> --task <N> --agent <kind>`
+- "Follow `<bundle>/lead.md`." (absolute path)
+- The task's loop, as `loop.py render --project <repo> --task <N> --difficulty <d> --machine <label> [--trivial]`
   prints it; skills appear under the names that agent kind calls them by.
 - The `owner-decision` label from the settings, filled in.
 - Any extra skill for this task, named as `bundle.py push` printed it.

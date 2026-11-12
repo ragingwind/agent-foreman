@@ -48,7 +48,7 @@ def gateway_env(gateway, profile, environ):
 
 
 def command(cfg, profile_name, name=None, session_id=None, worktree=True, bundle=None, environ=None,
-            print_mode=False):
+            print_mode=False, disallowed=()):
     """Return (argv, variables to set, variable names to clear). In print mode
     the agent answers one prompt read from stdin and prints JSON (`claude -p`);
     it runs where it is started, never in a worktree of its own."""
@@ -72,6 +72,8 @@ def command(cfg, profile_name, name=None, session_id=None, worktree=True, bundle
         argv.append("--dangerously-skip-permissions")
     if bundle:
         argv += ["--plugin-dir", bundle]
+    if disallowed:
+        argv += ["--disallowedTools", ",".join(disallowed)]
     return argv, env, clear
 
 

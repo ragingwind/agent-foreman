@@ -57,6 +57,12 @@ class Launch(unittest.TestCase):
         self.assertEqual(r.returncode, 3)
         self.assertIn("agent 'nope' is not supported", r.stderr)
 
+    def test_disallowed_tools(self):
+        r = run("launch.py", "opus", "--no-worktree", "--disallow", "Edit, Write,NotebookEdit", "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("--disallowedTools Edit,Write,NotebookEdit", r.stdout)
+        self.assertNotIn("--disallowedTools", run("launch.py", "opus", "--dry-run").stdout)
+
     def test_unknown_profile_is_setup(self):
         self.assertEqual(run("launch.py", "nope", "--dry-run").returncode, 3)
 

@@ -75,12 +75,11 @@ class Problems(unittest.TestCase):
         for word in ("check_minutes", "batch", "placement", "disk_check", "first_hours", "factor"):
             self.assertTrue(any(word in x for x in p), word)
 
-    def test_stage_problems(self):
-        stages = [{"name": "a", "method": "x", "skills": []}, {"name": "a", "method": "", "skills": "s"}]
-        p = self.problems({"loop": {"stages": stages}})
-        self.assertIn("loop: stage a appears twice", p)
-        self.assertIn("loop: stage a has no method", p)
-        self.assertIn("loop: stage a: skills must be a list", p)
+    def test_loop_problems_are_reported(self):
+        self.assertIn("loop: work must be a list of stages", self.problems({"loop": {"work": "x"}}))
+        p = self.problems({"labels": {"events": {"refactor": "{task} tidy", "nap": "{task}"}}})
+        self.assertFalse(any("'refactor'" in x for x in p))  # a stage id of the work loop takes a label
+        self.assertTrue(any("'nap'" in x for x in p))
 
     def test_unknown_skill_and_shared_short_name(self):
         over = {"bundle": {"skills": ["p:clean", "clean", "p:gone"]}}
@@ -106,6 +105,38 @@ class Problems(unittest.TestCase):
         self.assertTrue(any("machines must name" in x for x in self.problems({"repo": "o/r"}, project=True)))
 
 
+class MergeById(unittest.TestCase):
+    BASE = {"loop": {"work": [{"id": "a", "does": "x", "skills": []}, {"id": "b", "does": "y", "skills": []},
+                              {"id": "c", "does": "z", "skills": []}]}}
+
+    def test_one_changed_stage_stores_only_that_stage(self):
+        full = config.merge(self.BASE, {"loop": {"work": [{"id": "b", "skills": ["tidy"]}]}})
+        self.assertEqual([s["id"] for s in full["loop"]["work"]], ["a", "b", "c"])
+        self.assertEqual(full["loop"]["work"][1], {"id": "b", "does": "y", "skills": ["tidy"]})
+        self.assertEqual(config.diff(self.BASE, full), {"loop": {"work": [{"id": "b", "skills": ["tidy"]}]}})
+
+    def test_add_after_remove_and_round_trip(self):
+        full = config.merge(self.BASE, {"loop": {"work": [{"id": "c", "remove": True},
+                                                          {"id": "n", "does": "new", "skills": [], "after": "a"},
+                                                          {"id": "f", "does": "first", "skills": [], "after": None}]}})
+        self.assertEqual([s["id"] for s in full["loop"]["work"]], ["f", "a", "n", "b"])
+        d = config.diff(self.BASE, full)
+        self.assertEqual(config.merge(self.BASE, d), full)
+        self.assertIn({"id": "c", "remove": True}, d["loop"]["work"])
+
+    def test_standard_unchanged_after_saving_one_stage(self):
+        home = TempHome()
+        try:
+            full = config.load()
+            full["loop"]["work"][3]["skills"] = ["deep-clean-code"]
+            _, written, problems = config.save("user", full, saved={}, skills={})
+            self.assertEqual(problems, [])
+            self.assertEqual(written, {"loop": {"work": [{"id": "refactor", "skills": ["deep-clean-code"]}]}})
+            self.assertEqual(config.load()["loop"]["work"][3]["does"], config.standard()["loop"]["work"][3]["does"])
+        finally:
+            home.close()
+
+
 class Tiers(unittest.TestCase):
     def setUp(self):
         self.home = TempHome()
@@ -120,9 +151,9 @@ class Tiers(unittest.TestCase):
 
     def test_role_tier(self):
         self.assertEqual(config.role_tier("low"), "low")
-        self.assertEqual(config.role_tier("low", "reviewer"), "mid")
+        self.assertEqual(config.role_tier("low", "code-reviewer"), "mid")
         self.assertEqual(config.role_tier("mid", "retracer"), "high")
-        self.assertEqual(config.role_tier("high", "reviewer"), "high")
+        self.assertEqual(config.role_tier("high", "code-reviewer"), "high")
         self.assertEqual(config.role_tier("mid", "tester"), "mid")
         with self.assertRaises(ValueError):
             config.role_tier("huge")
@@ -140,9 +171,9 @@ class Tiers(unittest.TestCase):
         self.assertIn("tiers: high names profile 'ghost', which does not exist", p)
 
     def test_tier_cli(self):
-        r = run("config.py", "tier", "--difficulty", "mid", "--role", "reviewer")
+        r = run("config.py", "tier", "--difficulty", "mid", "--role", "code-reviewer")
         self.assertEqual(json.loads(r.stdout), {"tier": "high", "profiles": ["opus"], "pick": "opus"})
-        r = run("config.py", "tier", "--difficulty", "mid", "--role", "reviewer", "--skip", "opus")
+        r = run("config.py", "tier", "--difficulty", "mid", "--role", "code-reviewer", "--skip", "opus")
         self.assertEqual(r.returncode, 3)
         self.assertEqual(run("config.py", "tier").returncode, 2)
 
@@ -240,7 +271,7 @@ class Skills(unittest.TestCase):
 
     def test_project_skills_order_without_repeats(self):
         cfg = config.merge(config.load(), {"bundle": {"skills": ["a"]}})
-        cfg["loop"]["stages"][2]["skills"] = ["b", "a"]
+        cfg["loop"]["work"][3]["skills"] = ["b", "a"]
         self.assertEqual(config.project_skills(cfg, ["c", "b"]), ["a", "b", "c"])
 
 
@@ -255,12 +286,6 @@ class Labels(unittest.TestCase):
     def test_default_and_event_labels(self):
         self.assertEqual(config.label(self.cfg, "review", task="634", stage="review 2"), "634 review 2")
         self.assertEqual(config.label(self.cfg, "blocked", task="634"), "634 blocked")
-
-    def test_stage_table(self):
-        self.cfg["loop"]["stages"][2]["skills"] = ["local-skills:deep-clean-code"]
-        table = config.stages_markdown(self.cfg, "634")
-        self.assertIn("| clean | `634 clean` | foreman-kit:deep-clean-code |", table)
-        self.assertIn("`634 review <N>`", table)
 
 
 class Cli(unittest.TestCase):

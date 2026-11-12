@@ -6,6 +6,9 @@ Usage:
                     [--no-worktree] [--dry-run]
   python3 launch.py [PROFILE] --print --prompt-file FILE --out FILE [--session-id UUID] [--dry-run]
 
+--disallow TOOL,... removes tools from the agent (a reviewer gets no edit
+tools). It narrows what the agent can do; it is not a sandbox.
+
 The profile's `agent` kind (default `claude`) picks the adapter that builds
 the command (scripts/adapters/). Run from a bundle (a directory that holds
 `bundle.json` and `config.json` next to `scripts/`), it uses the bundle's
@@ -66,6 +69,7 @@ def main():
                         help="answer one prompt and exit (prompt mode)")
     parser.add_argument("--prompt-file", help="with --print: the prompt")
     parser.add_argument("--out", help="with --print: where the agent's JSON result goes")
+    parser.add_argument("--disallow", default="", metavar="TOOL,...", help="tools the agent may not use")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.print_mode and not (args.prompt_file and args.out):
@@ -97,7 +101,8 @@ def main():
     try:
         argv, env, clear = adapter.command(cfg, profile_name, name=args.name, session_id=args.session_id,
                                            worktree=cfg["launch"]["worktree"] and not args.no_worktree,
-                                           bundle=bundle, print_mode=args.print_mode)
+                                           bundle=bundle, print_mode=args.print_mode,
+                                           disallowed=[t.strip() for t in args.disallow.split(",") if t.strip()])
     except adapters.TokenMissing as e:
         fail(EXIT_TOKEN_MISSING, f"token variable {e.variable} is not set in this environment")
 

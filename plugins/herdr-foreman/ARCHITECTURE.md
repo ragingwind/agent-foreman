@@ -88,10 +88,10 @@ The foreman sets each task's difficulty from a score and its own judgment.
   path on the project's critical list; 2 user-visible behavior, a public API
   or a shared library; 1 other runtime code; 0 docs or tests only.
 - **Level** = I when L is 0 or 1, else I + 1 (at most 3).
-- **Difficulty**: low = level 0, mid = level 1, high = level 2-3. Level 3
-  also needs the person's approval before merge.
+- **Difficulty**: low = level 0, mid = level 1, high = level 2-3. The person
+  merges every high-difficulty pull request.
 - `score.py` computes L and the path part of I from the issue and, later, the
-  diff. The foreman adds what code cannot see (is it user-visible?) and
+  diff. The foreman adds what code cannot see (does a user or caller observe it?) and
   decides. After the diff exists the score is taken again and the difficulty
   only ever goes up.
 
@@ -109,36 +109,55 @@ them.
 
 **Work loop: one issue, one pull request** (standard)
 
-| # | Stage | Actor | Does | Next | Skills and tools |
-| --- | --- | --- | --- | --- | --- |
-| 1 | Start | Lead | Labels, branch, handoff comment | 2 | project branch and label skills |
-| 2 | Implement | Lead | Code and new tests; in a fix round, the findings | 3 | `CLAUDE.md`, rules |
-| 3 | Test 1 | Lead | New tests fail before the change and pass after; related tests | 4 | project test command |
-| 4 | Clean | Lead | Clean this round's diff | 5 | a clean-code skill |
-| 5 | Test 2 | Lead | Refresh the base, full tests, manual scenario and screens; in a fix round only what the fix touches | 6 | scenario skill |
-| 6 | PR | Lead | Draft pull request; push in fix rounds; post and update the scenario comment | 7 | commit and PR skills |
-| 7 | Code review | Code reviewer | Verdict on the diff (since the last review in a fix round), rules, breaking it, CI, the scenario or its skip reason | changes → 2, approved → 8 | fixed reviewer prompt |
-| 8 | Scenario retrace | Retracer | Without the diff: the issue's criteria against the scenario, then the scenario in a fresh clone | code → 2, scenario or missing criterion → 5, pass → 9 | fixed retrace prompt, scenario skill |
-| 9 | Ready and report | Lead | Run the gate, `gh pr ready`, handoff comment, report | stop | gate |
+| # | Stage | Actor | Does | Next |
+| --- | --- | --- | --- | --- |
+| 1 | `start` | Lead | Labels, branch, handoff comment with the completion criteria restated; unless the change is trivial, the scenario drafted as the target | 2 |
+| 2 | `implement` | Lead | The failing check first, then the change; in a fix round, the findings | 3 |
+| 3 | `test` | Lead | New tests fail without the change and pass with it; related tests | 4 |
+| 4 | `refactor` | Lead | Restructure this round's diff without changing behavior | 5 |
+| 5 | `regression` | Lead | Rebase onto the current base (preparation), then the full suite on the result | 6 |
+| 6 | `scenario` | Lead | The manual scenario end to end through the surface the change reaches (API, CLI, UI, job), with raw output and screens for a UI; every change that is not trivial | 7 |
+| 7 | `pull-request` | Lead | Draft pull request: purpose, decisions with the alternatives ruled out, tests | 8 |
+| 8 | `code-review` | Code reviewer | Verdict on the diff, the test changes first, the rules, CI, the scenario or its skip reason | changes → 2, approved → 9 |
+| 9 | `scenario-retrace` | Retracer | Without the diff: the issue's criteria against the scenario, then the scenario in a fresh clone | code → 2, scenario → 6, pass → 10 |
+| 10 | `ready` | Lead | Run the gate, `gh pr ready`, handoff comment, report | stop |
+
+A **scenario** drives the change end to end through whatever surface it
+reaches, as a user or caller would: an API, a CLI, a UI, a job. Only a
+trivial change skips it (docs or text only, a typo, a rename that changes no
+behavior), with a one-line reason under `## Tests`; the foreman marks a task
+trivial in its brief.
 
 Verdict comments have fixed titles with the SHA they judged:
 `## Code review of #<PR> at <sha>` and `## Scenario retrace of #<PR> at <sha>`.
 
 **Variants by difficulty** (standard; `setup-loop` changes them)
 
-| Difficulty | Lead tier | Review | Retrace | Extra |
-| --- | --- | --- | --- | --- |
-| low | low | one reviewer | skipped | — |
-| mid | mid | one reviewer | when the change is user-visible | — |
-| high | high | two reviewers | yes | main-only checks run at the PR stage when the change reaches them; level 3 needs the person's approval |
+| Difficulty | Lead tier | Review | Scenario and retrace | Extra | Merge |
+| --- | --- | --- | --- | --- | --- |
+| low | low | one reviewer | scenario unless trivial; no retrace | — | foreman |
+| mid | mid | one reviewer | both unless trivial | — | foreman |
+| high | high | two reviewers on different models | both unless trivial | main-only checks at `regression` when the change reaches them | the person |
 
-How many rounds a loop may take is the foreman's call, from the round count
-in the status file.
+- Reviewers on different models: the second takes the next profile of the
+  tier, or of a lower tier, so their blind spots differ (Addy Osmani, "Agentic
+  Code Review": of 617 flagged locations, 93.4% were caught by exactly one of
+  four tools).
+- Reviewers and retracers start without edit tools (`--disallow
+  Edit,Write,NotebookEdit`). That narrows them; it is not a sandbox. Their own
+  clone, whose remote is the lead's clone, and the gate's check that each
+  verdict is at the head SHA, keep their writes from reaching the pull
+  request. A role agent never starts other agents.
+- How many rounds a loop may take is the foreman's call, from the round
+  count in the status file.
 
 **Management loop** (foreman): register issues at the smallest unit → brief
 (the removal rule first) → start → watch → coordinate (same-file tasks in
-sequence; relay the person's words as said) → merge gate → merge → clean up →
-project steps from memory (tag, docs).
+sequence; relay the person's words as said) → merge gate → merge (high
+difficulty: the person) → clean up → project steps from memory (tag, docs).
+A review finding that recurs goes into the project's memory, with a proposed
+rule, test or hook. Each report sorts the open pull requests for the person:
+safe to merge, needs a real review, hold, close.
 
 **Epic batch loop** (optional, for projects that use epics): sync the epic
 onto main, then tell every branch cut from the epic to rebase → persona audit

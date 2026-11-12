@@ -3,7 +3,7 @@
 
 A bundle holds the project's skills (each skill directory whole, with its
 scripts) in the layout the agent kind loads (its adapter's bundle_layout; for
-claude, a plugin named foreman-kit), the agents' loop, launch.py with the
+claude, a plugin named foreman-kit), the lead's guide, launch.py with the
 project's launch settings and the adapters, and transcript.py. `bundle.json`
 names the agent kind. Its name is a hash of its content: a machine that
 already holds it is not sent it again, and any change makes a new one.
@@ -31,6 +31,7 @@ import tempfile
 import zipfile
 
 import adapters
+import loop as loops
 from config import (EXIT_SETUP_NEEDED, LOCAL, REPO, SKILL_DIR, cache_dir, project_path, project_skills,
                     herdr_machines, load, local_skills, plugin_list, plugin_dirs, validate)
 
@@ -70,7 +71,7 @@ def contents(cfg, skill_dirs, kind=adapters.DEFAULT):
         "bundle.json": json.dumps({"agent": kind}).encode() + b"\n",
         "config.json": json.dumps({k: cfg[k] for k in ("gateways", "profiles", "launch")},
                                   indent=2, sort_keys=True).encode() + b"\n",
-        "loop.md": _read(os.path.join(SKILL_DIR, "agent", "loop.md")),
+        "lead.md": _read(os.path.join(SKILL_DIR, "agent", "lead.md")),
     }
     for name in ("config.py", "launch.py", "transcript.py"):
         files[f"scripts/{name}"] = _read(os.path.join(HERE, name))
@@ -149,25 +150,40 @@ def push_remote(target, bundle_hash, files):
     return path, "uploaded"
 
 
-def build(repo, extra, kind=adapters.DEFAULT):
+def build(repo, extra, kind=adapters.DEFAULT, project_names=()):
+    """The bundle for a project: (hash, files, skills it carries, warnings).
+
+    Every skill the project's loops name is looked up the way an agent will
+    find it: a project skill (in `project_names`, the checkout's
+    `.claude/skills`) is used where it is and not bundled; otherwise the
+    person's skill of that name is bundled. A loop skill found nowhere is a
+    warning; a skill named in `extra` or in bundle.skills must exist.
+    """
     if not os.path.exists(project_path(repo)):
         fail(EXIT_SETUP_NEEDED, f"project {repo} has no settings yet; run herdr-foreman-setup")
     cfg = load(repo)
     problems = validate(cfg, project=True)
     if problems:
         fail(EXIT_SETUP_NEEDED, f"project {repo}: {problems[0]}")
-    refs = project_skills(cfg, extra)
-    available = local_skills(plugin_list(plugin_dirs(cfg))) if refs else {}
-    missing = [r for r in refs if r not in available]
-    if missing:
-        fail(EXIT_SETUP_NEEDED, f"skill not available on this machine: {', '.join(missing)} "
-                                f"(config.py skills lists the ones that are; a plugin loaded with --plugin-dir "
-                                f"goes in plugin_dirs: /herdr-foreman-setup plugin dirs)")
+    names = project_skills(cfg, extra)
+    available = local_skills(plugin_list(plugin_dirs(cfg))) if names else {}
+    required = set(extra) | set(cfg.get("bundle", {}).get("skills", []))
+    refs, warnings = [], []
+    for name in names:
+        source, value = loops.resolve_skill(name, project_names, available)
+        if source == "bundle" and value not in refs:
+            refs.append(value)
+        elif source == "missing":
+            if name in required:
+                fail(EXIT_SETUP_NEEDED, f"skill not available on this machine: {value} (config.py skills lists the "
+                                        f"ones that are; a plugin loaded with --plugin-dir goes in plugin_dirs: "
+                                        f"/herdr-foreman-setup plugin dirs)")
+            warnings.append(value)
     shorts = [r.split(":")[-1] for r in refs]
     if len(set(shorts)) != len(shorts):
         fail(EXIT_SETUP_NEEDED, f"two skills share one name in the bundle: {', '.join(refs)}")
     files = contents(cfg, {r: available[r] for r in refs}, kind)
-    return digest(files), files, [adapters.get(kind).skill_name(r) for r in refs]
+    return digest(files), files, [adapters.get(kind).skill_name(r) for r in refs], warnings
 
 
 def main(argv):
@@ -184,8 +200,19 @@ def main(argv):
         fail(2, "push needs a machine label, or local")
     extra = [s.strip() for s in args.skills.split(",") if s.strip()]
 
-    bundle_hash, files, skills = build(args.project, extra, args.agent)
-    out = {"hash": bundle_hash, "agent": args.agent, "skills": skills}
+    machine = LOCAL if args.command == "build" else args.machine
+    hosts = load(args.project).get("machines", {})
+    project_names = []
+    if machine in hosts:
+        try:
+            project_names = loops.project_skill_names(machine, hosts[machine])
+        except (ValueError, RuntimeError) as e:
+            fail(1, f"cannot list the project's skills on {machine}: {e}")
+    bundle_hash, files, skills, warnings = build(args.project, extra, args.agent, project_names)
+    out = {"hash": bundle_hash, "agent": args.agent, "skills": skills, "project_skills": project_names,
+           "missing": warnings}
+    for w in warnings:
+        print(f"bundle.py: missing skill: {w}", file=sys.stderr)
     if args.command == "build" or args.machine == LOCAL:
         path, status = write_local(bundle_hash, files)
         out.update(machine=LOCAL, path=path, status=status, cache=cache_dir())

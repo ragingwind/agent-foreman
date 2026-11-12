@@ -42,6 +42,10 @@ class Claude(unittest.TestCase):
                                 "--model", "sonnet", "--dangerously-skip-permissions", "--plugin-dir", "/b"])
         self.assertEqual(env, {})
         self.assertIn("ANTHROPIC_BASE_URL", clear)
+        argv, _, _ = claude.command(self.cfg, "opus", worktree=False, print_mode=True, environ={},
+                                    disallowed=["Edit", "Write"])
+        self.assertEqual(argv, ["claude", "-p", "--output-format", "json", "--model", "opus",
+                                "--dangerously-skip-permissions", "--disallowedTools", "Edit,Write"])
 
     def test_token_missing(self):
         cfg = config.merge(self.cfg, {

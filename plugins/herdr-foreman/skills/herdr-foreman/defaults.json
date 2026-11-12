@@ -39,46 +39,286 @@
     "skills": []
   },
   "loop": {
-    "stages": [
+    "roles": {
+      "code-reviewer": {
+        "mode": "prompt",
+        "step": 1,
+        "prompt": "review",
+        "deny_tools": [
+          "Edit",
+          "Write",
+          "NotebookEdit"
+        ]
+      },
+      "retracer": {
+        "mode": "prompt",
+        "step": 1,
+        "prompt": "retrace",
+        "deny_tools": [
+          "Edit",
+          "Write",
+          "NotebookEdit"
+        ]
+      },
+      "helper": {
+        "mode": "pane",
+        "step": 0
+      },
+      "audit-lead": {
+        "mode": "pane",
+        "step": 0
+      },
+      "scenario-agent": {
+        "mode": "pane",
+        "step": 0
+      }
+    },
+    "prompts": {
+      "review": "Code review of pull request #<PR> of <repo>, closing #<issue>, difficulty <difficulty>. You did not write this change. Read the issue with its comments, the repository's CLAUDE.md and rules, and the diff <of the whole pull request | since <SHA>, the head of the last review>. Try to break it: correctness under every input and timing the code allows, a test that would pass without the change, scope beyond or short of the issue, and the repository's rules. Read the test changes before the code: an assertion rewritten to match new behavior, a removed or skipped test, a skipped check, a lowered threshold or an edited CI file is blocking unless the issue asks for it. Check that CI passes and that the pull request carries the manual scenario with its raw output, or a one-line reason for skipping it under ## Tests. Mark each finding blocking (wrong behavior, a security hole, a missing test for new behavior, a broken rule) or non-blocking. The verdict is changes requested only when a blocking finding exists. Post one comment titled `## Code review of #<PR> at <head SHA>`: the first line is `Verdict: approved` or `Verdict: changes requested`, then each finding with one line of evidence; keep it under 3000 characters. Work only in your own clone; do not edit, commit or push, and do not start other agents. End with the verdict line.",
+      "retrace": "Scenario retrace of pull request #<PR> of <repo>, closing #<issue>. You did not write this change and you do not read its diff. Read only the issue (its completion criteria) and the manual scenario comment on the pull request. First check that the scenario covers every criterion and name any it misses. Then clone the pull request's head into <dir> and follow the scenario's steps exactly as written, keeping each step's raw output. Post one comment titled `## Scenario retrace of #<PR> at <head SHA>`: the first line is `Verdict: pass`, `Verdict: code problem` or `Verdict: scenario problem` (a wrong step or a missing criterion), then each step with pass or fail and its evidence. Work only in your own clone; do not edit, commit or push, and do not start other agents. End with the verdict line."
+    },
+    "work": [
       {
-        "name": "start",
+        "id": "start",
+        "actor": "lead",
+        "does": "Set the issue's labels, cut the branch from the base, and post one handoff comment: owner, branch, difficulty, and the issue's completion criteria in your own words. Unless the change is trivial, draft the manual scenario as the target before writing code.",
         "skills": [],
-        "method": "Set the issue to `status:in-progress`, cut `<prefix>/issue-<N>-<name>` from the base (`main` unless the brief names another), and post one handoff comment on the issue: owner, branch, tier."
+        "next": {
+          "done": "implement"
+        }
       },
       {
-        "name": "implement",
+        "id": "implement",
+        "actor": "lead",
+        "does": "Write the failing check first (a new test, or the scenario's step), then the change, following the repository's CLAUDE.md and rules and the ADRs the issue links. In a fix round, fix the findings.",
         "skills": [],
-        "method": "Follow the repository's `CLAUDE.md` and rules, and read the ADRs the issue links."
+        "next": {
+          "done": "test"
+        }
       },
       {
-        "name": "clean",
+        "id": "test",
+        "actor": "lead",
+        "does": "Show the new tests failing without the change and passing with it (set the change aside, run, restore, run), and run the related tests. Pin a minimized failing case as a regression test.",
         "skills": [],
-        "method": "Clean the diff for readability and structure without changing behavior. When this stage names skills, run them on the diff and apply what they accept."
+        "next": {
+          "done": "refactor"
+        }
       },
       {
-        "name": "test",
+        "id": "refactor",
+        "actor": "lead",
+        "does": "Restructure this round's diff for readability without changing its behavior; the tests stay green.",
         "skills": [],
-        "method": "Run the tier's tests and fix a failing test here. Tier S (docs, text, messages, test-only changes): the tests the change touches, and CI. Tier M (a behavior change in one component): new tests shown failing before the change and passing after it, the related tests, and CI. Tier L (security, network, several processes, an interface): everything in M, plus a stack build, a load measurement and mutation of the new checks where they apply."
+        "next": {
+          "done": "regression"
+        }
       },
       {
-        "name": "PR",
+        "id": "regression",
+        "actor": "lead",
+        "does": "Rebase onto the current base, then run the full test suite on the result. Read your own test changes: an edited assertion must state the intended behavior, not whatever the new code does.",
         "skills": [],
-        "method": "One commit, pushed, and a pull request into the base. Body: a summary, `## Decisions` (one line per in-scope choice and its reason), `## Tests` (the commands and their pass counts) and the closing keyword. Set the issue and the pull request to `status:review`."
+        "next": {
+          "done": "scenario"
+        },
+        "extra": {
+          "high": "Also run the checks that run only on the main branch when the change reaches them."
+        }
       },
       {
-        "name": "review",
+        "id": "scenario",
+        "actor": "lead",
+        "does": "Run the manual scenario end to end through the surface the change reaches (an API, a CLI, a UI, a job), as a user or caller would, keeping each step's raw output, and screens for a UI. In a fix round, only the steps the fix touches.",
         "skills": [],
-        "method": "Dispatch a fresh subagent with the Agent tool, model opus, and this prompt filled in: \"Red-team review of pull request #<PR> of <repo>, closing #<issue>, tier <tier>. You did not write this change. Read the issue with its comments, the repository's CLAUDE.md and rules, and the diff <of the whole pull request | since <SHA>, the head of the last round>. Try to break it: correctness under every input and timing the code allows, a test that would pass without the change, scope beyond or short of the issue, and the repository's rules. Run what the tier calls for and no more. Mark each finding blocking (wrong behavior, a security hole, a missing test for new behavior, a broken rule) or non-blocking. The verdict is changes requested only when a blocking finding exists. Post one comment headed `## Red-team review of #<PR> at <short SHA>`: the verdict, then each finding with one line of evidence; keep it under 3000 characters. Set `status:approved` or `status:changes-requested` on the issue and the pull request. Remove every worktree, container and temporary directory you made. Return the verdict and the findings.\" You never review your own change."
+        "next": {
+          "done": "pull-request"
+        },
+        "run": {
+          "low": "if-not-trivial",
+          "mid": "if-not-trivial",
+          "high": "if-not-trivial"
+        }
       },
       {
-        "name": "fix",
+        "id": "pull-request",
+        "actor": "lead",
+        "does": "Open a draft pull request into the base, or push in a fix round. Body: ## Purpose (what the change is for), ## Decisions (each choice, the alternatives ruled out and why), ## Tests (the commands and their pass counts; for a trivial change, the one-line reason it has no scenario). Keep it small: over 400 changed lines, split it or say why not. Post or update the scenario comment with its raw output.",
         "skills": [],
-        "method": "Fix every blocking finding and the non-blocking ones you can fix in the same commit, push, and go back to review with the reviewed SHA so the next round reads only the new diff. Answer a finding you think is wrong on the pull request with evidence."
+        "next": {
+          "done": "code-review"
+        }
       },
       {
-        "name": "approved",
+        "id": "code-review",
+        "actor": "code-reviewer",
+        "does": "Judge the diff (in a fix round, the diff since the last review), the rules, attempts to break it, the test changes, CI, and the scenario or its skip reason. With two reviewers, each runs on a different model.",
         "skills": [],
-        "method": "Wait for the pull request's checks. When they pass, update the handoff comment once (done, the pull request, what is left) and report `approved`."
+        "next": {
+          "changes": "implement",
+          "approved": "scenario-retrace"
+        },
+        "count": {
+          "low": 1,
+          "mid": 1,
+          "high": 2
+        }
+      },
+      {
+        "id": "scenario-retrace",
+        "actor": "retracer",
+        "does": "Without reading the diff: check the scenario against the issue's criteria, then follow it in a fresh clone.",
+        "skills": [],
+        "next": {
+          "code": "implement",
+          "scenario": "scenario",
+          "pass": "ready"
+        },
+        "run": {
+          "low": "never",
+          "mid": "if-not-trivial",
+          "high": "if-not-trivial"
+        }
+      },
+      {
+        "id": "ready",
+        "actor": "lead",
+        "does": "Run the gate, mark the pull request ready, update the handoff comment, and report.",
+        "skills": [],
+        "next": {
+          "done": "stop"
+        }
+      }
+    ],
+    "manage": [
+      {
+        "id": "register",
+        "actor": "foreman",
+        "does": "Register the work as issues of the smallest useful size.",
+        "skills": [],
+        "next": {
+          "done": "brief"
+        }
+      },
+      {
+        "id": "brief",
+        "actor": "foreman",
+        "does": "Judge the difficulty and write the brief: the removal rule first, then the issue, difficulty, base, isolation, the rendered loop, the gate file and the reporting rule.",
+        "skills": [],
+        "next": {
+          "done": "launch"
+        }
+      },
+      {
+        "id": "launch",
+        "actor": "foreman",
+        "does": "Make the lead's clone, open the task's tab and start the lead in its clone.",
+        "skills": [],
+        "next": {
+          "done": "watch"
+        }
+      },
+      {
+        "id": "watch",
+        "actor": "foreman",
+        "does": "Check every interval: status files, screens, disk. Relay permission prompts and blocked removals to the person in one line.",
+        "skills": [],
+        "next": {
+          "done": "coordinate"
+        }
+      },
+      {
+        "id": "coordinate",
+        "actor": "foreman",
+        "does": "Run tasks that touch the same files in sequence. Relay the person's decisions in the person's own words.",
+        "skills": [],
+        "next": {
+          "done": "merge-gate"
+        }
+      },
+      {
+        "id": "merge-gate",
+        "actor": "foreman",
+        "does": "Run the task's gate again: both verdicts at the head SHA, scenario and evidence, CI, ready. A clean rebase whose range-diff shows the same change needs no new review.",
+        "skills": [],
+        "next": {
+          "done": "merge"
+        }
+      },
+      {
+        "id": "merge",
+        "actor": "foreman",
+        "does": "Low and mid difficulty: merge as the project's memory says once the gate passes. High difficulty: the person merges; report the pull request ready with its gate result and wait.",
+        "skills": [],
+        "next": {
+          "done": "cleanup"
+        }
+      },
+      {
+        "id": "cleanup",
+        "actor": "foreman",
+        "does": "Labels, branches, agents, tabs, clones, run directories, disk; then the project's own steps (tags, docs) from its memory. When a review finding recurs, write it into the project's memory and propose a rule, a test or a hook so it does not happen again.",
+        "skills": [],
+        "next": {
+          "done": "stop"
+        }
+      }
+    ],
+    "epic": [
+      {
+        "id": "sync",
+        "actor": "helper",
+        "does": "Rebase the epic onto main, run CI on a draft pull request, then move the epic branch; tell every branch cut from the epic to rebase.",
+        "skills": [],
+        "next": {
+          "done": "audit"
+        }
+      },
+      {
+        "id": "audit",
+        "actor": "audit-lead",
+        "does": "Audit the epic as a whole with the project's audit roles; verify each finding and post it on the epic's issue.",
+        "skills": [],
+        "next": {
+          "done": "audit-fix"
+        }
+      },
+      {
+        "id": "audit-fix",
+        "actor": "foreman",
+        "does": "Turn findings above low into issues and run them through the work loop; then audit again or go on, as the foreman judges.",
+        "skills": [],
+        "next": {
+          "again": "audit",
+          "done": "scenarios"
+        }
+      },
+      {
+        "id": "scenarios",
+        "actor": "scenario-agent",
+        "does": "Run the project's user scenarios on the combined epic, with evidence on the epic's issue, each retraced.",
+        "skills": [],
+        "next": {
+          "done": "epic-pr"
+        }
+      },
+      {
+        "id": "epic-pr",
+        "actor": "foreman",
+        "does": "Open the epic-to-main pull request: per-feature report, batch summary, tests, decisions.",
+        "skills": [],
+        "next": {
+          "done": "approve"
+        }
+      },
+      {
+        "id": "approve",
+        "actor": "person",
+        "does": "Approve and merge the epic; the foreman closes the issues and runs the project's follow-up steps.",
+        "skills": [],
+        "next": {
+          "done": "stop"
+        }
       }
     ]
   },
@@ -93,7 +333,7 @@
   "report": {
     "language": "the person's language",
     "address": "",
-    "template": "## Status {time} UTC · {group}\n{members: one line per machine: label, working/blocked/idle counts, free disk}\n| Tab | Issue / PR | Stage | Waiting on | Note |\n| --- | --- | --- | --- | --- |\n| <machine>:<tab> | #<issue> / #<PR> | <stage> | none · reviewer · CI · owner decision · owner merge | <under 30 characters> |\n**For you**: <the person's actions with the tab: permission prompts, open dialogs, merges, decisions, setup; or \"none\">\n**Foreman did**: <what the foreman unblocked, merged or cleaned since the last report, or \"none\">\n**Links**:\n- <the full URL of each pull request in the table>"
+    "template": "## Status {time} UTC · {group}\n{members: one line per machine: label, working/blocked/idle counts, free disk}\n| Tab | Issue / PR | Stage | Waiting on | Note |\n| --- | --- | --- | --- | --- |\n| <machine>:<tab> | #<issue> / #<PR> | <stage> | none · reviewer · CI · owner decision · owner merge | <under 30 characters> |\n**Pull requests for you** (risk-sorted; high-difficulty merges are yours):\n- Safe to merge: <#PR — one-line reason>\n- Needs a real review: <#PR — one-line reason>\n- Hold or changes requested: <#PR — one-line reason>\n- Close: <#PR — one-line reason>\n**For you**: <the person's actions with the tab: permission prompts, open dialogs, merges, decisions, setup; or \"none\">\n**Foreman did**: <what the foreman unblocked, merged or cleaned since the last report, or \"none\">\n**Links**:\n- <the full URL of each pull request in the table>"
   },
   "ops": {
     "check_minutes": 10,

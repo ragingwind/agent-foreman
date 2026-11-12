@@ -16,7 +16,6 @@ Usage:
   config.py show [--project OWNER/REPO]
   config.py check [--project OWNER/REPO]
   config.py save user|project [--project OWNER/REPO] [--dry-run]   (full settings as JSON on stdin)
-  config.py stages --project OWNER/REPO --task TASK [--agent KIND]
   config.py member MACHINE PATH [--agent KIND]   (is the checkout there and ready for that agent kind)
   config.py plugin-dir-candidates   (this session's --plugin-dir directories, herdr-foreman left out)
   config.py tier --difficulty low|mid|high --role ROLE [--skip PROFILE,...]
@@ -38,6 +37,7 @@ import sys
 import tempfile
 
 import adapters
+import loop as loops
 
 APP = "herdr-foreman"
 KINDS = ["anthropic", "anthropic-compatible"]
@@ -53,8 +53,8 @@ PLACEHOLDERS = ["task", "stage", "round", "machine", "profile", "project"]
 SECTIONS = ["plugin_dirs", "gateways", "profiles", "tiers", "launch", "bundle", "loop", "labels", "report", "ops"]
 PROJECT_KEYS = ["repo", "workspace", "machines"]
 # Model tiers, lowest first. Reviewers and retracers take one tier above the lead.
-TIERS = ["low", "mid", "high"]
-ROLE_STEP = {"reviewer": 1, "retracer": 1}
+TIERS = loops.LEVELS
+ROLE_STEP = {"code-reviewer": 1, "retracer": 1}  # when the settings' loop.roles do not say
 LOCAL = "local"
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -129,15 +129,64 @@ def write_json(path, data):
     os.replace(tmp, path)
 
 
+def _id_list(value):
+    return isinstance(value, list) and bool(value) and all(isinstance(x, dict) and "id" in x for x in value)
+
+
+def _merge_ids(base, over):
+    """Lists of {"id": ...} items merge item by item: a matching id is laid
+    over, {"id", "remove": true} drops one, and a new id goes after its
+    "after" id (or first, when "after" is null, or last, without it)."""
+    items = [copy.deepcopy(b) for b in base]
+    for o in over:
+        ids = [x["id"] for x in items]
+        if o.get("remove"):
+            items = [x for x in items if x["id"] != o["id"]]
+        elif o["id"] in ids:
+            i = ids.index(o["id"])
+            items[i] = merge(items[i], {k: v for k, v in o.items() if k != "after"})
+        else:
+            new = {k: copy.deepcopy(v) for k, v in o.items() if k != "after"}
+            if "after" not in o:
+                items.append(new)
+            elif o["after"] is None:
+                items.insert(0, new)
+            else:
+                items.insert(ids.index(o["after"]) + 1 if o["after"] in ids else len(items), new)
+    return items
+
+
 def merge(base, over):
-    """`over` laid on `base`: dicts merge key by key, anything else replaces."""
+    """`over` laid on `base`: dicts merge key by key, lists of {"id": ...}
+    items merge by id, anything else replaces."""
     out = copy.deepcopy(base)
     for key, value in over.items():
         if isinstance(value, dict) and isinstance(out.get(key), dict):
             out[key] = merge(out[key], value)
+        elif isinstance(value, list) and _id_list(out.get(key)) and all(isinstance(x, dict) and "id" in x for x in value):
+            out[key] = _merge_ids(out[key], value)
         else:
             out[key] = copy.deepcopy(value)
     return out
+
+
+def _diff_ids(base, full):
+    """The id-list form of the change from `base` to `full`; None when they
+    are the same. A changed order of existing items is not kept."""
+    out = []
+    full_ids = [x["id"] for x in full]
+    by_id = {x["id"]: x for x in base}
+    for b in base:
+        if b["id"] not in full_ids:
+            out.append({"id": b["id"], "remove": True})
+    for i, item in enumerate(full):
+        if item["id"] in by_id:
+            sub = diff(by_id[item["id"]], item)
+            if sub:
+                out.append({"id": item["id"], **sub})
+        else:
+            out.append({**copy.deepcopy(item), "after": full_ids[i - 1] if i else None})
+    return out or None
 
 
 def diff(base, full):
@@ -149,6 +198,10 @@ def diff(base, full):
             out[key] = copy.deepcopy(value)
         elif isinstance(value, dict) and isinstance(base[key], dict):
             sub = diff(base[key], value)
+            if sub:
+                out[key] = sub
+        elif _id_list(value) and _id_list(base[key]):
+            sub = _diff_ids(base[key], value)
             if sub:
                 out[key] = sub
         elif value != base[key]:
@@ -262,32 +315,13 @@ def validate(cfg, saved=None, skills=None, project=False):
                 problems.append(f"plugin_dirs: {d} is herdr-foreman itself; its skills are the foreman's, "
                                 f"not the agents'")
 
-    loop = cfg.get("loop", {})
-    stages = loop.get("stages")
-    stage_names = []
-    if not isinstance(stages, list) or not stages:
-        problems.append("loop: stages must be a non-empty list")
-        stages = []
-    for i, s in enumerate(stages):
-        name = s.get("name", "") if isinstance(s, dict) else ""
-        if not NAME.match(str(name)):
-            problems.append(f"loop: stage {i + 1} needs a name of letters, digits, '.', '_' or '-'")
-            continue
-        if name in stage_names:
-            problems.append(f"loop: stage {name} appears twice")
-        stage_names.append(name)
-        if not str(s.get("method", "")).strip():
-            problems.append(f"loop: stage {name} has no method")
-        if not isinstance(s.get("skills", []), list):
-            problems.append(f"loop: stage {name}: skills must be a list")
+    problems += loops.validate_loop(cfg.get("loop", {}))
+    stage_names = loops.stage_ids(cfg.get("loop", {})) if isinstance(cfg.get("loop"), dict) else []
 
     refs = list(cfg.get("bundle", {}).get("skills", []))
     if not isinstance(cfg.get("bundle", {}).get("skills", []), list):
         problems.append("bundle: skills must be a list")
         refs = []
-    for s in stages:
-        if isinstance(s, dict) and isinstance(s.get("skills", []), list):
-            refs += s.get("skills", [])
     seen = {}
     for ref in refs:
         short = str(ref).split(":")[-1]
@@ -473,11 +507,12 @@ def local_skills(plugins=None, user_skills_dir=None):
 
 
 def project_skills(cfg, extra=()):
-    """Every skill ref a project's bundle carries: bundle.skills, each stage's
-    skills, then `extra`, without repeats, in that order."""
+    """Every skill name the project's agents may need: bundle.skills, each
+    loop stage's skills, then `extra`, without repeats, in that order."""
     refs = list(cfg.get("bundle", {}).get("skills", []))
-    for s in cfg.get("loop", {}).get("stages", []):
-        refs += s.get("skills", [])
+    for which in loops.LOOPS:
+        for st in cfg.get("loop", {}).get(which, []):
+            refs += st.get("skills", [])
     refs += list(extra)
     seen = []
     for ref in refs:
@@ -486,13 +521,15 @@ def project_skills(cfg, extra=()):
     return seen
 
 
-def role_tier(difficulty, role="lead"):
-    """The model tier a role takes for a task of that difficulty: the lead and
-    most roles take the difficulty's tier; reviewers and retracers one above,
-    capped at high."""
+def role_tier(difficulty, role="lead", cfg=None):
+    """The model tier a role takes for a task of that difficulty: the
+    difficulty's tier raised by the role's `step` (loop.roles), capped at high.
+    Standard: reviewers and retracers one above, every other role the same."""
     if difficulty not in TIERS:
         raise ValueError(f"difficulty must be one of {', '.join(TIERS)}")
-    return TIERS[min(len(TIERS) - 1, TIERS.index(difficulty) + ROLE_STEP.get(role, 0))]
+    roles = (cfg or {}).get("loop", {}).get("roles", {})
+    step = roles[role].get("step", 0) if role in roles else ROLE_STEP.get(role, 0)
+    return TIERS[min(len(TIERS) - 1, TIERS.index(difficulty) + step)]
 
 
 def tier_profiles(cfg, tier, skip=()):
@@ -507,18 +544,6 @@ def label(cfg, event, **values):
     fields = {p: "" for p in PLACEHOLDERS}
     fields.update({k: str(v) for k, v in values.items()})
     return " ".join(fmt.format(**fields).split())
-
-
-def stages_markdown(cfg, task, kind=adapters.DEFAULT):
-    """The stage table a brief carries, with skills named the way that agent kind calls them."""
-    lines = ["| Stage | Tab label | Skills | Method |", "| --- | --- | --- | --- |"]
-    for s in cfg["loop"]["stages"]:
-        stage = s["name"] + (" <N>" if s["name"] in ("review", "fix") else "")
-        tab = label(cfg, s["name"], task=task, stage=stage, round="<N>" if "<N>" in stage else "",
-                    project=cfg.get("workspace", ""))
-        skills = ", ".join(adapters.get(kind).skill_name(r) for r in s.get("skills", [])) or "-"
-        lines.append(f"| {s['name']} | `{tab}` | {skills} | {s['method'].replace('|', '/')} |")
-    return "\n".join(lines)
 
 
 def save(level, full, repo=None, saved=None, skills=None, dry_run=False):
@@ -554,7 +579,7 @@ def plugin_dirs(cfg):
 
 def _cli(argv):
     ap = argparse.ArgumentParser(prog="config.py", description="herdr-foreman settings")
-    ap.add_argument("command", choices=["paths", "show", "check", "save", "stages", "member", "profiles",
+    ap.add_argument("command", choices=["paths", "show", "check", "save", "member", "profiles",
                                         "projects", "machines", "skills", "plugin-dir-candidates", "tier"])
     ap.add_argument("rest", nargs="*", help="save: user or project; member: MACHINE PATH")
     ap.add_argument("--project", metavar="OWNER/REPO")
@@ -603,11 +628,6 @@ def _cli(argv):
             return EXIT_SETUP_NEEDED
         print(json.dumps({"path": path, "written": written, "dry_run": args.dry_run}, indent=2,
                          ensure_ascii=False))
-    elif args.command == "stages":
-        if not args.project:
-            print("config.py: stages needs --project OWNER/REPO", file=sys.stderr)
-            return 2
-        print(stages_markdown(load(args.project), args.task, args.agent))
     elif args.command == "member":
         if len(args.rest) != 2:
             print("config.py: member needs MACHINE PATH", file=sys.stderr)
@@ -638,7 +658,7 @@ def _cli(argv):
             print("config.py: tier needs --difficulty low|mid|high", file=sys.stderr)
             return 2
         cfg = load(args.project)
-        tier = role_tier(args.difficulty, args.role)
+        tier = role_tier(args.difficulty, args.role, cfg)
         skip = [x for x in args.skip.split(",") if x]
         profiles = tier_profiles(cfg, tier, skip)
         print(json.dumps({"tier": tier, "profiles": profiles, "pick": profiles[0] if profiles else None}))

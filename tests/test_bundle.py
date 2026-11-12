@@ -26,35 +26,35 @@ class Bundle(unittest.TestCase):
         self.home.close()
 
     def test_same_content_same_hash_and_change_makes_new(self):
-        h1, files, skills = bundle.build("o/r", [])
-        h2, _, _ = bundle.build("o/r", [])
+        h1, files, skills, _ = bundle.build("o/r", [])
+        h2, _, _, _ = bundle.build("o/r", [])
         self.assertEqual(h1, h2)
         self.assertEqual(skills, ["foreman-kit:tidy"])
         self.assertIn("skills/tidy/scripts/run.py", files)
         self.assertNotIn("skills/tidy/__pycache__/x.pyc", files)
-        for rel in ("bundle.json", ".claude-plugin/plugin.json", "config.json", "loop.md", "scripts/launch.py",
+        for rel in ("bundle.json", ".claude-plugin/plugin.json", "config.json", "lead.md", "scripts/launch.py",
                     "scripts/config.py", "scripts/transcript.py", "scripts/adapters/__init__.py",
                     "scripts/adapters/base.py", "scripts/adapters/claude.py"):
             self.assertIn(rel, files)
         self.home.write("skills/tidy/SKILL.md", "---\nname: tidy\n---\nTidy more.")
-        h3, _, _ = bundle.build("o/r", [])
+        h3, _, _, _ = bundle.build("o/r", [])
         self.assertNotEqual(h1, h3)
 
     def test_settings_change_makes_new_hash(self):
-        h1, _, _ = bundle.build("o/r", [])
+        h1, _, _, _ = bundle.build("o/r", [])
         self.home.write("config/herdr-foreman/config.json", {"launch": {"profile": "opus"}})
-        h2, _, _ = bundle.build("o/r", [])
+        h2, _, _, _ = bundle.build("o/r", [])
         self.assertNotEqual(h1, h2)
 
     def test_written_once_then_cached(self):
-        h, files, _ = bundle.build("o/r", [])
+        h, files, _, _ = bundle.build("o/r", [])
         path, status = bundle.write_local(h, files)
         self.assertEqual(status, "built")
         self.assertTrue(os.path.isfile(os.path.join(path, "skills", "tidy", "SKILL.md")))
         self.assertEqual(bundle.write_local(h, files), (path, "cached"))
 
     def test_zip_holds_every_file(self):
-        _, files, _ = bundle.build("o/r", [])
+        _, files, _, _ = bundle.build("o/r", [])
         with zipfile.ZipFile(io.BytesIO(bundle.zipped(files))) as z:
             self.assertEqual({n: z.read(n) for n in z.namelist()}, files)
 
@@ -73,6 +73,15 @@ class Bundle(unittest.TestCase):
         with self.assertRaises(SystemExit) as e:
             bundle.build("o/other", [])
         self.assertEqual(e.exception.code, config.EXIT_SETUP_NEEDED)
+
+    def test_loop_skills_project_first_then_bundle_then_warning(self):
+        self.home.write("config/herdr-foreman/config.json",
+                        {"loop": {"work": [{"id": "refactor", "skills": ["tidy", "scenario", "ghost"]}]}})
+        _, files, skills, warnings = bundle.build("o/r", [], project_names=["scenario"])
+        self.assertEqual(skills, ["foreman-kit:tidy"])          # bundle.skills and the loop name the same skill
+        self.assertFalse(any(rel.startswith("skills/scenario/") for rel in files))  # a project skill stays put
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("ghost", warnings[0])
 
     def test_unknown_or_disabled_machine(self):
         machines = {"off": {"target": "h", "enabled": False}}
