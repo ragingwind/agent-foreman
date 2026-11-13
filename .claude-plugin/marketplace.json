@@ -9,7 +9,7 @@
     {
       "name": "herdr-foreman",
       "source": "./plugins/herdr-foreman",
-      "description": "A foreman session that runs coding agents across herdr machines, one project group at a time."
+      "description": "A foreman session that manages coding agents across herdr machines: it sizes each task, hands it to a lead agent in its own clone, gates it in code, and merges or hands the merge to you."
     }
   ]
 }

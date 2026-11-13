@@ -23,5 +23,4 @@ REQUIRED = [
     "bundle_layout",   # {skill name: {relative path: bytes}} -> {bundle path: bytes}, manifest included
     "skill_name",      # skill ref -> the name the agent calls it by
     "last_answers",    # (session id, n) -> the final text of the last n turns
-    "CHECKOUT_PROBE",  # Python source; prints {"checkout", "ready", "reason"} for a path
 ]

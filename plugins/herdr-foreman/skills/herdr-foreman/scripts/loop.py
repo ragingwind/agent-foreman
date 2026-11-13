@@ -250,7 +250,7 @@ def assign(candidates, count):
         return [], "no profile for this role"
     picks = [candidates[i] if i < len(candidates) else candidates[-1] for i in range(count)]
     short = len(set(picks)) < count
-    return picks, (f"only {len(set(picks))} different profile(s) for {count} agents; add a model with setup-models"
+    return picks, (f"only {len(set(picks))} different profile(s) for {count} agents; add a model with setup-foreman"
                    if short else "")
 
 

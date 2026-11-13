@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import unittest
 from unittest import mock
 
@@ -312,22 +313,59 @@ class Cli(unittest.TestCase):
         self.assertEqual(run("config.py", "save", "project", stdin="{}").returncode, 2)
         self.assertEqual(run("config.py", "save", "everyone", stdin="{}").returncode, 2)
 
-    def test_member_state_local(self):
+    def fake_claude(self, plugins_from_args=True):
+        """A `claude` on PATH whose `plugin list --json` reports each --plugin-dir."""
+        bindir = os.path.join(self.home.root, "bin")
+        os.makedirs(bindir, exist_ok=True)
+        path = os.path.join(bindir, "claude")
+        with open(path, "w") as f:
+            f.write("#!/usr/bin/env python3\nimport json, os, sys\na = sys.argv[1:]\n"
+                    "dirs = [a[i + 1] for i, x in enumerate(a) if x == '--plugin-dir']\n"
+                    "print(json.dumps([{'id': os.path.basename(d) + '@inline', 'enabled': True, 'installPath': d}"
+                    " for d in dirs]))\n")
+        os.chmod(path, 0o755)
+        gh = os.path.join(bindir, "gh")  # the machine check looks for it on PATH
+        with open(gh, "w") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(gh, 0o755)
+        return {"PATH": bindir + os.pathsep + os.environ["PATH"], "CLAUDE_CONFIG_DIR": os.path.join(self.home.root, "cc")}
+
+    def test_check_machine_local(self):
         repo = os.path.join(self.home.root, "repo")
-        os.makedirs(os.path.join(repo, ".git"))
-        home = os.path.join(self.home.root, "home")
-        os.makedirs(home)
-        env = {"HOME": home}
-        r = run("config.py", "member", "local", repo, env=env)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        subprocess.run(["git", "-C", repo, "remote", "add", "origin", "git@github.com:o/r.git"], check=True)
+        self.home.write("config/herdr-foreman/config.json",
+                        {"gateways": {"tf": {"kind": "anthropic-compatible", "base_url": "https://tf.example",
+                                             "token_env": "HF_TEST_TF_TOKEN", "auth": "bearer",
+                                             "models": {"m": {"id": "m-1", "context": 1000}}}},
+                         "profiles": {"tf-m": {"gateway": "tf", "model": "m",
+                                               "roles": {"opus": "m", "sonnet": "m", "haiku": "m"}}},
+                         "tiers": {"low": ["tf-m", "haiku"]}})
+        env = {**self.fake_claude(), "HF_TEST_TF_TOKEN": "secret-value-xyz"}
+        r = run("config.py", "check-machine", "local", repo, "--project", "o/r", env=env)
         state = json.loads(r.stdout)
-        self.assertEqual((r.returncode, state["checkout"], state["ready"]), (3, True, False))
-        self.assertIn("not trusted", state["reason"])
-        self.home.write("home/.claude.json", {"projects": {repo: {"hasTrustDialogAccepted": True}}})
-        r = run("config.py", "member", "local", repo, env=env)
-        self.assertEqual((r.returncode, json.loads(r.stdout)), (0, {"checkout": True, "ready": True, "reason": ""}))
-        r = run("config.py", "member", "local", os.path.join(self.home.root, "nope"), env=env)
-        self.assertEqual(json.loads(r.stdout)["checkout"], False)
-        self.assertEqual(run("config.py", "member", "local").returncode, 2)
+        self.assertEqual((r.returncode, state["ready"], state["problems"]), (0, True, []), r.stderr)
+        self.assertEqual(state["tokens"], {"HF_TEST_TF_TOKEN": True})
+        self.assertNotIn("secret-value-xyz", r.stdout + r.stderr)
+        r = run("config.py", "check-machine", "local", repo, "--project", "o/other", env={**env, "HF_TEST_TF_TOKEN": ""})
+        problems = json.loads(r.stdout)["problems"]
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("the checkout's origin is git@github.com:o/r.git, not o/other", problems)
+        self.assertIn("token variable HF_TEST_TF_TOKEN is not set in the login shell", problems)
+        r = run("config.py", "check-machine", "local", os.path.join(self.home.root, "nope"), "--project", "o/r", env=env)
+        self.assertEqual(json.loads(r.stdout)["problems"][0], f"no git checkout at {os.path.join(self.home.root, 'nope')}")
+        self.assertEqual(run("config.py", "check-machine", "local", repo).returncode, 2)
+
+    def test_skills_with_an_unsaved_plugin_dir(self):
+        plugin = os.path.join(self.home.root, "kit")
+        self.home.write("kit/.claude-plugin/plugin.json", {"name": "kit"})
+        self.home.write("kit/skills/tidy/SKILL.md", "---\nname: tidy\n---\n")
+        env = self.fake_claude()
+        self.assertNotIn("kit:tidy", run("config.py", "skills", env=env).stdout)
+        r = run("config.py", "skills", "--plugin-dir", plugin, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("kit:tidy", r.stdout)
+        self.assertFalse(os.path.exists(config.user_path()))  # nothing saved
 
 
 if __name__ == "__main__":

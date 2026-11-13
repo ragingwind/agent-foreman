@@ -55,9 +55,9 @@ transcript, checkout readiness, screen rules). Only `claude` exists.
 
 | Scope | What | File | Written by |
 | --- | --- | --- | --- |
-| Global | Model pool: gateways (token variable names only) and tiers | `~/.config/herdr-foreman/config.json` | `setup-models` |
-| Global | Standard loop: stages and steps, skills per step, variants per difficulty | same file | `setup-loop` |
-| Project | Machines (SSH devices) and the project path on each; loop changes for this project | `~/.local/state/herdr-foreman/projects/<owner>-<repo>/project.json` | `setup` |
+| Global | Model pool: gateways (token variable names only) and tiers | `~/.config/herdr-foreman/config.json` | `setup-foreman` (models) |
+| Global | Standard loop: stages and steps, skills per step, variants per difficulty | same file | `setup-foreman` (loop) |
+| Project | Machines (SSH devices) and the project path on each; loop changes for this project | `~/.local/state/herdr-foreman/projects/<owner>-<repo>/project.json` | `setup-foreman` (project) |
 | Project | Memory: values only this project has (tag format, docs steps, disk floor, labels) | `.../projects/<owner>-<repo>/memory.md` | the foreman |
 
 A level stores only what differs from the level below. The package ships the
@@ -70,7 +70,7 @@ standard values.
 - **Standard tiers** are the harness's own models: for Claude Code, high =
   `opus`, mid = `sonnet`, low = `haiku`. `fable` is never in a standard tier.
 - **Other models** (`fable`, token-factory models, any other gateway) enter a
-  tier only when the person puts them there with `setup-models`.
+  tier only when the person puts them there with `setup-foreman` (models).
 - **Picking.** The task's difficulty gives the lead's tier. Reviewers and the
   retracer take one tier higher, capped at high. Within a tier, the first
   profile is used; on a usage limit or a gateway error the next one is.
@@ -112,7 +112,7 @@ task's level and outcome (reverts, follow-up fixes) to tune them.
 A loop is a list of steps grouped into stages. Each step has an actor, the
 skills and tools it uses, and where each outcome goes; the rules per
 difficulty (run, count, extra) are on the steps. A stage is a run of steps;
-tab labels, status lines and reports follow the stages. `setup-loop` designs
+tab labels, status lines and reports follow the stages. `setup-foreman` designs
 both and maps the tools; each project can change them.
 
 **Work loop: one issue, one pull request** (standard)
@@ -142,7 +142,7 @@ trivial in its brief.
 Verdict comments have fixed titles with the SHA they judged:
 `## Code review of #<PR> at <sha>` and `## Scenario retrace of #<PR> at <sha>`.
 
-**Variants by difficulty** (standard; `setup-loop` changes them)
+**Variants by difficulty** (standard; `setup-foreman` changes them)
 
 | Difficulty | Lead tier | Review | Scenario and retrace | Extra | Merge |
 | --- | --- | --- | --- | --- | --- |
@@ -272,6 +272,4 @@ Pass conditions are code, not prose (`scripts/gate.py`).
 | Skill | Does |
 | --- | --- |
 | `herdr-foreman` | The foreman |
-| `setup-models` | Gateways, models and tiers |
-| `setup-loop` | Stages and their steps, skills and tools per step, variants per difficulty |
-| `setup` | A project: machines and paths, checked |
+| `setup-foreman` | All settings, one part at a time: a project (repository, machines, paths, checked), models (gateways, tiers), the loop (stages, steps, skills, variants), other settings. It asks once which parts, or goes to the part the request names |

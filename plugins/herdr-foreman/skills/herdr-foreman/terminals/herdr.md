@@ -3,7 +3,7 @@
 Agents in herdr tabs and panes, on this machine or another through
 `--machine`. The other terminal is `prompt.md`.
 
-`H` is `herdr` for the member `local` and `herdr --machine <label>` for any
+`H` is `herdr` for the machine `local` and `herdr --machine <label>` for any
 other; every command below works both ways. Commands print JSON. Pane and tab
 ids (`wA:p3`, `wA:t2`) are per machine. `herdr --skill` prints herdr's own
 skill; read it once per session.
@@ -16,12 +16,12 @@ agent (its start errors, its input line, how to exit it) is in
 
 ```bash
 python3 <skill>/scripts/config.py machines        # label, ssh target, enabled
-H workspace list                                  # find the group's workspace label
+H workspace list                                  # find the project's workspace label
 H workspace create --cwd <checkout> --label <workspace> --no-focus
 ```
 
 The new workspace id is `.result.workspace.workspace_id`. It comes with one
-shell tab (`.result.tab.tab_id`); leave it as the group's shell tab. It
+shell tab (`.result.tab.tab_id`); leave it as the project's shell tab. It
 closes with the workspace (`H workspace close <w>`), which the foreman does
 only for a workspace it made.
 
@@ -75,19 +75,20 @@ H agent rename <pane> <name>
 
 ## Send the brief
 
-For `local`, write the file to `<cache>/briefs/<group>/<name>.md`. For a
-remote member, write it to the scratchpad and copy it:
+The brief and its gate file go to `<cache>/briefs/<owner>-<repo>/` on the
+agent's machine as `<task>.md` and `<task>.gate.json`. For `local`, write
+them there. For a remote machine, write them to the scratchpad and copy them:
 
 ```bash
-ssh -o BatchMode=yes <target> mkdir -p <cache>/briefs/<group>
-scp -q -o BatchMode=yes <scratchpad file> <target>:<cache>/briefs/<group>/<name>.md
+ssh -o BatchMode=yes <target> mkdir -p <cache>/briefs/<owner>-<repo>
+scp -q -o BatchMode=yes <task>.md <task>.gate.json <target>:<cache>/briefs/<owner>-<repo>/
 ```
 
-`<target>` and `<cache>` come from `bundle.py push`. Then, with
+`<target>` and `<cache>` (absolute) come from `bundle.py push`. Then, with
 `run_in_background`:
 
 ```bash
-H agent prompt <pane> "Read <cache>/briefs/<group>/<name>.md and do what it says." --wait --timeout 3600000
+H agent prompt <pane> "Read <cache>/briefs/<owner>-<repo>/<task>.md and do what it says." --wait --timeout 3600000
 ```
 
 ## Read

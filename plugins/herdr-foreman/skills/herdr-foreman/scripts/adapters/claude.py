@@ -169,22 +169,3 @@ def last_answers(session_id, n=1, root=None):
     with open(max(hits, key=os.path.getmtime), encoding="utf-8") as f:
         answered = [t for t in turns(f) if t]
     return [t[-1] for t in answered[-n:]], len(answered)
-
-
-# Runs on the member's machine with `python3 -c`; argv[1] is the checkout path.
-# A worktree session refuses a checkout Claude Code has never been trusted in.
-CHECKOUT_PROBE = """
-import json, os, sys
-path = os.path.expanduser(sys.argv[1])
-try:
-    with open(os.path.join(os.path.expanduser("~"), ".claude.json"), encoding="utf-8") as f:
-        projects = json.load(f).get("projects", {})
-except (OSError, ValueError):
-    projects = {}
-checkout = os.path.isdir(os.path.join(path, ".git"))
-trusted = bool(projects.get(path, {}).get("hasTrustDialogAccepted"))
-reason = "" if checkout and trusted else (
-    "no git checkout at this path" if not checkout else
-    "Claude Code is not trusted here: run claude once in this checkout and accept the trust question")
-print(json.dumps({"checkout": checkout, "ready": checkout and trusted, "reason": reason}))
-"""

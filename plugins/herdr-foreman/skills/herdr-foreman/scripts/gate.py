@@ -4,11 +4,15 @@ lead runs it before it reports ready, and the foreman runs it again before
 it merges.
 
 Usage:
-  gate.py template --project OWNER/REPO --pr N --difficulty low|mid|high [--trivial]
-  gate.py run GATE.json [--cwd CLONE] [--skip CHECK,...] [--before-ready]
+  gate.py template --project OWNER/REPO [--pr N] --difficulty low|mid|high [--trivial]
+  gate.py run GATE.json [--pr N] [--cwd CLONE] [--skip CHECK,...] [--before-ready]
 
 A gate file:
   {"repo": "owner/name", "pr": 12, "checks": [{"check": "<name>", ...}, ...]}
+
+The foreman writes it with the brief, before the pull request exists, so
+"pr" may be null; `run --pr N` names the pull request then. A file that
+names one and a different --pr is refused.
 
 Checks (each may say "severity": "warn" to report without blocking):
   pr-open         the pull request exists and is open
@@ -232,8 +236,8 @@ def validate_gate(gate):
     problems = []
     if not isinstance(gate, dict) or not re.match(r"^[\w.-]+/[\w.-]+$", str(gate.get("repo", ""))):
         return ["gate: repo must look like owner/name"]
-    if not isinstance(gate.get("pr"), int):
-        problems.append("gate: pr must be a number")
+    if gate.get("pr") is not None and (not isinstance(gate["pr"], int) or isinstance(gate["pr"], bool)):
+        problems.append("gate: pr must be a number, or null until the pull request exists")
     for i, spec in enumerate(gate.get("checks", [])):
         name = spec.get("check") if isinstance(spec, dict) else None
         if name not in CHECKS:
@@ -281,8 +285,8 @@ def main(argv):
     args = ap.parse_args(argv)
 
     if args.command == "template":
-        if not (args.project and args.pr and args.difficulty):
-            print("gate.py: template needs --project, --pr and --difficulty", file=sys.stderr)
+        if not (args.project and args.difficulty):
+            print("gate.py: template needs --project and --difficulty", file=sys.stderr)
             return 2
         from config import load
         print(json.dumps(template(load(args.project), args.project, args.pr, args.difficulty, args.trivial), indent=2))
@@ -296,6 +300,13 @@ def main(argv):
     problems = validate_gate(gate)
     if problems:
         print("\n".join(problems), file=sys.stderr)
+        return 2
+    if gate.get("pr") is not None and args.pr is not None and gate["pr"] != args.pr:
+        print(f"gate.py: the gate file is for #{gate['pr']}, not #{args.pr}", file=sys.stderr)
+        return 2
+    gate["pr"] = gate.get("pr") if gate.get("pr") is not None else args.pr
+    if gate["pr"] is None:
+        print("gate.py: the gate file names no pull request yet; add --pr N", file=sys.stderr)
         return 2
     skip = {s.strip() for s in args.skip.split(",") if s.strip()} | ({"ready"} if args.before_ready else set())
     report = evaluate(fetch(gate["repo"], gate["pr"]), gate, args.cwd, skip)

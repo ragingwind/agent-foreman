@@ -131,6 +131,9 @@ class Read(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         out = json.loads(r.stdout)
         self.assertEqual(out["stall_minutes"], 30)
+        self.assertEqual(set(out["disk"]), {"local"})
+        self.assertGreater(out["disk"]["local"]["free_gb"], 0)
+        self.assertEqual(out["disk"]["local"]["low"], out["disk"]["local"]["free_gb"] < 20)
         self.assertEqual({t: (v["machine"], v["stage"], v["stalled"]) for t, v in out["tasks"].items()},
                          {"issue-7": ("local", "test", False), "issue-8": ("local", "implement", True)})
         r = run("status.py", "read", "--project", "o/r", "--stall", "60", env=self.env)
@@ -141,7 +144,8 @@ class Read(unittest.TestCase):
         with self.assertRaises(ValueError):
             status.read_machine("ghost", "o/r", {})
         r = run("status.py", "read", "--project", "o/r", env=self.env)
-        self.assertEqual(json.loads(r.stdout), out)  # no runs yet
+        got = json.loads(r.stdout)
+        self.assertEqual({k: got[k] for k in out}, out)  # no runs yet
         self.assertEqual(run("status.py", "read", env=self.env).returncode, 2)
 
 
@@ -151,6 +155,18 @@ class Settings(unittest.TestCase):
 
     def tearDown(self):
         self.home.close()
+
+    def test_disk_floor(self):
+        cfg = config.load()
+        self.assertEqual(cfg["ops"]["disk_min_free_gb"], 20)
+        for bad in (-1, "20", True):
+            self.assertTrue(any("disk_min_free_gb" in p for p in config.validate(config.merge(cfg, {"ops": {"disk_min_free_gb": bad}}))), bad)
+        home = os.path.join(self.home.root, "h")
+        os.makedirs(home)
+        self.home.write("state/herdr-foreman/projects/o-r/project.json",
+                        {"repo": "o/r", "machines": {"local": "/src/r"}, "ops": {"disk_min_free_gb": 10 ** 9}})
+        r = run("status.py", "read", "--project", "o/r", env={"HOME": home})
+        self.assertTrue(json.loads(r.stdout)["disk"]["local"]["low"])
 
     def test_report_and_stall_minutes(self):
         cfg = config.load()

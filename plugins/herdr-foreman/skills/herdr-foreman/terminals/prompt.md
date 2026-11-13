@@ -60,7 +60,7 @@ also posts it on the pull request under its fixed title.
 | --- | --- | --- |
 | 0 | `ok` | Read the result |
 | 5 | The run failed: a usage limit, a gateway error, no result | `config.py tier … --skip <profile>`, then run again with the next profile |
-| 3 | Setup needed | `herdr-foreman-setup` |
+| 3 | Setup needed | `config.py check --project <repo>` names it; `/setup-foreman` fixes it |
 | 4 | The gateway's token variable is not set on that machine | Tell the person the variable and the machine |
 
 ## Limits

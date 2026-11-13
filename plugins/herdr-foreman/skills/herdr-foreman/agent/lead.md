@@ -66,10 +66,11 @@ How many rounds a loop takes is the foreman's call; report every round.
 
 ## Gate
 
-The brief names a gate file. Before you report ready, run it in your clone:
+The brief names a gate file. Before you report ready, run it in your clone,
+with your pull request's number:
 
 ```bash
-python3 <bundle>/scripts/gate.py run <gate file> --cwd <your clone> --before-ready
+python3 <bundle>/scripts/gate.py run <gate file> --pr <N> --cwd <your clone> --before-ready
 ```
 
 Exit 0: mark the pull request ready and post the result. Exit 6: fix what it

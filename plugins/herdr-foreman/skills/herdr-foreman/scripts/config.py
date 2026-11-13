@@ -16,8 +16,9 @@ Usage:
   config.py show [--project OWNER/REPO]
   config.py check [--project OWNER/REPO]
   config.py save user|project [--project OWNER/REPO] [--dry-run]   (full settings as JSON on stdin)
-  config.py member MACHINE PATH [--agent KIND]   (is the checkout there and ready for that agent kind)
+  config.py check-machine MACHINE PATH --project OWNER/REPO   (is the machine ready for the project's agents)
   config.py plugin-dir-candidates   (this session's --plugin-dir directories, herdr-foreman left out)
+  config.py skills [--plugin-dir DIR ...]   (skills with these directories added, nothing saved)
   config.py tier --difficulty low|mid|high --role ROLE [--skip PROFILE,...]
   config.py profiles | projects | machines | skills
 
@@ -30,7 +31,6 @@ import copy
 import json
 import os
 import re
-import shlex
 import string
 import subprocess
 import sys
@@ -386,6 +386,9 @@ def validate(cfg, saved=None, skills=None, project=False):
         problems.append(f"ops: placement must be one of {', '.join(PLACEMENTS)}")
     if not isinstance(ops.get("disk_check"), bool):
         problems.append("ops: disk_check must be true or false")
+    floor = ops.get("disk_min_free_gb")
+    if not isinstance(floor, (int, float)) or isinstance(floor, bool) or floor < 0:
+        problems.append("ops: disk_min_free_gb must be a number of gigabytes, 0 or more")
     if not isinstance(ops.get("after_merge", []), list):
         problems.append("ops: after_merge must be a list of steps")
 
@@ -421,23 +424,63 @@ def herdr_machines():
     return machines
 
 
-def member_state(label, path, machines=None, kind=adapters.DEFAULT):
-    """Whether a member's checkout is there and ready for that agent kind:
-    {"checkout": bool, "ready": bool, "reason": text}. The check itself is the
-    adapter's CHECKOUT_PROBE, run on the member's machine."""
-    probe = adapters.get(kind).CHECKOUT_PROBE
+# Runs on the machine, in its login shell: argv = path, owner/repo, agent
+# executable, token variable names. Prints what a project machine needs.
+MACHINE_PROBE = """
+import json, os, re, shutil, subprocess, sys
+path, repo, exe, names = os.path.expanduser(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4:]
+out = {"checkout": os.path.isdir(os.path.join(path, ".git")), "origin": "", "origin_matches": False}
+if out["checkout"]:
+    r = subprocess.run(["git", "-C", path, "remote", "get-url", "origin"], capture_output=True, text=True)
+    out["origin"] = r.stdout.strip()
+    url = re.sub(r"\\.git$", "", out["origin"].rstrip("/"))
+    out["origin_matches"] = bool(re.search(r"[:/]" + re.escape(repo) + "$", url, re.I))
+out["tools"] = {t: bool(shutil.which(t)) for t in (exe, "git", "gh", "python3")}
+out["tokens"] = {n: bool(os.environ.get(n)) for n in names}
+print(json.dumps(out))
+"""
+
+
+def token_names(cfg):
+    """The token variables the tiers' profiles need, by name."""
+    names = []
+    for tier in cfg.get("tiers", {}).values():
+        for profile in tier:
+            gateway = cfg["gateways"].get(cfg["profiles"].get(profile, {}).get("gateway"), {})
+            if gateway.get("token_env") and gateway["token_env"] not in names:
+                names.append(gateway["token_env"])
+    return names
+
+
+def machine_state(label, path, repo, cfg, machines=None):
+    """Whether a machine is ready for the project's agents: the checkout at
+    `path` is there and its origin is `repo`; the agent program, git, gh and
+    python3 are on PATH; the tiers' token variables are set (names only).
+    A remote machine is checked inside its login shell, as agents start
+    there. Returns the probe's answer with "ready" and "problems"."""
+    from remote import remote_argv
+    exe = adapters.get(adapters.kind_of(cfg["profiles"][cfg["launch"]["profile"]])).EXECUTABLE
+    args = [path, repo, exe, *token_names(cfg)]
     if label == LOCAL:
-        argv = [sys.executable, "-c", probe, path]
+        argv = [sys.executable, "-c", MACHINE_PROBE, *args]
     else:
         machines = herdr_machines() if machines is None else machines
         if label not in machines:
             raise ValueError(f"{label} is not a saved herdr machine")
-        argv = ["ssh", "-o", "BatchMode=yes", machines[label]["target"],
-                "python3 -c " + shlex.quote(probe) + " " + shlex.quote(path)]
+        argv = remote_argv(machines[label]["target"], ["python3", "-c", MACHINE_PROBE, *args])
     out = subprocess.run(argv, capture_output=True, text=True)
     if out.returncode != 0:
-        raise RuntimeError(f"{label}: {out.stderr.strip()[:300]}")
-    return json.loads(out.stdout)
+        raise RuntimeError(f"{label}: {out.stderr.strip()[-300:]}")
+    state = json.loads(out.stdout.strip().splitlines()[-1])  # a login shell may print lines first
+    problems = []
+    if not state["checkout"]:
+        problems.append(f"no git checkout at {path}")
+    elif not state["origin_matches"]:
+        problems.append(f"the checkout's origin is {state['origin'] or 'not set'}, not {repo}")
+    problems += [f"{tool} is not on PATH in the login shell" for tool, ok in state["tools"].items() if not ok]
+    problems += [f"token variable {name} is not set in the login shell" for name, ok in state["tokens"].items()
+                 if not ok]
+    return {**state, "ready": not problems, "problems": problems}
 
 
 def is_self(plugin_dir):
@@ -592,9 +635,10 @@ def plugin_dirs(cfg):
 
 def _cli(argv):
     ap = argparse.ArgumentParser(prog="config.py", description="herdr-foreman settings")
-    ap.add_argument("command", choices=["paths", "show", "check", "save", "member", "profiles",
+    ap.add_argument("command", choices=["paths", "show", "check", "save", "check-machine", "profiles",
                                         "projects", "machines", "skills", "plugin-dir-candidates", "tier"])
-    ap.add_argument("rest", nargs="*", help="save: user or project; member: MACHINE PATH")
+    ap.add_argument("rest", nargs="*", help="save: user or project; check-machine: MACHINE PATH")
+    ap.add_argument("--plugin-dir", action="append", default=[], help="skills: a plugin directory to add")
     ap.add_argument("--project", metavar="OWNER/REPO")
     ap.add_argument("--difficulty", choices=TIERS)
     ap.add_argument("--role", default="lead")
@@ -641,16 +685,16 @@ def _cli(argv):
             return EXIT_SETUP_NEEDED
         print(json.dumps({"path": path, "written": written, "dry_run": args.dry_run}, indent=2,
                          ensure_ascii=False))
-    elif args.command == "member":
-        if len(args.rest) != 2:
-            print("config.py: member needs MACHINE PATH", file=sys.stderr)
+    elif args.command == "check-machine":
+        if len(args.rest) != 2 or not args.project:
+            print("config.py: check-machine needs MACHINE PATH and --project OWNER/REPO", file=sys.stderr)
             return 2
         try:
-            state = member_state(*args.rest, kind=args.agent)
+            state = machine_state(*args.rest, args.project, load(args.project))
         except (ValueError, RuntimeError) as e:
             print(f"config.py: {e}", file=sys.stderr)
             return 1
-        print(json.dumps(state))
+        print(json.dumps(state, indent=2))
         return 0 if state["ready"] else EXIT_SETUP_NEEDED
     elif args.command == "profiles":
         cfg = load(args.project)
@@ -684,7 +728,8 @@ def _cli(argv):
         for d in session_plugin_dirs():
             print(d)
     elif args.command == "skills":
-        for ref, path in local_skills(plugin_list(plugin_dirs(load(args.project)))).items():
+        dirs = plugin_dirs(load(args.project)) + [os.path.abspath(os.path.expanduser(d)) for d in args.plugin_dir]
+        for ref, path in local_skills(plugin_list(dirs)).items():
             print(f"{ref:44} {path}")
     return 0
 

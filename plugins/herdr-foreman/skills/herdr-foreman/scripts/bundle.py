@@ -162,7 +162,7 @@ def build(repo, extra, kind=adapters.DEFAULT, project_names=()):
     warning; a skill named in `extra` or in bundle.skills must exist.
     """
     if not os.path.exists(project_path(repo)):
-        fail(EXIT_SETUP_NEEDED, f"project {repo} has no settings yet; run herdr-foreman-setup")
+        fail(EXIT_SETUP_NEEDED, f"project {repo} has no settings yet; run /setup-foreman")
     cfg = load(repo)
     problems = validate(cfg, project=True)
     if problems:
@@ -179,7 +179,7 @@ def build(repo, extra, kind=adapters.DEFAULT, project_names=()):
             if name in required:
                 fail(EXIT_SETUP_NEEDED, f"skill not available on this machine: {value} (config.py skills lists the "
                                         f"ones that are; a plugin loaded with --plugin-dir goes in plugin_dirs: "
-                                        f"/herdr-foreman-setup plugin dirs)")
+                                        f"/setup-foreman, loop)")
             warnings.append(value)
     shorts = [r.split(":")[-1] for r in refs]
     if len(set(shorts)) != len(shorts):

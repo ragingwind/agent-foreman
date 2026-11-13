@@ -88,6 +88,7 @@ class Checks(unittest.TestCase):
 
     def test_validate(self):
         self.assertEqual(gate.validate_gate({"repo": "o/r", "pr": 1, "checks": [{"check": "ci"}]}), [])
+        self.assertEqual(gate.validate_gate({"repo": "o/r", "pr": None, "checks": [{"check": "ci"}]}), [])
         p = gate.validate_gate({"repo": "o/r", "pr": "1", "checks": [{"check": "magic"}, {"check": "verdict"},
                                                                      {"check": "command"}, {"check": "ci", "severity": "x"}]})
         for words in ("pr must be a number", "'magic'", "needs a title", "needs run", "severity must be"):
@@ -185,6 +186,17 @@ class Cli(unittest.TestCase):
         r = run("gate.py", "run", g, "--before-ready", env=self.env)
         self.assertEqual(r.returncode, 6)
         self.assertIn("verdict Code review", json.loads(r.stdout)["blocked"])
+
+    def test_pull_request_named_at_run_time(self):
+        g = self.home.write("gate.json", gate.template(config.load(), "o/r", None, "low", False))
+        self.assertEqual(run("gate.py", "run", g, "--before-ready", env=self.env).returncode, 2)  # no PR yet
+        r = run("gate.py", "run", g, "--pr", "7", "--before-ready", env=self.env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        named = self.home.write("named.json", gate.template(config.load(), "o/r", 7, "low", False))
+        self.assertEqual(run("gate.py", "run", named, "--pr", "7", "--before-ready", env=self.env).returncode, 0)
+        r = run("gate.py", "run", named, "--pr", "8", env=self.env)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("for #7, not #8", r.stderr)
 
     def test_template_and_bad_arguments(self):
         r = run("gate.py", "template", "--project", "o/r", "--pr", "7", "--difficulty", "mid")

@@ -19,7 +19,8 @@ project's machines (one SSH call per remote machine) and prints, per task:
 the last stage line with its step, the last heartbeat and its agent, the
 minutes since the last line, and `stalled` when that is more than --stall
 minutes (default: the settings' ops.stall_minutes) and the lead is not at a
-stop point.
+stop point. Per machine it also prints the free disk space of the home
+directory's disk, `low` under the settings' ops.disk_min_free_gb.
 
 Exit codes: 2 = bad arguments, 1 = a machine could not be read.
 """
@@ -39,15 +40,17 @@ EVENTS = ["start", "end", "progress", "stop"]
 BEATS = ["heartbeat", "turn-end"]
 TAIL = 200
 
-# Runs on the machine: prints {task: [last lines]} for one project.
+# Runs on the machine: prints {"tasks": {task: [last lines]}, "free_gb": free
+# space of the home directory's disk} for one project.
 READER = """
-import glob, json, os, sys
+import glob, json, os, shutil, sys
 root = os.path.expanduser(sys.argv[1])
-out = {}
+tasks = {}
 for path in sorted(glob.glob(os.path.join(root, "*", "status.jsonl"))):
     with open(path, encoding="utf-8", errors="replace") as f:
-        out[os.path.basename(os.path.dirname(path))] = f.read().splitlines()[-int(sys.argv[2]):]
-print(json.dumps(out))
+        tasks[os.path.basename(os.path.dirname(path))] = f.read().splitlines()[-int(sys.argv[2]):]
+free = shutil.disk_usage(os.path.expanduser("~")).free
+print(json.dumps({"tasks": tasks, "free_gb": round(free / 1024 ** 3, 1)}))
 """
 
 
@@ -94,7 +97,8 @@ def summarize(lines, stall_minutes, now=None):
 
 
 def read_machine(label, repo, saved):
-    """{task: [lines]} from one machine. `saved`: herdr machines, label -> info."""
+    """{"tasks": {task: [lines]}, "free_gb": n} from one machine. `saved`:
+    herdr machines, label -> info."""
     root = project_root(repo)
     if label == LOCAL:
         argv = [sys.executable, "-c", READER, root, str(TAIL)]
@@ -170,16 +174,19 @@ def main(argv):
     stall = args.stall if args.stall is not None else cfg["ops"]["stall_minutes"]
     machines = [args.machine] if args.machine else list(cfg.get("machines", {}))
     saved = herdr_machines() if any(m != LOCAL for m in machines) else {}
-    report, failed = {}, []
+    floor = cfg["ops"]["disk_min_free_gb"]
+    report, disk, failed = {}, {}, []
     for label in machines:
         try:
-            tasks = read_machine(label, args.project, saved)
+            found = read_machine(label, args.project, saved)
         except (ValueError, RuntimeError) as e:
             failed.append(str(e))
             continue
-        for task, lines in tasks.items():
+        disk[label] = {"free_gb": found["free_gb"], "low": found["free_gb"] < floor}
+        for task, lines in found["tasks"].items():
             report[task] = {"machine": label, **summarize(lines, stall)}
-    print(json.dumps({"stall_minutes": stall, "tasks": report, "unreadable": failed}, indent=2, ensure_ascii=False))
+    print(json.dumps({"stall_minutes": stall, "tasks": report, "disk": disk, "unreadable": failed}, indent=2,
+                     ensure_ascii=False))
     return 1 if failed else 0
 
 

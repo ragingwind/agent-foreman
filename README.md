@@ -6,7 +6,7 @@ Code plugin marketplace: add it once, then install the plugins you want.
 
 | Plugin | What it does |
 | --- | --- |
-| [herdr-foreman](plugins/herdr-foreman) | Runs one Claude Code session as the foreman of many coding agents spread over your herdr machines: places tasks, hands out briefs and skills, watches state and reports per project |
+| [herdr-foreman](plugins/herdr-foreman) | Turns one Claude Code session into the foreman of your coding agents across herdr machines: it sizes each task, hands it to a lead agent in its own clone, checks the result in code, and merges it or hands the merge to you |
 
 ## Install
 
@@ -32,7 +32,7 @@ runs on your machines.
 ```bash
 python3 -m unittest discover -s tests
 claude plugin validate .
-claude plugin validate plugins/herdr-foreman
+claude plugin validate --strict plugins/herdr-foreman
 ```
 
 ## License
