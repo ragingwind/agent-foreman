@@ -33,6 +33,7 @@ Its work is the agents, the ledger and the reports to the person.
 | `scripts/status.py` | Status files: `path` for a task, `note` (the lead's stage lines), `read` (every task on the project's machines: last stage, last heartbeat, minutes since, stalled) |
 | `scripts/heartbeat.py` | The bundle's hook command: appends heartbeats to the status file launch.py `--status` gave the agent |
 | `scripts/log.py` | The project's log: `add` an event, `tail` the last ones |
+| `scripts/clone.py` | Agent clones under the work root: `make` (origin set to GitHub), `check` (made by the foreman: the only folders whose trust question it answers), `remove` (refuses to lose work) |
 | `defaults.json` | The standard settings |
 | `terminals/herdr.md`, `terminals/prompt.md` | The terminal layer: how to open, start, send to, read, wait on and close an agent, with herdr panes or in prompt mode; the same for every agent kind |
 | `adapters/<kind>.md`, `scripts/adapters/` | What differs per agent kind: start errors, input line, exit, command, skill names, transcript. Only `claude` today |
@@ -118,13 +119,15 @@ agent renames the tab at each stage with the label the settings give.
 
 `terminals/herdr.md` "Start an agent" has the commands:
 
-1. Open the task's tab on the chosen member.
+1. Make the lead's clone and open the task's tab in it (`terminals/herdr.md`
+   "Open a task tab").
 2. Make a session id with `uuidgen | tr A-Z a-z`.
 3. Run `python3 <bundle>/scripts/launch.py <profile> --name <name> --session-id <id>
    --status <path>` in the tab's pane, with the path `status.py path --project
    <repo> --task <task>` prints.
 4. Wait until the agent is idle, then rename it to `<name>`. The rename
-   succeeding is the proof the agent runs.
+   succeeding is the proof the agent runs. A trust question first: the
+   adapter page, "Trust question".
 5. Send the brief.
 6. Record the row: machine, pane, tab, name, profile, session id, bundle
    hash. An agent that never shows in `H agent list` did not start; do not

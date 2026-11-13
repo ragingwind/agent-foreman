@@ -7,18 +7,46 @@ What is particular to Claude Code agents. The code side is
 | Item | Claude Code |
 | --- | --- |
 | herdr kind | `claude` |
-| Command | `claude -w <name> --name <name> --session-id <id> --model <model> [--dangerously-skip-permissions] --plugin-dir <bundle>` |
+| Command | `claude --name <name> --session-id <id> --model <model> [--dangerously-skip-permissions] --plugin-dir <bundle>`, in the agent's clone (`-w <name>` only with `launch.worktree` on) |
 | Skills in a brief | `foreman-kit:<skill>` |
 | Transcript | `~/.claude/projects/*/<session id>.jsonl`, read by `transcript.py` |
 | Prompt mode | `claude -p --output-format json` with the prompt on stdin; `launch.py --print` runs it and keeps the JSON |
-| Checkout ready | A git checkout that Claude Code has been trusted in (`config.py member`) |
+| Trust | Asked once per folder; a trusted parent folder does not count. Answered for clones the foreman made ("Trust question") |
 
 ## Start errors
 
-- `Workspace trust not yet accepted`: Claude Code has never been trusted in
-  that checkout on that machine, and a worktree session cannot start. Tell
-  the person to run `claude` once in the checkout there and accept the trust
-  question. Never accept it for them.
+- `Workspace trust not yet accepted`: only a worktree session (`-w`, with
+  `launch.worktree` on) shows it; it cannot start in a folder Claude Code was
+  never trusted in. Tell the person to run `claude` once in that checkout and
+  accept the trust question. Never accept it for them.
+
+## Trust question
+
+A new folder, such as a fresh clone, opens with this before the input line:
+
+```
+ Accessing workspace:
+
+ <folder>
+ ...
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel
+```
+
+- herdr's state for it varies: `unknown` right after the start in one run,
+  `blocked` about 30 seconds later in another. Do not wait on the state; read
+  the pane.
+- The cursor starts on **No, exit**; Enter alone ends the agent.
+- Answer it only when `clone.py check <folder>` (on that machine) says
+  `"ours": true`: `H pane send-keys <pane> Down`, then `H pane send-keys
+  <pane> Enter`. The input line follows. Claude Code then records the folder
+  as trusted in `~/.claude.json`.
+- Any other folder's trust question goes to the person. Never answer it.
+- Checked 2026-11-13 with Claude Code 2.1.322: `/` was trusted and a folder
+  under it still asked. A machine where bypass mode was never accepted may
+  show that confirmation next; it was not seen here, so it goes to the person.
 
 ## Screen
 
@@ -42,9 +70,10 @@ person's unsent input: leave it and report it.
 1. Type the command and press Enter as two calls:
    `H pane send-text <pane> '/exit'`, then `H pane send-keys <pane> Enter`.
    (`send-keys <pane> '/exit'` fails with `unsupported key`.)
-2. Read the pane. A worktree session asks "Keep worktree" (1) or "Remove
-   worktree" (2). When the agent's changes are pushed, `H pane send-keys
-   <pane> Down` then `Enter`; the pane prints `Worktree removed.`.
+2. Read the pane. Only a worktree session asks "Keep worktree" (1) or
+   "Remove worktree" (2). When the agent's changes are pushed, `H pane
+   send-keys <pane> Down` then `Enter`; the pane prints `Worktree removed.`.
 3. When the agent is still in `H agent list`, close the tab (`H tab close
-   <tab>`), which ends the process, then remove the worktree on that machine
-   with `git -C <checkout> worktree remove <path>`.
+   <tab>`), which ends the process. A worktree left behind is removed with
+   `git -C <checkout> worktree remove <path>`; a clone with `clone.py
+   remove`.

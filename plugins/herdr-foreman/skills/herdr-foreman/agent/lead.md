@@ -30,9 +30,12 @@ that stage again.
 **A step a role acts in**: start that role's agent, as many as the row's
 count, each for this round only:
 
-1. Give it its own clone at the pull request's head:
-   `git clone --quiet <your clone> <run dir>/<role>-<n>/repo` and check out the
-   head SHA there.
+1. Give it its own clone at the pull request's head, from yours:
+   `python3 <bundle>/scripts/clone.py make --project <repo> --task <task>
+   --agent <role>-<n> --from <your clone> --ref <head SHA> --fresh`, adding
+   `--no-push` for a role whose prompt says not to push (a reviewer, a
+   retracer). Use the `path` it prints. Its `origin` is GitHub, not your
+   clone, so `gh` works there; with `--no-push`, `git push` to it fails.
 2. Write its prompt, the role's fixed prompt filled in, to
    `<run dir>/<role>-<n>.prompt.md`. Add nothing else to it.
 3. Start each agent with the profile the loop table gives it, adding what
@@ -43,9 +46,12 @@ count, each for this round only:
      [--disallow <tools>]`
    - mode `pane`: `herdr pane split "$HERDR_PANE_ID" --direction right --cwd
      <its clone> --no-focus`, run `launch.py <profile> --name <task>-<role>-<n>
-     --status <your status file>` in the new pane, then `herdr agent prompt
-     <pane> "Read <prompt> and do what it says." --wait`. Close the pane when
-     it has answered.
+     --status <your status file>` in the new pane. A new clone first asks
+     whether to trust the folder (the cursor starts on "No, exit"): when
+     `clone.py check <its clone>` says `"ours": true`, answer with `herdr pane
+     send-keys <pane> Down`, then `Enter`; never for any other folder. Then
+     `herdr agent prompt <pane> "Read <prompt> and do what it says." --wait`.
+     Close the pane when it has answered.
 
    `--status` lets its hooks add heartbeats to your status file, so the
    foreman sees the task alive while you wait on it.
@@ -131,5 +137,7 @@ under `blocked` in the status file and go on with what does not need them.
 ## Cleanup
 
 Remove what the run made: build directories, containers and volumes of stacks
-it started, the role agents' clones, temporary directories. Keep your clone
-and the branch until the pull request merges.
+it started, temporary directories, and each round's role clones
+(`clone.py remove --project <repo> --task <task> --agent <role>-<n>`). Keep
+your clone and the branch until the pull request merges; the foreman removes
+them.

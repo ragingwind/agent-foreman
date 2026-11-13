@@ -23,9 +23,13 @@ class Launch(unittest.TestCase):
     def test_skill_mode_dry_run(self):
         r = run("launch.py", "--name", "issue-1", "--session-id", "abc-123", "--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("command: claude -w issue-1 --name issue-1 --session-id abc-123 --model sonnet "
+        # Standard: the agent starts in its own clone, so no worktree.
+        self.assertIn("command: claude --name issue-1 --session-id abc-123 --model sonnet "
                       "--dangerously-skip-permissions", r.stdout)
         self.assertNotIn("--plugin-dir", r.stdout)
+        self.home.write("config/herdr-foreman/config.json", {"launch": {"worktree": True}})
+        r = run("launch.py", "--name", "issue-1", "--dry-run")
+        self.assertIn("command: claude -w issue-1 --name issue-1", r.stdout)
 
     def test_bundle_mode_adds_plugin_dir_and_uses_bundle_settings(self):
         root = os.path.join(self.home.root, "bundle")

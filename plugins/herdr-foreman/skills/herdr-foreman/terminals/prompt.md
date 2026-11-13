@@ -7,7 +7,7 @@ its own; the foreman starts helpers this way when no one needs to watch.
 
 ## Start
 
-In the agent's own clone, never in a shared checkout:
+In the agent's own clone (`clone.py make`), never in a shared checkout:
 
 ```bash
 cd <clone> && python3 <bundle>/scripts/launch.py <profile> --print \

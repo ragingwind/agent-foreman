@@ -156,9 +156,9 @@ Verdict comments have fixed titles with the SHA they judged:
   four tools).
 - Reviewers and retracers start without edit tools (`--disallow
   Edit,Write,NotebookEdit`). That narrows them; it is not a sandbox. Their own
-  clone, whose remote is the lead's clone, and the gate's check that each
-  verdict is at the head SHA, keep their writes from reaching the pull
-  request. A role agent never starts other agents.
+  clone, whose push to origin fails (`clone.py make --no-push`), and the
+  gate's check that each verdict is at the head SHA, keep their writes from
+  reaching the pull request. A role agent never starts other agents.
 - How many rounds a loop may take is the foreman's call, from the round
   count in the status file.
 
@@ -233,16 +233,30 @@ Pass conditions are code, not prose (`scripts/gate.py`).
 
 ## 10. Isolation and trust
 
-- Every agent that touches files works in its own clone:
+- Every agent that touches files works in its own clone (`clone.py make`):
   `~/.cache/herdr-foreman/work/<project>/<task>/<agent>`. It starts inside
-  that clone, never in a shared checkout.
-- A new clone is an untrusted folder. Prompt mode needs no trust step there
-  and still loads the clone's project skills (checked 2026-11-13). When Claude
-  Code shows the trust question in a pane whose folder is a clone the foreman
-  made under that work root, the foreman answers "Yes, I trust this folder" with herdr keys. Any
-  other folder's trust question goes to the person. (The person allowed this
-  on 2026-11-13.)
-- Cleanup removes the task's clones, run directory and stacks.
+  that clone, never in a shared checkout, so `launch.worktree` is off.
+  - The lead's clone comes from the project's checkout on that machine, a
+    role agent's from the lead's clone. Either way `origin` is then set to
+    the source's GitHub URL and fetched: without it `gh` fails ("none of the
+    git remotes … point to a known GitHub host", checked 2026-11-13).
+  - A clone starts detached at the task's base or the head SHA, with no
+    local branch, and holds a marker in `.git` that the foreman made it.
+  - A judging agent's clone gets `--no-push`: origin's push URL points
+    nowhere, so `gh` still works and `git push` to origin fails.
+- A new clone is an untrusted folder, and a trusted parent does not count
+  (checked 2026-11-13: `/` was trusted, a folder under it still asked).
+  - Prompt mode needs no trust step and still loads the clone's project
+    skills (checked 2026-11-13).
+  - In a pane, Claude Code asks first, with the cursor on "No, exit"; herdr
+    shows the agent `unknown` or `blocked`, so the foreman reads the pane. When `clone.py check` says the folder is a
+    clone the foreman made, the foreman (or the lead, for its own panes)
+    answers Yes with herdr keys: `Down`, `Enter`. Any other folder's trust
+    question goes to the person. (The person allowed this on 2026-11-13.)
+- Cleanup (`clone.py remove`) removes the task's clones and run directory.
+  It refuses a folder without the marker, one holding the caller's working
+  directory, and, unless forced, a clone with changes to tracked files or
+  commits that are on no remote.
 
 ## 11. Records
 

@@ -27,16 +27,23 @@ only for a workspace it made.
 
 ## Open a task tab
 
+Every agent starts in its own clone, never in the person's checkout. Make
+the lead's first, on the tab's machine, at the task's base:
+
 ```bash
-H tab create --workspace <w> --cwd <checkout> --label <task> --no-focus
+python3 <skill>/scripts/clone.py make --project <repo> --task <task> --agent lead --ref origin/<base> --machine <label>
+H tab create --workspace <w> --cwd <clone> --label <task> --no-focus
 ```
+
+`<clone>` is the `path` it prints. `status: exists` means the task already
+has one; it is used as it is.
 
 The pane id is `.result.root_pane.pane_id`; the tab id is `.result.tab.tab_id`.
 
 ## Add a helper pane
 
 ```bash
-H pane split <implementer pane> --direction right --cwd <checkout> --no-focus
+H pane split <implementer pane> --direction right --cwd <its clone> --no-focus
 ```
 
 The new pane id is `.result.pane.pane_id`.
@@ -56,6 +63,9 @@ H agent rename <pane> <name>
 - The first waits right after `pane run` fail with `agent_not_found` while
   the app starts. Repeat the wait up to six times; do not run the command
   again.
+- A new clone first shows the agent's trust question; herdr may show it as
+  `unknown` or `blocked`. When a wait does not return idle, read the pane and
+  follow the adapter page, "Trust question".
 - A wait that returns is not proof the agent runs: an agent that fails at
   start is seen for a moment, then exits. `H agent rename` succeeding is the
   proof; on `agent_not_found`, read the pane.
