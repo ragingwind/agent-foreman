@@ -4,21 +4,22 @@
 A task's status file is `~/.cache/herdr-foreman/runs/<owner>-<repo>/<task>/status.jsonl`
 on its machine; launch.py --status hands it to an agent as HF_STATUS_FILE.
 The bundle's hooks append `heartbeat` and `turn-end` lines; the lead appends
-a `start`, `end` or `progress` line for its stages and a `stop` line at a
-stop point.
+a `start`, `end` or `progress` line for its stages (naming the step) and a
+`stop` line at a stop point.
 
 Usage:
   status.py path --project OWNER/REPO --task TASK
-  status.py note --stage ID --event start|end|progress|stop [--round N] [--done TEXT]
-                 [--next TEXT] [--blocked TEXT] [--runs JSON] [--file FILE]
+  status.py note --stage ID [--step ID] --event start|end|progress|stop [--round N]
+                 [--done TEXT] [--next TEXT] [--blocked TEXT] [--runs JSON] [--file FILE]
   status.py read --project OWNER/REPO [--machine MACHINE] [--stall MINUTES]
 
 `path` prints the path with `~`, for the machine to expand. `note` writes to
 --file, or to HF_STATUS_FILE. `read` reads every task's status file on the
 project's machines (one SSH call per remote machine) and prints, per task:
-the last stage line, the last heartbeat and its agent, the minutes since the
-last line, and `stalled` when that is more than --stall minutes (default: the
-settings' ops.stall_minutes) and the lead is not at a stop point.
+the last stage line with its step, the last heartbeat and its agent, the
+minutes since the last line, and `stalled` when that is more than --stall
+minutes (default: the settings' ops.stall_minutes) and the lead is not at a
+stop point.
 
 Exit codes: 2 = bad arguments, 1 = a machine could not be read.
 """
@@ -85,7 +86,8 @@ def summarize(lines, stall_minutes, now=None):
     last = parse_time(rows[-1].get("time")) if rows else None
     since = None if last is None else round((now - last) / 60, 1)
     stopped = stage.get("event") == "stop"
-    return {"stage": stage.get("stage"), "stage_event": stage.get("event"), "round": stage.get("round"),
+    return {"stage": stage.get("stage"), "step": stage.get("step"), "stage_event": stage.get("event"),
+            "round": stage.get("round"),
             "done": stage.get("done"), "next": stage.get("next"), "blocked": stage.get("blocked") or "",
             "last_beat": beat.get("event"), "last_beat_agent": beat.get("agent"), "minutes_since": since,
             "stopped": stopped, "stalled": not stopped and (since is None or since > stall_minutes)}
@@ -116,6 +118,7 @@ def main(argv):
     ap.add_argument("--stall", type=float)
     ap.add_argument("--file")
     ap.add_argument("--stage")
+    ap.add_argument("--step", default="")
     ap.add_argument("--event", choices=EVENTS)
     ap.add_argument("--round", type=int)
     ap.add_argument("--done", default="")
@@ -151,7 +154,7 @@ def main(argv):
         if not isinstance(runs, list):
             print("status.py: --runs must be a JSON list", file=sys.stderr)
             return 2
-        row = {"time": now_iso(), "stage": args.stage, "event": args.event, "round": args.round,
+        row = {"time": now_iso(), "stage": args.stage, "step": args.step, "event": args.event, "round": args.round,
                "done": args.done, "next": args.next, "blocked": args.blocked, "runs": runs}
         path = os.path.expanduser(path)
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)

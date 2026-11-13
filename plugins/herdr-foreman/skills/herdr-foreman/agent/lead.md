@@ -5,26 +5,29 @@ brief. You do the main work, start the task's other agents, and report. The
 brief holds:
 
 - the task, its difficulty and base, and your clone (work only there);
-- the loop for this task: a table of stages, the roles with their profiles in
-  order, and each role's fixed prompt;
+- the loop for this task: a table of stages and their steps, the roles with
+  their profiles in order, and each role's fixed prompt;
 - the gate file. Your status file is `$HF_STATUS_FILE`, which launch.py set.
 
-The brief confirms the whole loop: do not stop between stages to ask whether
+The brief confirms the whole loop: do not stop between steps to ask whether
 to go on.
 
-## Stages
+## Stages and steps
 
-Work through the loop table from the first row. Each row gives the stage,
-who acts, its tab label, what it does, its skills, and where each outcome
-goes. Use the skills by the names the table gives.
+Work through the loop table from the first row. Each row is one step; a
+stage is the run of rows under its name. A row gives the step, who acts,
+what it does, its skills, and where each outcome goes (a step in another
+stage shows that stage in brackets). Use the skills by the names the table
+gives.
 
 **Tab label**: when `HERDR_TAB_ID` is set, at the start of every stage run
-`herdr tab rename "$HERDR_TAB_ID" "<label>"` with the row's label, the round
-number filled in.
+`herdr tab rename "$HERDR_TAB_ID" "<label>"` with the stage's label, the
+round number filled in. An outcome that goes back to an earlier stage starts
+that stage again.
 
-**A stage you act in** (actor `lead`): do it yourself.
+**A step you act in** (actor `lead`): do it yourself.
 
-**A stage a role acts in**: start that role's agent, as many as the row's
+**A step a role acts in**: start that role's agent, as many as the row's
 count, each for this round only:
 
 1. Give it its own clone at the pull request's head:
@@ -70,11 +73,12 @@ you think is wrong goes in your report.
 ## Status file
 
 Your hooks add heartbeats to `$HF_STATUS_FILE` on their own. You add a stage
-line at the start and the end of every stage, during a long stage as often
-as the loop's **Status** line says, and a `stop` line at a stop point:
+line, naming the step you are at, at the start and the end of every stage,
+during a long stage as often as the loop's **Status** line says, and a `stop`
+line at a stop point:
 
 ```bash
-python3 <bundle>/scripts/status.py note --stage <id> --event start|end|progress|stop \
+python3 <bundle>/scripts/status.py note --stage <stage> --step <step> --event start|end|progress|stop \
   [--round <N>] --done "<one line>" --next "<one line>" [--blocked "<what>"] \
   [--runs '[{"role": "<role>", "profile": "<profile>", "verdict": "<verdict>", "cost": 0.0, "out": "<file>"}]']
 ```
@@ -87,7 +91,7 @@ The foreman reads the file on every check. No line for as long as the
 
 Stop only at these, and report:
 
-1. **Ready**: the last stage passed, the gate passed and the pull request is
+1. **Ready**: the last step passed, the gate passed and the pull request is
    marked ready.
 2. **A decision for the person**: a choice that changes what a user or
    caller observes, an interface, a schema or file format, or a core module,

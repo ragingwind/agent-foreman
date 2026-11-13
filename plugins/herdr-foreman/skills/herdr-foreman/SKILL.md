@@ -37,7 +37,7 @@ Its work is the agents, the ledger and the reports to the person.
 | `terminals/herdr.md`, `terminals/prompt.md` | The terminal layer: how to open, start, send to, read, wait on and close an agent, with herdr panes or in prompt mode; the same for every agent kind |
 | `adapters/<kind>.md`, `scripts/adapters/` | What differs per agent kind: start errors, input line, exit, command, skill names, transcript. Only `claude` today |
 | `agent/lead.md` | The lead's guide; every bundle carries it as `lead.md` |
-| `scripts/loop.py` | Loops: `show` the stages, `skills` (where each stage skill comes from on a machine), `render` one task's loop for its brief |
+| `scripts/loop.py` | Loops: `show` the stages and their steps, `skills` (where each step's skill comes from on a machine), `render` one task's loop for its brief |
 
 ## Words
 

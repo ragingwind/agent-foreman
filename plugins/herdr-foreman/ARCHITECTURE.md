@@ -56,7 +56,7 @@ transcript, checkout readiness, screen rules). Only `claude` exists.
 | Scope | What | File | Written by |
 | --- | --- | --- | --- |
 | Global | Model pool: gateways (token variable names only) and tiers | `~/.config/herdr-foreman/config.json` | `setup-models` |
-| Global | Standard loop: stages, skills per stage, variants per difficulty | same file | `setup-loop` |
+| Global | Standard loop: stages and steps, skills per step, variants per difficulty | same file | `setup-loop` |
 | Project | Machines (SSH devices) and the project path on each; loop changes for this project | `~/.local/state/herdr-foreman/projects/<owner>-<repo>/project.json` | `setup` |
 | Project | Memory: values only this project has (tag format, docs steps, disk floor, labels) | `.../projects/<owner>-<repo>/memory.md` | the foreman |
 
@@ -109,25 +109,29 @@ task's level and outcome (reverts, follow-up fixes) to tune them.
 
 ## 6. Loops
 
-A loop is a list of stages. Each stage is an event with an actor, the skills
-and tools it uses, the gate checks that close it, and where each outcome goes.
-`setup-loop` designs the stages and maps the tools; each project can change
-them.
+A loop is a list of steps grouped into stages. Each step has an actor, the
+skills and tools it uses, and where each outcome goes; the rules per
+difficulty (run, count, extra) are on the steps. A stage is a run of steps;
+tab labels, status lines and reports follow the stages. `setup-loop` designs
+both and maps the tools; each project can change them.
 
 **Work loop: one issue, one pull request** (standard)
 
-| # | Stage | Actor | Does | Next |
-| --- | --- | --- | --- | --- |
-| 1 | `start` | Lead | Labels, branch, handoff comment with the completion criteria restated; unless the change is trivial, the scenario drafted as the target | 2 |
-| 2 | `implement` | Lead | The failing check first, then the change; in a fix round, the findings | 3 |
-| 3 | `test` | Lead | New tests fail without the change and pass with it; related tests | 4 |
-| 4 | `refactor` | Lead | Restructure this round's diff without changing behavior | 5 |
-| 5 | `regression` | Lead | Rebase onto the current base (preparation), then the full suite on the result | 6 |
-| 6 | `scenario` | Lead | The manual scenario end to end through the surface the change reaches (API, CLI, UI, job), with raw output and screens for a UI; every change that is not trivial | 7 |
-| 7 | `pull-request` | Lead | Draft pull request: purpose, decisions with the alternatives ruled out, tests | 8 |
-| 8 | `code-review` | Code reviewer | Verdict on the diff, the test changes first, the rules, CI, the scenario or its skip reason | changes → 2, approved → 9 |
-| 9 | `scenario-retrace` | Retracer | Without the diff: the issue's criteria against the scenario, then the scenario in a fresh clone | code → 2, scenario → 6, pass → 10 |
-| 10 | `ready` | Lead | Run the gate, `gh pr ready`, handoff comment, report | stop |
+| Stage | # | Step | Actor | Does | Next |
+| --- | --- | --- | --- | --- | --- |
+| `plan` | 1 | `start` | Lead | Labels, branch, handoff comment with the completion criteria restated; unless the change is trivial, the scenario drafted as the target | 2 |
+| `build` | 2 | `implement` | Lead | The failing check first, then the change; in a fix round, the findings | 3 |
+| | 3 | `test` | Lead | New tests fail without the change and pass with it; related tests | 4 |
+| | 4 | `refactor` | Lead | Restructure this round's diff without changing behavior | 5 |
+| `verify` | 5 | `regression` | Lead | Rebase onto the current base (preparation), then the full suite on the result | 6 |
+| | 6 | `scenario` | Lead | The manual scenario end to end through the surface the change reaches (API, CLI, UI, job), with raw output and screens for a UI; every change that is not trivial | 7 |
+| `review` | 7 | `pull-request` | Lead | Draft pull request: purpose, decisions with the alternatives ruled out, tests | 8 |
+| | 8 | `code-review` | Code reviewer | Verdict on the diff, the test changes first, the rules, CI, the scenario or its skip reason | changes → 2 (build), approved → 9 |
+| | 9 | `scenario-retrace` | Retracer | Without the diff: the issue's criteria against the scenario, then the scenario in a fresh clone | code → 2 (build), scenario → 6 (verify), pass → 10 |
+| `handoff` | 10 | `ready` | Lead | Run the gate, `gh pr ready`, handoff comment, report | stop |
+
+A stage whose steps all do not run for a task is skipped. The management and
+epic loops have no stages: each of their steps is its own.
 
 A **scenario** drives the change end to end through whatever surface it
 reaches, as a user or caller would: an API, a CLI, a UI, a job. Only a
@@ -144,7 +148,7 @@ Verdict comments have fixed titles with the SHA they judged:
 | --- | --- | --- | --- | --- | --- |
 | low | low | one reviewer | scenario unless trivial; no retrace | — | foreman |
 | mid | mid | one reviewer | both unless trivial | — | foreman |
-| high | high | two reviewers on different models | both unless trivial | main-only checks at `regression` when the change reaches them | the person |
+| high | high | two reviewers on different models | both unless trivial | main-only checks at the `regression` step when the change reaches them | the person |
 
 - Reviewers on different models: the second takes the next profile of the
   tier, or of a lower tier, so their blind spots differ (Addy Osmani, "Agentic
@@ -173,7 +177,7 @@ the person approves.
 
 ## 7. Skills
 
-A stage names its skills. For each, the lead's machine is checked:
+A step names its skills. For each, the lead's machine is checked:
 
 1. A project skill (`<clone>/.claude/skills/<name>`) is used first.
 2. Otherwise a user skill from the person's machine. When the agent's machine
@@ -195,7 +199,7 @@ Pass conditions are code, not prose (`scripts/gate.py`).
   threshold), `size`, `ready`, and `command` (a command that must pass, such as
   a main-only check). A check can be a warning instead of a block.
 - `gate.py template` writes a task's gate file from its loop: one verdict
-  check per judging stage that runs, with that stage's count. The foreman
+  check per judging step that runs, with that step's count. The foreman
   adds commands or allowances (`tests-weakened` may allow what the issue asks
   for) and puts the file in the brief.
 - The lead runs `gate.py run <file> --cwd <clone> --before-ready` before it
@@ -255,5 +259,5 @@ Pass conditions are code, not prose (`scripts/gate.py`).
 | --- | --- |
 | `herdr-foreman` | The foreman |
 | `setup-models` | Gateways, models and tiers |
-| `setup-loop` | Stages, skills and tools per stage, variants per difficulty |
+| `setup-loop` | Stages and their steps, skills and tools per step, variants per difficulty |
 | `setup` | A project: machines and paths, checked |

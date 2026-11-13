@@ -76,9 +76,10 @@ class Problems(unittest.TestCase):
             self.assertTrue(any(word in x for x in p), word)
 
     def test_loop_problems_are_reported(self):
-        self.assertIn("loop: work must be a list of stages", self.problems({"loop": {"work": "x"}}))
-        p = self.problems({"labels": {"events": {"refactor": "{task} tidy", "nap": "{task}"}}})
-        self.assertFalse(any("'refactor'" in x for x in p))  # a stage id of the work loop takes a label
+        self.assertIn("loop: work must be a list of steps", self.problems({"loop": {"work": "x"}}))
+        p = self.problems({"labels": {"events": {"build": "{task} build", "refactor": "{task} tidy", "nap": "{task}"}}})
+        self.assertFalse(any("'build'" in x for x in p))  # a stage of the work loop takes a label
+        self.assertTrue(any("'refactor'" in x for x in p))  # a step does not: the tab follows the stages
         self.assertTrue(any("'nap'" in x for x in p))
 
     def test_unknown_skill_and_shared_short_name(self):

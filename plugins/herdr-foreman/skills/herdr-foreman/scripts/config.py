@@ -343,7 +343,7 @@ def validate(cfg, saved=None, skills=None, project=False):
     labels = cfg.get("labels", {})
     formats = {"default": labels.get("default", "")}
     for event, fmt in labels.get("events", {}).items():
-        if event not in stage_names and event not in LABEL_EVENTS:
+        if event not in stage_names and event not in LABEL_EVENTS:  # a tab follows the stages, not the steps
             problems.append(f"labels: {event!r} is neither a stage nor one of {', '.join(LABEL_EVENTS)}")
         formats[event] = fmt
     for event, fmt in formats.items():

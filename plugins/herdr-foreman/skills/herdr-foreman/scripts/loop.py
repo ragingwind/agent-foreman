@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
-"""Loops: stages as events, the roles that act in them, their skills, and how
-they change with a task's difficulty.
+"""Loops: stages made of steps, the roles that act in them, their skills, and
+how they change with a task's difficulty.
 
 Settings shape (`loop` in the settings):
 
   roles    name -> {"mode": "prompt"|"pane", "step": 0|1, "prompt": key, "deny_tools": [...],
                    "verdict_title": title of its verdict comment, "accept": [passing verdicts]}
   prompts  key -> fixed prompt text a role gets, filled in
-  work     the work loop's stages (one issue, one pull request), run by a lead
+  work     the work loop's steps (one issue, one pull request), run by a lead
   manage   the foreman's loop
   epic     the batch loop before an epic goes to main
 
-A stage: {"id", "actor", "does", "skills": [...], "next": {outcome: stage id
-or "stop"}, and optionally "run": {difficulty: "always"|"never"|
-"if-not-trivial"}, "count": {difficulty: n}, "extra": {difficulty: text}}.
-"if-not-trivial" runs unless the foreman marked the task trivial: docs or
-text only, a typo, or a rename that changes no behavior.
-The last outcome in "next" is the success path; a stage that does not run
-for a task passes straight to it.
+A loop is a list of steps. A step: {"id", "stage", "actor", "does",
+"skills": [...], "next": {outcome: step id or "stop"}, and optionally "run":
+{difficulty: "always"|"never"|"if-not-trivial"}, "count": {difficulty: n},
+"extra": {difficulty: text}}. "if-not-trivial" runs unless the foreman
+marked the task trivial: docs or text only, a typo, or a rename that changes
+no behavior. The last outcome in "next" is the success path; a step that
+does not run for a task passes straight to it.
+
+A stage is a run of consecutive steps with the same "stage"; a step without
+one is a stage of its own. Tab labels, status lines and reports follow the
+stages; the rules above stay on the steps. A stage whose steps all do not
+run for a task is skipped.
 
 Usage:
   loop.py show [--project OWNER/REPO] [--loop work|manage|epic]
@@ -74,19 +79,20 @@ def validate_loop(loop):
         if not isinstance(deny, list) or not all(isinstance(t, str) and t for t in deny):
             problems.append(f"loop: role {name}: deny_tools must be a list of tool names")
     if not loop.get("work"):
-        problems.append("loop: the work loop has no stages")
+        problems.append("loop: the work loop has no steps")
     for which in LOOPS:
-        stages = loop.get(which, [])
-        if not isinstance(stages, list):
-            problems.append(f"loop: {which} must be a list of stages")
+        steps = loop.get(which, [])
+        if not isinstance(steps, list):
+            problems.append(f"loop: {which} must be a list of steps")
             continue
-        ids = [s.get("id") for s in stages if isinstance(s, dict)]
-        for i, s in enumerate(stages):
-            where = f"loop: {which} stage {i + 1}"
+        ids = [s.get("id") for s in steps if isinstance(s, dict)]
+        problems += _stage_problems(which, [s for s in steps if isinstance(s, dict) and NAME.match(str(s.get("id", "")))])
+        for i, s in enumerate(steps):
+            where = f"loop: {which} step {i + 1}"
             if not isinstance(s, dict) or not NAME.match(str(s.get("id", ""))):
                 problems.append(f"{where} needs an id of letters, digits, '.', '_' or '-'")
                 continue
-            where = f"loop: {which} stage {s['id']}"
+            where = f"loop: {which} step {s['id']}"
             if ids.count(s["id"]) > 1:
                 problems.append(f"{where} appears twice")
             actor = s.get("actor")
@@ -102,7 +108,7 @@ def validate_loop(loop):
             else:
                 for outcome, target in nxt.items():
                     if target != STOP and target not in ids:
-                        problems.append(f"{where}: outcome {outcome} goes to {target!r}, which is not a stage")
+                        problems.append(f"{where}: outcome {outcome} goes to {target!r}, which is not a step")
             for key, allowed in (("run", RUNS), ("count", None), ("extra", None)):
                 table = s.get(key, {})
                 if not isinstance(table, dict):
@@ -118,33 +124,68 @@ def validate_loop(loop):
     return problems
 
 
-def stage_ids(loop, which="work"):
+def stage_of(step):
+    return step.get("stage") or step["id"]
+
+
+def _stage_problems(which, steps):
+    """A stage's steps must sit together, and a stage may not take the name
+    of another stage's step."""
+    problems, seen, last = [], [], None
+    ids = {s["id"]: stage_of(s) for s in steps}
+    for s in steps:
+        if "stage" in s and not NAME.match(str(s["stage"])):
+            problems.append(f"loop: {which} step {s['id']}: stage must be a name of letters, digits, '.', '_' or '-'")
+            continue
+        st = stage_of(s)
+        if st != last and st in seen:
+            problems.append(f"loop: {which} stage {st}: its steps must come one after another")
+        if st not in seen:
+            if ids.get(st, st) != st:
+                problems.append(f"loop: {which} stage {st} has the name of step {st}, which is in stage {ids[st]}")
+            seen.append(st)
+        last = st
+    return problems
+
+
+def step_ids(loop, which="work"):
     return [s["id"] for s in loop.get(which, []) if isinstance(s, dict) and "id" in s]
 
 
+def stage_ids(loop, which="work"):
+    """The loop's stages in order."""
+    out = []
+    for s in loop.get(which, []):
+        if isinstance(s, dict) and "id" in s and stage_of(s) not in out:
+            out.append(stage_of(s))
+    return out
+
+
 def plan(loop, difficulty, trivial=False, which="work"):
-    """The stages that run for one task, with `next` rewired past the ones
-    that do not run, and each stage's count and extra for this difficulty."""
-    stages = loop.get(which, [])
+    """The steps that run for one task, with `next` rewired past the ones
+    that do not run, and each step's stage, count and extra for this
+    difficulty."""
+    steps = loop.get(which, [])
     runs = {}
-    for s in stages:
+    for s in steps:
         rule = s.get("run", {}).get(difficulty, "always")
         runs[s["id"]] = rule == "always" or (rule == "if-not-trivial" and not trivial)
-    by_id = {s["id"]: s for s in stages}
+    by_id = {s["id"]: s for s in steps}
 
     def land(target, seen=()):
         while target != STOP and not runs[target]:
             if target in seen:
-                raise ValueError(f"loop: skipped stages form a cycle at {target}")
+                raise ValueError(f"loop: skipped steps form a cycle at {target}")
             seen = seen + (target,)
             target = list(by_id[target]["next"].values())[-1]
         return target
 
     out = []
-    for s in stages:
+    for s in steps:
         if not runs[s["id"]]:
             continue
         item = {k: v for k, v in s.items() if k not in ("run", "count", "extra")}
+        item["stage"] = stage_of(s)
         item["next"] = {k: land(v) for k, v in s["next"].items()}
         item["count"] = s.get("count", {}).get(difficulty, 1)
         item["extra"] = s.get("extra", {}).get(difficulty, "")
@@ -222,27 +263,35 @@ def render(cfg, task, difficulty, trivial, resolved, profiles, call_name):
     """
     from config import label
     loop = cfg["loop"]
-    stages = plan(loop, difficulty, trivial)
+    steps = plan(loop, difficulty, trivial)
+    stage = {s["id"]: s["stage"] for s in steps}
     lines = [f"# Loop for {task} (difficulty {difficulty}{', trivial' if trivial else ''})", ""]
     ops = cfg["ops"]
-    lines += [f"**Status**: a line at the start and end of every stage and at least every "
+    lines += [f"**Status**: a line at the start and end of every stage, naming the step, and at least every "
               f"{ops['report_minutes']} minutes; {ops['stall_minutes']} minutes without a line counts as a stall.", ""]
     missing = sorted({v for src, v in resolved.values() if src == "missing"})
     if missing:
         lines += ["**Missing skills** (go on without them and say so in your report):", ""]
         lines += [f"- {m}" for m in missing] + [""]
-    lines += ["| # | Stage | Actor | Tab label | Does | Skills | Next |", "| --- | --- | --- | --- | --- | --- | --- |"]
-    for i, s in enumerate(stages, 1):
+    lines += ["| # | Stage | Tab label | Step | Actor | Does | Skills | Next |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+    for i, s in enumerate(steps, 1):
+        st = s["stage"]
+        first = i == 1 or steps[i - 2]["stage"] != st
+        tab = ""
+        if first:
+            rounds = any(x["id"] in ROUNDS for x in steps if x["stage"] == st)
+            tab = "`" + label(cfg, st, task=task, stage=st + (" <N>" if rounds else ""), round="<N>" if rounds else "",
+                              project=cfg.get("workspace", "")) + "`"
         actor = s["actor"] + (f" × {s['count']}" if s["count"] > 1 else "")
-        rounds = s["id"] in ROUNDS
-        tab = label(cfg, s["id"], task=task, stage=s["id"] + (" <N>" if rounds else ""), round="<N>" if rounds else "",
-                    project=cfg.get("workspace", ""))
         skills = ", ".join(call_name(*resolved[n]) for n in s.get("skills", []) if resolved[n][0] != "missing") or "-"
         does = s["does"] + (f" {s['extra']}" if s["extra"] else "")
-        nxt = "; ".join(f"{k} → {v}" for k, v in s["next"].items())
-        lines.append(f"| {i} | {s['id']} | {actor} | `{tab}` | {does.replace('|', '/')} | {skills} | {nxt} |")
+        nxt = "; ".join(f"{k} → {v}" + (f" ({stage[v]})" if v != STOP and stage[v] != st else "")
+                        for k, v in s["next"].items())
+        lines.append(f"| {i} | {st if first else ''} | {tab} | {s['id']} | {actor} | {does.replace('|', '/')} | "
+                     f"{skills} | {nxt} |")
     acting = {}
-    for s in stages:
+    for s in steps:
         if s["actor"] not in PEOPLE:
             acting[s["actor"]] = max(acting.get(s["actor"], 1), s["count"])
     if acting:
@@ -287,7 +336,8 @@ def _cli(argv):
 
     if args.command == "show":
         loop = cfg["loop"]
-        print(f"| Stage | Actor | Does | Skills | Next | low | mid | high |\n| --- | --- | --- | --- | --- | --- | --- | --- |")
+        print("| Stage | Step | Actor | Does | Skills | Next | low | mid | high |\n"
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
         for s in loop.get(args.loop, []):
             cells = []
             for lv in LEVELS:
@@ -295,7 +345,8 @@ def _cli(argv):
                 n = s.get("count", {}).get(lv)
                 cells.append(run + (f" ×{n}" if n and n > 1 else ""))
             nxt = "; ".join(f"{k} → {v}" for k, v in s["next"].items())
-            print(f"| {s['id']} | {s['actor']} | {s['does'][:60].replace('|', '/')} | {', '.join(s.get('skills', [])) or '-'} | {nxt} | {' | '.join(cells)} |")
+            print(f"| {stage_of(s)} | {s['id']} | {s['actor']} | {s['does'][:60].replace('|', '/')} | "
+                  f"{', '.join(s.get('skills', [])) or '-'} | {nxt} | {' | '.join(cells)} |")
         return 0
 
     if not (args.project and args.machine):

@@ -163,6 +163,7 @@
     "work": [
       {
         "id": "start",
+        "stage": "plan",
         "actor": "lead",
         "does": "Set the issue's labels, cut the branch from the base, and post one handoff comment: owner, branch, difficulty, and the issue's completion criteria in your own words. Unless the change is trivial, draft the manual scenario as the target before writing code.",
         "skills": [],
@@ -172,6 +173,7 @@
       },
       {
         "id": "implement",
+        "stage": "build",
         "actor": "lead",
         "does": "Write the failing check first (a new test, or the scenario's step), then the change, following the repository's CLAUDE.md and rules and the ADRs the issue links. In a fix round, fix the findings.",
         "skills": [],
@@ -181,6 +183,7 @@
       },
       {
         "id": "test",
+        "stage": "build",
         "actor": "lead",
         "does": "Show the new tests failing without the change and passing with it (set the change aside, run, restore, run), and run the related tests. Pin a minimized failing case as a regression test.",
         "skills": [],
@@ -190,6 +193,7 @@
       },
       {
         "id": "refactor",
+        "stage": "build",
         "actor": "lead",
         "does": "Restructure this round's diff for readability without changing its behavior; the tests stay green.",
         "skills": [],
@@ -199,6 +203,7 @@
       },
       {
         "id": "regression",
+        "stage": "verify",
         "actor": "lead",
         "does": "Rebase onto the current base, then run the full test suite on the result. Read your own test changes: an edited assertion must state the intended behavior, not whatever the new code does.",
         "skills": [],
@@ -211,6 +216,7 @@
       },
       {
         "id": "scenario",
+        "stage": "verify",
         "actor": "lead",
         "does": "Run the manual scenario end to end through the surface the change reaches (an API, a CLI, a UI, a job), as a user or caller would, keeping each step's raw output, and screens for a UI. In a fix round, only the steps the fix touches.",
         "skills": [],
@@ -225,6 +231,7 @@
       },
       {
         "id": "pull-request",
+        "stage": "review",
         "actor": "lead",
         "does": "Open a draft pull request into the base, or push in a fix round. Body: ## Purpose (what the change is for), ## Decisions (each choice, the alternatives ruled out and why), ## Tests (the commands and their pass counts; for a trivial change, the one-line reason it has no scenario). Keep it small: over 400 changed lines, split it or say why not. Post or update one comment titled `## Manual scenario`: each step with its raw output in code blocks.",
         "skills": [],
@@ -234,6 +241,7 @@
       },
       {
         "id": "code-review",
+        "stage": "review",
         "actor": "code-reviewer",
         "does": "Judge the diff (in a fix round, the diff since the last review), the rules, attempts to break it, the test changes, CI, and the scenario or its skip reason. With two reviewers, each runs on a different model.",
         "skills": [],
@@ -249,6 +257,7 @@
       },
       {
         "id": "scenario-retrace",
+        "stage": "review",
         "actor": "retracer",
         "does": "Without reading the diff: check the scenario against the issue's criteria, then follow it in a fresh clone.",
         "skills": [],
@@ -265,6 +274,7 @@
       },
       {
         "id": "ready",
+        "stage": "handoff",
         "actor": "lead",
         "does": "Run the gate in your clone (`gate.py run <gate file> --cwd <clone> --before-ready`) and fix what it blocks; when it passes, mark the pull request ready, update the handoff comment, post the gate result, and report.",
         "skills": [],

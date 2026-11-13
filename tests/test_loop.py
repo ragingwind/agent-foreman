@@ -9,6 +9,7 @@ import loop
 
 WORK = ["start", "implement", "test", "refactor", "regression", "scenario", "pull-request", "code-review",
         "scenario-retrace", "ready"]
+STAGES = ["plan", "build", "verify", "review", "handoff"]
 
 
 def stage(id, actor="lead", nxt=None, **kw):
@@ -20,7 +21,22 @@ def stage(id, actor="lead", nxt=None, **kw):
 class Validate(unittest.TestCase):
     def test_standard_loops_are_valid(self):
         self.assertEqual(loop.validate_loop(config.standard()["loop"]), [])
-        self.assertEqual(loop.stage_ids(config.standard()["loop"]), WORK)
+        std = config.standard()["loop"]
+        self.assertEqual(loop.step_ids(std), WORK)
+        self.assertEqual(loop.stage_ids(std), STAGES)
+        self.assertEqual(loop.stage_ids(std, "manage"), loop.step_ids(std, "manage"))  # a step without a stage is one
+
+    def test_stage_problems(self):
+        base = {"roles": {}, "prompts": {}}
+        apart = dict(base, work=[stage("a", stage="s1", nxt={"done": "b"}), stage("b", stage="s2", nxt={"done": "c"}),
+                                 stage("c", stage="s1")])
+        self.assertIn("loop: work stage s1: its steps must come one after another", loop.validate_loop(apart))
+        clash = dict(base, work=[stage("a", stage="b", nxt={"done": "b"}), stage("b", stage="s2")])
+        self.assertIn("loop: work stage b has the name of step b, which is in stage s2", loop.validate_loop(clash))
+        own = dict(base, work=[stage("a", stage="a", nxt={"done": "b"}), stage("b")])
+        self.assertEqual(loop.validate_loop(own), [])
+        bad = dict(base, work=[stage("a", stage="no spaces")])
+        self.assertTrue(any("stage must be a name" in p for p in loop.validate_loop(bad)))
 
     def test_problems(self):
         bad = {"roles": {"lead": {"mode": "tab"}, "r": {"mode": "prompt", "prompt": "none", "deny_tools": "Edit"}},
@@ -31,7 +47,7 @@ class Validate(unittest.TestCase):
         p = "\n".join(loop.validate_loop(bad))
         for words in ("prompt x is empty", "role name 'lead' is not allowed", "mode must be one of",
                       "prompt 'none' does not exist", "deny_tools must be a list", "goes to 'nowhere'",
-                      "stage a appears twice", "actor 'ghost'", "names 'huge'", "run for mid", "count for high",
+                      "step a appears twice", "actor 'ghost'", "names 'huge'", "run for mid", "count for high",
                       "says nothing", "skills must be a list", "next must name"):
             self.assertIn(words, p)
 
@@ -60,6 +76,14 @@ class Plan(unittest.TestCase):
         self.assertEqual(high["code-review"]["count"], 2)
         self.assertIn("main branch", high["regression"]["extra"])
         self.assertEqual(high["scenario-retrace"]["next"], {"code": "implement", "scenario": "scenario", "pass": "ready"})
+
+    def test_steps_carry_their_stage_and_an_empty_stage_drops(self):
+        self.assertEqual([(s["stage"], s["id"]) for s in loop.plan(self.loop, "mid")][:3],
+                         [("plan", "start"), ("build", "implement"), ("build", "test")])
+        l = {"roles": {}, "prompts": {}, "work": [stage("a", stage="s1", nxt={"done": "b"}),
+                                                    stage("b", stage="s2", nxt={"done": "c"}, run={"low": "never"}),
+                                                    stage("c", stage="s3")]}
+        self.assertEqual([s["stage"] for s in loop.plan(l, "low")], ["s1", "s3"])
 
     def test_chained_skips(self):
         l = {"roles": {}, "prompts": {}, "work": [stage("a", nxt={"done": "b"}), stage("b", nxt={"done": "c"}, run={"low": "never"}),
@@ -113,10 +137,14 @@ class Render(unittest.TestCase):
         out = self.render("mid")
         self.assertIn("**Missing skills**", out)
         self.assertIn("- ghost is nowhere", out)
-        self.assertIn("| 4 | refactor | lead | `634 refactor` |", out)
-        self.assertIn("| foreman-kit:tidy |", out)
-        self.assertIn("| 6 | scenario | lead | `634 scenario` |", out)
+        self.assertIn("| 2 | build | `634 build` | implement | lead |", out)
+        self.assertIn("| 4 |  |  | refactor | lead |", out)
+        self.assertIn("| foreman-kit:tidy | done → regression (verify) |", out)
+        self.assertIn("| 5 | verify | `634 verify` | regression | lead |", out)
+        self.assertIn("| 6 |  |  | scenario | lead |", out)
         self.assertIn("approved → scenario-retrace", out)
+        self.assertIn("changes → implement (build)", out)
+        self.assertIn("| 10 | handoff | `634 handoff` | ready | lead |", out)
         self.assertIn("| code-reviewer | prompt | agent 1: opus | sonnet, haiku | `--disallow Edit,Write,NotebookEdit` |", out)
         self.assertIn("## Prompt for retracer", out)
 
@@ -124,14 +152,14 @@ class Render(unittest.TestCase):
         out = self.render("mid", trivial=True)
         self.assertIn("(difficulty mid, trivial)", out)
         self.assertNotIn("| scenario |", out)
-        self.assertIn("approved → ready", out)
+        self.assertIn("approved → ready (handoff)", out)
         self.assertNotIn("## Prompt for retracer", out)
 
     def test_high_task_reviewers_on_different_models(self):
         out = self.render("high")
         self.assertIn("code-reviewer × 2", out)
         self.assertIn("agent 1: opus; agent 2: sonnet | haiku |", out)
-        self.assertIn("`634 code-review <N>`", out)
+        self.assertIn("| 7 | review | `634 review <N>` | pull-request |", out)
         one = self.render("high", profiles={"code-reviewer": ["opus"], "retracer": ["opus"]})
         self.assertIn("agent 1: opus; agent 2: opus (only 1 different profile(s) for 2 agents", one)
 
@@ -152,7 +180,7 @@ class Cli(unittest.TestCase):
     def test_show_and_bad_arguments(self):
         r = run("loop.py", "show")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("| scenario-retrace | retracer |", r.stdout)
+        self.assertIn("| review | scenario-retrace | retracer |", r.stdout)
         self.assertIn("never | if-not-trivial | if-not-trivial", r.stdout)
         self.assertEqual(run("loop.py", "render").returncode, 2)
         self.assertEqual(run("loop.py", "show", "--project", "bad").returncode, 2)
@@ -165,7 +193,7 @@ class Cli(unittest.TestCase):
                          "loop": {"work": [{"id": "scenario", "skills": ["scenario"]}]}})
         r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "high", "--machine", "local")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("| 6 | scenario | lead | `9 scenario` |", r.stdout)
+        self.assertIn("| 6 |  |  | scenario | lead |", r.stdout)
         self.assertIn("| scenario |", r.stdout)
         self.assertIn("agent 1: opus; agent 2: sonnet", r.stdout)  # high reviewers fall back to the next tier
         r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "low", "--machine", "local",

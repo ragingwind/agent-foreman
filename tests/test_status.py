@@ -60,12 +60,12 @@ class Note(unittest.TestCase):
 
     def test_note_appends_a_stage_line(self):
         runs = '[{"role": "code-reviewer", "profile": "opus", "verdict": "approved", "cost": 0.4, "out": "r.json"}]'
-        r = run("status.py", "note", "--stage", "code-review", "--event", "end", "--round", "2",
+        r = run("status.py", "note", "--stage", "review", "--step", "code-review", "--event", "end", "--round", "2",
                 "--done", "리뷰 통과", "--next", "scenario-retrace", "--runs", runs, env={"HF_STATUS_FILE": self.file})
         self.assertEqual(r.returncode, 0, r.stderr)
         row = lines(self.file)[0]
-        self.assertEqual((row["stage"], row["event"], row["round"], row["done"], row["runs"][0]["verdict"]),
-                         ("code-review", "end", 2, "리뷰 통과", "approved"))
+        self.assertEqual((row["stage"], row["step"], row["event"], row["round"], row["done"], row["runs"][0]["verdict"]),
+                         ("review", "code-review", "end", 2, "리뷰 통과", "approved"))
 
     def test_bad_notes_are_refused(self):
         for args, env in ((["--event", "end"], {"HF_STATUS_FILE": self.file}),
@@ -93,13 +93,13 @@ class Summarize(unittest.TestCase):
     NOW = 1_800_000_000
 
     def test_stage_beat_and_stall(self):
-        rows = [row(50, self.NOW, stage="implement", event="start", round=None),
+        rows = [row(50, self.NOW, stage="build", step="implement", event="start", round=None),
                 row(40, self.NOW, event="heartbeat", agent="issue-7", tool="Bash"),
                 "not json",
                 row(35, self.NOW, event="heartbeat", agent="issue-7-code-reviewer-1", tool="Read")]
         s = status.summarize(rows, 30, now=self.NOW)
-        self.assertEqual((s["stage"], s["stage_event"], s["last_beat_agent"], s["minutes_since"], s["stalled"]),
-                         ("implement", "start", "issue-7-code-reviewer-1", 35.0, True))
+        self.assertEqual((s["stage"], s["step"], s["stage_event"], s["last_beat_agent"], s["minutes_since"], s["stalled"]),
+                         ("build", "implement", "start", "issue-7-code-reviewer-1", 35.0, True))
         self.assertFalse(status.summarize(rows, 40, now=self.NOW)["stalled"])
 
     def test_a_stop_point_is_not_a_stall(self):
