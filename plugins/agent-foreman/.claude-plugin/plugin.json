@@ -1,0 +1,12 @@
+{
+  "name": "agent-foreman",
+  "version": "0.1.0",
+  "description": "A foreman session that manages coding agents across herdr machines: it sizes each task, hands it to a lead agent in its own clone, gates it in code, and merges or hands the merge to you.",
+  "author": {
+    "name": "Jimmy Moon",
+    "url": "https://github.com/ragingwind"
+  },
+  "homepage": "https://github.com/ragingwind/herdr-skills/tree/main/plugins/agent-foreman",
+  "repository": "https://github.com/ragingwind/herdr-skills",
+  "license": "MIT"
+}

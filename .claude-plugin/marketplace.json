@@ -7,8 +7,8 @@
   },
   "plugins": [
     {
-      "name": "herdr-foreman",
-      "source": "./plugins/herdr-foreman",
+      "name": "agent-foreman",
+      "source": "./plugins/agent-foreman",
       "description": "A foreman session that manages coding agents across herdr machines: it sizes each task, hands it to a lead agent in its own clone, gates it in code, and merges or hands the merge to you."
     }
   ]

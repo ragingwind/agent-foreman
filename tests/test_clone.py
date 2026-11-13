@@ -35,7 +35,7 @@ class Clone(unittest.TestCase):
         git(self.checkout, "add", "-A")
         git(self.checkout, "commit", "-q", "-m", "local only")
         self.env = {"HOME": self.home.root}
-        self.home.write("state/herdr-foreman/projects/o-r/project.json",
+        self.home.write("state/agent-foreman/projects/o-r/project.json",
                         {"repo": "o/r", "machines": {"local": self.checkout}})
 
     def tearDown(self):
@@ -54,7 +54,7 @@ class Clone(unittest.TestCase):
         self.assertEqual(code, 0, err)
         path = out["path"]
         self.assertEqual(out["status"], "made")
-        self.assertTrue(path.endswith(os.path.join(".cache", "herdr-foreman", "work", "o-r", "t1", "lead")))
+        self.assertTrue(path.endswith(os.path.join(".cache", "agent-foreman", "work", "o-r", "t1", "lead")))
         self.assertEqual(git(path, "remote", "get-url", "origin"), self.origin)  # not the checkout
         self.assertEqual(git(path, "rev-parse", "HEAD"), git(self.origin, "rev-parse", "main"))
         self.assertEqual(git(path, "for-each-ref", "refs/heads/"), "")  # no branch of the person's
@@ -90,7 +90,7 @@ class Clone(unittest.TestCase):
         stray = os.path.join(os.path.dirname(path), "stray")
         os.makedirs(os.path.join(stray, ".git"))
         out = self.clone("check", stray)[1]
-        self.assertEqual((out["ours"], out["reason"]), (False, "no herdr-foreman marker in .git"))
+        self.assertEqual((out["ours"], out["reason"]), (False, "no agent-foreman marker in .git"))
 
     def test_remove_refuses_to_lose_work_unless_forced(self):
         path = self.make()[1]["path"]
@@ -109,7 +109,7 @@ class Clone(unittest.TestCase):
     def test_remove_task_takes_clones_and_run_directory(self):
         lead = self.make()[1]["path"]
         self.make("retracer-1")
-        runs = self.home.write(".cache/herdr-foreman/runs/o-r/t1/status.jsonl", "{}\n")
+        runs = self.home.write(".cache/agent-foreman/runs/o-r/t1/status.jsonl", "{}\n")
         code, out, err = self.clone("remove", "--project", "o/r", "--task", "t1")
         self.assertEqual(code, 0, err)
         self.assertEqual(len(out["removed"]), 3)
@@ -119,7 +119,7 @@ class Clone(unittest.TestCase):
     def test_remove_task_keeps_the_run_directory_when_a_clone_is_refused(self):
         lead = self.make()[1]["path"]
         put(os.path.join(lead, "a.txt"), "changed\n")
-        runs = self.home.write(".cache/herdr-foreman/runs/o-r/t1/status.jsonl", "{}\n")
+        runs = self.home.write(".cache/agent-foreman/runs/o-r/t1/status.jsonl", "{}\n")
         self.assertEqual(self.clone("remove", "--project", "o/r", "--task", "t1")[0], 1)
         self.assertTrue(os.path.exists(runs))
 
@@ -136,7 +136,7 @@ class Clone(unittest.TestCase):
         code, out, _ = self.clone("make", "--project", "o/r", "--task", "t1", "--agent", "lead", "--ref", "no-such-ref")
         self.assertEqual(code, 1)
         self.assertIn("git checkout", out["error"])
-        self.assertFalse(os.path.exists(os.path.join(self.home.root, ".cache", "herdr-foreman", "work", "o-r", "t1", "lead")))
+        self.assertFalse(os.path.exists(os.path.join(self.home.root, ".cache", "agent-foreman", "work", "o-r", "t1", "lead")))
         plain = os.path.join(self.home.root, "plain")
         os.makedirs(plain)
         self.assertIn("not a git checkout", self.clone("make", "--project", "o/r", "--task", "t1", "--agent", "x",

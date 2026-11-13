@@ -5,7 +5,7 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPTS = os.path.join(ROOT, "plugins", "herdr-foreman", "skills", "herdr-foreman", "scripts")
+SCRIPTS = os.path.join(ROOT, "plugins", "agent-foreman", "scripts")
 sys.path.insert(0, SCRIPTS)
 
 

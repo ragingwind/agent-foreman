@@ -19,7 +19,7 @@ class Heartbeat(unittest.TestCase):
     def setUp(self):
         self.home = TempHome()
         self.file = os.path.join(self.home.root, "runs", "o-r", "7", "status.jsonl")
-        self.env = {"HF_STATUS_FILE": self.file, "HF_AGENT": "issue-7"}
+        self.env = {"AF_STATUS_FILE": self.file, "AF_AGENT": "issue-7"}
 
     def tearDown(self):
         self.home.close()
@@ -40,13 +40,13 @@ class Heartbeat(unittest.TestCase):
         self.assertEqual(len(lines(self.file)), 3)
 
     def test_silent_without_a_status_file_or_on_any_error(self):
-        r = self.beat("post", HF_STATUS_FILE="")
+        r = self.beat("post", AF_STATUS_FILE="")
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
         self.assertFalse(os.path.exists(self.file))
         r = self.beat("post", stdin="not json")
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
         blocker = self.home.write("plain-file", "x")
-        r = self.beat("stop", HF_STATUS_FILE=os.path.join(blocker, "status.jsonl"))
+        r = self.beat("stop", AF_STATUS_FILE=os.path.join(blocker, "status.jsonl"))
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
 
 
@@ -61,25 +61,25 @@ class Note(unittest.TestCase):
     def test_note_appends_a_stage_line(self):
         runs = '[{"role": "code-reviewer", "profile": "opus", "verdict": "approved", "cost": 0.4, "out": "r.json"}]'
         r = run("status.py", "note", "--stage", "review", "--step", "code-review", "--event", "end", "--round", "2",
-                "--done", "리뷰 통과", "--next", "scenario-retrace", "--runs", runs, env={"HF_STATUS_FILE": self.file})
+                "--done", "리뷰 통과", "--next", "scenario-retrace", "--runs", runs, env={"AF_STATUS_FILE": self.file})
         self.assertEqual(r.returncode, 0, r.stderr)
         row = lines(self.file)[0]
         self.assertEqual((row["stage"], row["step"], row["event"], row["round"], row["done"], row["runs"][0]["verdict"]),
                          ("review", "code-review", "end", 2, "리뷰 통과", "approved"))
 
     def test_bad_notes_are_refused(self):
-        for args, env in ((["--event", "end"], {"HF_STATUS_FILE": self.file}),
-                          (["--stage", "x", "--event", "end"], {"HF_STATUS_FILE": ""}),
-                          (["--stage", "x", "--event", "end", "--runs", "{}"], {"HF_STATUS_FILE": self.file}),
-                          (["--stage", "x", "--event", "end", "--runs", "nope"], {"HF_STATUS_FILE": self.file})):
+        for args, env in ((["--event", "end"], {"AF_STATUS_FILE": self.file}),
+                          (["--stage", "x", "--event", "end"], {"AF_STATUS_FILE": ""}),
+                          (["--stage", "x", "--event", "end", "--runs", "{}"], {"AF_STATUS_FILE": self.file}),
+                          (["--stage", "x", "--event", "end", "--runs", "nope"], {"AF_STATUS_FILE": self.file})):
             self.assertEqual(run("status.py", "note", *args, env=env).returncode, 2, args)
         self.assertNotEqual(run("status.py", "note", "--stage", "x", "--event", "done",
-                                env={"HF_STATUS_FILE": self.file}).returncode, 0)
+                                env={"AF_STATUS_FILE": self.file}).returncode, 0)
         self.assertFalse(os.path.exists(self.file))
 
     def test_path_is_for_the_machine_to_expand(self):
         r = run("status.py", "path", "--project", "o/r", "--task", "issue-7")
-        self.assertEqual(r.stdout.strip(), "~/.cache/herdr-foreman/runs/o-r/issue-7/status.jsonl")
+        self.assertEqual(r.stdout.strip(), "~/.cache/agent-foreman/runs/o-r/issue-7/status.jsonl")
         for args in (["--project", "o/r", "--task", "../x"], ["--project", "bad", "--task", "t"], ["--project", "o/r"]):
             self.assertEqual(run("status.py", "path", *args).returncode, 2, args)
 
@@ -116,16 +116,16 @@ class Read(unittest.TestCase):
     def setUp(self):
         self.home = TempHome()
         self.env = {"HOME": self.home.root}
-        self.home.write("state/herdr-foreman/projects/o-r/project.json", {"repo": "o/r", "machines": {"local": "/src/r"}})
+        self.home.write("state/agent-foreman/projects/o-r/project.json", {"repo": "o/r", "machines": {"local": "/src/r"}})
 
     def tearDown(self):
         self.home.close()
 
     def test_reads_every_task_on_a_local_machine(self):
         now = time.time()
-        self.home.write(".cache/herdr-foreman/runs/o-r/issue-7/status.jsonl",
+        self.home.write(".cache/agent-foreman/runs/o-r/issue-7/status.jsonl",
                         row(1, now, stage="test", event="start") + "\n")
-        self.home.write(".cache/herdr-foreman/runs/o-r/issue-8/status.jsonl",
+        self.home.write(".cache/agent-foreman/runs/o-r/issue-8/status.jsonl",
                         row(45, now, stage="implement", event="progress") + "\n")
         r = run("status.py", "read", "--project", "o/r", env=self.env)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -163,7 +163,7 @@ class Settings(unittest.TestCase):
             self.assertTrue(any("disk_min_free_gb" in p for p in config.validate(config.merge(cfg, {"ops": {"disk_min_free_gb": bad}}))), bad)
         home = os.path.join(self.home.root, "h")
         os.makedirs(home)
-        self.home.write("state/herdr-foreman/projects/o-r/project.json",
+        self.home.write("state/agent-foreman/projects/o-r/project.json",
                         {"repo": "o/r", "machines": {"local": "/src/r"}, "ops": {"disk_min_free_gb": 10 ** 9}})
         r = run("status.py", "read", "--project", "o/r", env={"HOME": home})
         self.assertTrue(json.loads(r.stdout)["disk"]["local"]["low"])

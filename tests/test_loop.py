@@ -188,7 +188,7 @@ class Cli(unittest.TestCase):
     def test_render_local_machine(self):
         repo = os.path.join(self.home.root, "repo")
         self.home.write("repo/.claude/skills/scenario/SKILL.md", "x")
-        self.home.write("state/herdr-foreman/projects/o-r/project.json",
+        self.home.write("state/agent-foreman/projects/o-r/project.json",
                         {"repo": "o/r", "machines": {"local": repo},
                          "loop": {"work": [{"id": "scenario", "skills": ["scenario"]}]}})
         r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "high", "--machine", "local")

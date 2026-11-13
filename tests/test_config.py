@@ -24,9 +24,9 @@ class Levels(unittest.TestCase):
         self.assertEqual(config.validate(cfg), [])
 
     def test_user_over_standard_and_project_over_user(self):
-        self.home.write("config/herdr-foreman/config.json",
+        self.home.write("config/agent-foreman/config.json",
                         {"launch": {"profile": "opus"}, "ops": {"check_minutes": 5}})
-        self.home.write("state/herdr-foreman/projects/o-r/project.json",
+        self.home.write("state/agent-foreman/projects/o-r/project.json",
                         {"repo": "o/r", "machines": {"m1": "/src/r"}, "ops": {"check_minutes": 20}})
         user = config.load()
         self.assertEqual(user["launch"]["profile"], "opus")
@@ -205,7 +205,7 @@ class Save(unittest.TestCase):
         self.assertFalse(os.path.exists(path))
 
     def test_project_save_leaves_out_user_values(self):
-        self.home.write("config/herdr-foreman/config.json", {"ops": {"batch": 3}})
+        self.home.write("config/agent-foreman/config.json", {"ops": {"batch": 3}})
         full = config.merge(config.load(), {"machines": {"m1": "/src/r"}, "labels": {"default": "{task}"}})
         _, written, problems = config.save("project", full, repo="o/r", saved=MACHINES, skills={})
         self.assertEqual(problems, [])
@@ -238,20 +238,34 @@ class Skills(unittest.TestCase):
         found = config.local_skills(plugins=plugins, user_skills_dir=user)
         self.assertEqual(sorted(found), ["plug:tidy", "real"])
 
-    def test_herdr_foreman_is_never_a_candidate_or_a_skill(self):
+    def test_single_skill_plugin(self):
+        self.home.write("solo/SKILL.md", "---\nname: solo\n---\n")
+        plugins = [{"id": "solo@m", "enabled": True, "installPath": os.path.join(self.home.root, "solo")}]
+        found = config.local_skills(plugins, user_skills_dir=os.path.join(self.home.root, "none"))
+        self.assertEqual(found, {"solo:solo": os.path.join(self.home.root, "solo")})
+
+    def test_agent_foreman_as_a_user_skill_is_left_out(self):
+        user = os.path.join(self.home.root, "user-skills")
+        os.makedirs(user)
+        os.symlink(config.SELF_DIR, os.path.join(user, "agent-foreman"))
+        os.symlink(config.SELF_DIR, os.path.join(user, "foreman-link"))
+        self.home.write("user-skills/real/SKILL.md", "x")
+        self.assertEqual(list(config.local_skills([], user_skills_dir=user)), ["real"])
+
+    def test_agent_foreman_is_never_a_candidate_or_a_skill(self):
         other = os.path.dirname(os.path.dirname(self.home.write("other/.claude-plugin/plugin.json", {"name": "other"})))
         self.home.write("other/skills/tidy/SKILL.md", "x")
         copy = os.path.dirname(os.path.dirname(self.home.write("copy/.claude-plugin/plugin.json",
-                                                               {"name": "herdr-foreman"})))
+                                                               {"name": "agent-foreman"})))
         argv = ["claude", "--plugin-dir", other, f"--plugin-dir={config.SELF_DIR}", "--plugin-dir", copy,
                 "--plugin-dir", "/no/such/dir", "--model", "x"]
         self.assertEqual(config.session_plugin_dirs(argv), [other])
         plugins = [{"id": "other@inline", "enabled": True, "installPath": other},
-                   {"id": "herdr-foreman@herdr-skills", "enabled": True, "installPath": config.SELF_DIR}]
+                   {"id": "agent-foreman@herdr-skills", "enabled": True, "installPath": config.SELF_DIR}]
         found = config.local_skills(plugins, user_skills_dir=os.path.join(self.home.root, "none"))
         self.assertEqual(list(found), ["other:tidy"])
         p = config.validate(config.merge(config.load(), {"plugin_dirs": [config.SELF_DIR, copy]}))
-        self.assertEqual(sum("is herdr-foreman itself" in x for x in p), 2)
+        self.assertEqual(sum("is agent-foreman itself" in x for x in p), 2)
 
     def test_plugin_dirs_go_to_claude_plugin_list(self):
         listing = mock.Mock(stdout="[]")
@@ -334,7 +348,7 @@ class Cli(unittest.TestCase):
         repo = os.path.join(self.home.root, "repo")
         subprocess.run(["git", "init", "-q", repo], check=True)
         subprocess.run(["git", "-C", repo, "remote", "add", "origin", "git@github.com:o/r.git"], check=True)
-        self.home.write("config/herdr-foreman/config.json",
+        self.home.write("config/agent-foreman/config.json",
                         {"gateways": {"tf": {"kind": "anthropic-compatible", "base_url": "https://tf.example",
                                              "token_env": "HF_TEST_TF_TOKEN", "auth": "bearer",
                                              "models": {"m": {"id": "m-1", "context": 1000}}}},

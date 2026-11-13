@@ -17,7 +17,7 @@ class Bundle(unittest.TestCase):
         self.skill = os.path.dirname(self.home.write("skills/tidy/SKILL.md", "---\nname: tidy\n---\nTidy."))
         self.home.write("skills/tidy/scripts/run.py", "print('hi')")
         self.home.write("skills/tidy/__pycache__/x.pyc", "junk")
-        self.home.write("state/herdr-foreman/projects/o-r/project.json",
+        self.home.write("state/agent-foreman/projects/o-r/project.json",
                         {"repo": "o/r", "machines": {"local": "/src/r"}, "bundle": {"skills": ["p:tidy"]}})
         patcher = mock.patch.object(bundle, "local_skills", return_value={"p:tidy": self.skill})
         patcher.start()
@@ -33,7 +33,7 @@ class Bundle(unittest.TestCase):
         self.assertEqual(skills, ["foreman-kit:tidy"])
         self.assertIn("skills/tidy/scripts/run.py", files)
         self.assertNotIn("skills/tidy/__pycache__/x.pyc", files)
-        for rel in ("bundle.json", ".claude-plugin/plugin.json", "config.json", "lead.md", "scripts/launch.py",
+        for rel in ("bundle.json", ".claude-plugin/plugin.json", "config.json", "loop.md", "scripts/launch.py",
                     "scripts/config.py", "scripts/transcript.py", "scripts/adapters/__init__.py",
                     "scripts/adapters/base.py", "scripts/adapters/claude.py"):
             self.assertIn(rel, files)
@@ -61,7 +61,7 @@ class Bundle(unittest.TestCase):
 
     def test_settings_change_makes_new_hash(self):
         h1, _, _, _ = bundle.build("o/r", [])
-        self.home.write("config/herdr-foreman/config.json", {"launch": {"profile": "opus"}})
+        self.home.write("config/agent-foreman/config.json", {"launch": {"profile": "opus"}})
         h2, _, _, _ = bundle.build("o/r", [])
         self.assertNotEqual(h1, h2)
 
@@ -94,7 +94,7 @@ class Bundle(unittest.TestCase):
         self.assertEqual(e.exception.code, config.EXIT_SETUP_NEEDED)
 
     def test_loop_skills_project_first_then_bundle_then_warning(self):
-        self.home.write("config/herdr-foreman/config.json",
+        self.home.write("config/agent-foreman/config.json",
                         {"loop": {"work": [{"id": "refactor", "skills": ["tidy", "scenario", "ghost"]}]}})
         _, files, skills, warnings = bundle.build("o/r", [], project_names=["scenario"])
         self.assertEqual(skills, ["foreman-kit:tidy"])          # bundle.skills and the loop name the same skill

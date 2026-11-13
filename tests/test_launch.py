@@ -27,7 +27,7 @@ class Launch(unittest.TestCase):
         self.assertIn("command: claude --name issue-1 --session-id abc-123 --model sonnet "
                       "--dangerously-skip-permissions", r.stdout)
         self.assertNotIn("--plugin-dir", r.stdout)
-        self.home.write("config/herdr-foreman/config.json", {"launch": {"worktree": True}})
+        self.home.write("config/agent-foreman/config.json", {"launch": {"worktree": True}})
         r = run("launch.py", "--name", "issue-1", "--dry-run")
         self.assertIn("command: claude -w issue-1 --name issue-1", r.stdout)
 
@@ -56,7 +56,7 @@ class Launch(unittest.TestCase):
         self.assertIn("this bundle is for elsewhere", r.stderr)
 
     def test_unknown_agent_kind_is_setup(self):
-        self.home.write("config/herdr-foreman/config.json", {"profiles": {"sonnet": {"agent": "nope"}}})
+        self.home.write("config/agent-foreman/config.json", {"profiles": {"sonnet": {"agent": "nope"}}})
         r = run("launch.py", "--dry-run")
         self.assertEqual(r.returncode, 3)
         self.assertIn("agent 'nope' is not supported", r.stderr)
@@ -71,13 +71,13 @@ class Launch(unittest.TestCase):
         self.assertEqual(run("launch.py", "nope", "--dry-run").returncode, 3)
 
     def test_bad_settings_is_setup(self):
-        self.home.write("config/herdr-foreman/config.json", {"launch": {"permission": "maybe"}})
+        self.home.write("config/agent-foreman/config.json", {"launch": {"permission": "maybe"}})
         r = run("launch.py", "--dry-run")
         self.assertEqual(r.returncode, 3)
         self.assertIn("permission", r.stderr)
 
     def test_gateway_token_missing_then_set_without_printing_it(self):
-        self.home.write("config/herdr-foreman/config.json", {"gateways": {"gw": GATEWAY}, "profiles": {"p": PROFILE}})
+        self.home.write("config/agent-foreman/config.json", {"gateways": {"gw": GATEWAY}, "profiles": {"p": PROFILE}})
         env = {"HF_TEST_TOKEN": ""}
         r = run("launch.py", "p", "--dry-run", env=env)
         self.assertEqual(r.returncode, 4)
@@ -101,7 +101,7 @@ if mode == "garbage":
 out = {"type": "result", "subtype": "success", "is_error": False, "session_id": "s-1",
        "total_cost_usd": 0.01, "permission_denials": [],
        "result": "|".join([prompt, " ".join(sys.argv[1:]), os.environ.get("ANTHROPIC_BASE_URL", "-")]),
-       "status": [os.environ.get("HF_STATUS_FILE", "-"), os.environ.get("HF_AGENT", "-")]}
+       "status": [os.environ.get("AF_STATUS_FILE", "-"), os.environ.get("AF_AGENT", "-")]}
 if mode == "error":
     out.update(is_error=True, subtype="error_during_execution", result="rate limited")
 print(json.dumps(out))
@@ -140,7 +140,7 @@ class PromptMode(unittest.TestCase):
         self.assertEqual(base, "-")  # an inherited gateway variable never reaches an Anthropic agent
 
     def test_gateway_profile_reaches_the_agent(self):
-        self.home.write("config/herdr-foreman/config.json", {"gateways": {"gw": GATEWAY}, "profiles": {"p": PROFILE}})
+        self.home.write("config/agent-foreman/config.json", {"gateways": {"gw": GATEWAY}, "profiles": {"p": PROFILE}})
         r = self.launch("p", HF_TEST_TOKEN="secret-value-xyz")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.load(open(self.out))["result"].split("|")[2], "https://gw.example/anthropic")
@@ -159,16 +159,16 @@ class PromptMode(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.load(open(self.out))["status"],
                          [os.path.join(self.home.root, "runs", "o-r", "7", "status.jsonl"), "opus"])
-        r = self.launch("opus", HF_STATUS_FILE="/lead/status.jsonl", HF_AGENT="lead")
+        r = self.launch("opus", AF_STATUS_FILE="/lead/status.jsonl", AF_AGENT="lead")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.load(open(self.out))["status"], ["-", "-"])  # never the starter's file
 
     def test_status_in_dry_run_names_only(self):
         r = run("launch.py", "opus", "--name", "t-7", "--status", "/x/status.jsonl", "--dry-run", env=self.env)
-        self.assertIn("HF_STATUS_FILE", r.stdout.split("set:")[1].split("\n")[0])
+        self.assertIn("AF_STATUS_FILE", r.stdout.split("set:")[1].split("\n")[0])
         self.assertNotIn("/x/status.jsonl", r.stdout)
         r = run("launch.py", "opus", "--dry-run", env=self.env)
-        self.assertIn("HF_STATUS_FILE", r.stdout.split("clear:")[1].split("\n")[0])
+        self.assertIn("AF_STATUS_FILE", r.stdout.split("clear:")[1].split("\n")[0])
 
     def test_print_needs_files(self):
         self.assertEqual(run("launch.py", "--print", "--prompt-file", self.prompt, env=self.env).returncode, 2)
