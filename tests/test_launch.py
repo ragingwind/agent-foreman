@@ -163,6 +163,21 @@ class PromptMode(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.load(open(self.out))["status"], ["-", "-"])  # never the starter's file
 
+    def test_task_folder_and_run_record(self):
+        task = os.path.join(self.home.root, "task")
+        r = self.launch("opus", "--role", "pair", "--name", "pair-1", "--task-dir", task)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.load(open(self.out))["status"], [os.path.join(task, "status.jsonl"), "pair-1"])
+        meta = json.load(open(self.out[:-5] + ".meta.json"))
+        self.assertEqual((meta["role"], meta["agent"], meta["profile"], meta["model"], meta["ok"], meta["session_id"]),
+                         ("pair", "pair-1", "opus", "opus", True, "s-1"))
+        self.assertTrue(meta["started"] <= meta["ended"])
+        r = self.launch("opus", FAKE_MODE="error")
+        self.assertFalse(json.load(open(self.out[:-5] + ".meta.json"))["ok"])
+        r = run("launch.py", "opus", "--task-dir", task, "--dry-run", env=self.env)
+        self.assertIn("AF_TASK_DIR", r.stdout.split("set:")[1].split("\n")[0])
+        self.assertNotIn(task, r.stdout)
+
     def test_status_in_dry_run_names_only(self):
         r = run("launch.py", "opus", "--name", "t-7", "--status", "/x/status.jsonl", "--dry-run", env=self.env)
         self.assertIn("AF_STATUS_FILE", r.stdout.split("set:")[1].split("\n")[0])

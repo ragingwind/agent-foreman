@@ -1,7 +1,7 @@
 # Part: project
 
-The repository, the machines its agents run on, and the checkout path on
-each. Saved at the project's level.
+The repository, the machines its agents run on, the checkout path on each,
+and the project's full test command. Saved at the project's level.
 
 ## 1. Detect
 
@@ -14,6 +14,10 @@ each. Saved at the project's level.
 - For each enabled herdr machine, a guessed checkout path: this machine's
   path under `~`, written with `~` (`~/src/api`). Check it as in step 3
   before offering it.
+- The full test command, from the checkout: first what `CLAUDE.md` (or
+  `AGENTS.md`) says runs the tests, then the commands of the CI files'
+  test jobs (`.github/workflows/*.yml` and the like), then a `Makefile` or
+  `package.json` test target. Note where each one came from.
 
 ## 2. Show and ask once
 
@@ -26,6 +30,10 @@ in one call:
 - **Machines** (multi-select): `local` with its path, and each enabled herdr
   machine with its guessed path when the guess passed. Mark the machines an
   existing project already has as current.
+- **Full test command**: the one found first (recommended), the others found,
+  or none. The project's own file comes before any guess: when `CLAUDE.md`
+  names one, recommend it. QA runs it in the verification session, and the
+  gate runs it before merge.
 
 For a chosen machine with no passing path, ask for its path in one more
 call, one question per machine.
@@ -60,12 +68,14 @@ At the project's level (`SKILL.md` "Save"). A new project's settings:
   "machines": {
     "local": "~/src/api",
     "build-01": "~/work/api"
-  }
+  },
+  "tests": {"full": "make test"}
 }
 ```
 
 `machines` maps a herdr machine label (or `local`) to the checkout path
 there. `workspace` is the herdr workspace label on every machine, the
-repository's name unless the person says otherwise. For an existing project,
-start from its `config.py show --project <repo>` output and change only
-`machines`.
+repository's name unless the person says otherwise. `tests.full` is the
+full test command; leave `tests` out when there is none. For an existing
+project, start from its `config.py show --project <repo>` output and change
+only `machines` and `tests`.

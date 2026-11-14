@@ -1,9 +1,15 @@
 # Part: loop
 
-The work loop's stages and steps, who acts in each step, the skills each
-step uses (the project's own skills first, then the person's), and how the
-loop changes with a task's difficulty. Also the foreman's management loop and
-the epic loop. Saved at the person's level (every project) or a project's.
+The build session's loop (`work`) and the verification session's loop
+(`check`): their stages and steps, who acts in each step, the skill each step
+uses, and how the loops change with a task's difficulty. Also the foreman's
+management loop and the epic loop. Saved at the person's level (every
+project) or a project's.
+
+Each step's action is a default skill (`kit/skills/<name>`). The settings'
+`skills` map can replace one with a project or local skill
+(`{"skills": {"cross-check": "scenario-check"}}`); the replacement changes how
+the action is done, and the default skill's flow and record still apply.
 
 A loop is a list of steps: who acts, what it does, the skills it uses, and
 where each outcome goes. Consecutive steps with the same `stage` form a
@@ -46,8 +52,13 @@ Go into the chosen parts only.
   steps' `stage`. A stage's steps stay together, and a stage may not take the
   name of a step in another stage; step ids stay as they are. Labels per
   stage (`labels.events`) move to the new names.
-- **Skills per step**: for each step the person picks, offer the project's
-  skills first, then the person's. Save the bare name (`cross-check-scenario`);
+- **Replace a default skill**: for each default skill the person picks,
+  offer the project's skills first, then the person's, and save the choice in
+  `skills` (`"<default name>": "<skill>"`). Remove the entry to go back to the
+  default.
+- **Skills per step**: an extra skill a step uses besides its default one.
+  For each step the person picks, offer the project's skills first, then the
+  person's. Save the bare name (`scenario-check`);
   where it comes from is decided per machine when a task starts. Save the full
   `plugin:skill` only when the bare name matches more than one of the
   person's skills. A skill from a plugin directory found in step 1 adds
@@ -63,8 +74,9 @@ Go into the chosen parts only.
   `extra` (an added instruction). A stage whose steps all do not run is
   skipped.
 - **Roles**: `mode` (`prompt` or `pane`), `step` (tiers above the lead's), and
-  the fixed prompt. A judging prompt must keep the `Verdict:` line and the
-  comment title with the head SHA; the gate reads both.
+  the fixed prompt. A judging prompt must keep its `Verdict:` line: the gate
+  reads the last one in the answer that `launch.py --role` saves in the task
+  folder.
 
 ## 4. Save
 

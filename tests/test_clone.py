@@ -106,22 +106,35 @@ class Clone(unittest.TestCase):
         code, out, _ = self.clone("remove", "--project", "o/r", "--task", "t1", "--agent", "lead", "--force")
         self.assertEqual((code, out["removed"]), (0, [path]))
 
-    def test_remove_task_takes_clones_and_run_directory(self):
+    def test_remove_task_takes_clones_and_task_folder(self):
         lead = self.make()[1]["path"]
-        self.make("retracer-1")
-        runs = self.home.write(".cache/agent-foreman/runs/o-r/t1/status.jsonl", "{}\n")
+        self.make("qa-1")
+        runs = self.home.write(".local/state/agent-foreman/tasks/o-r/t1/status.jsonl", "{}\n")
         code, out, err = self.clone("remove", "--project", "o/r", "--task", "t1")
         self.assertEqual(code, 0, err)
         self.assertEqual(len(out["removed"]), 3)
         self.assertFalse(os.path.exists(os.path.dirname(os.path.dirname(lead))))  # no empty folders left
         self.assertFalse(os.path.exists(runs))
 
-    def test_remove_task_keeps_the_run_directory_when_a_clone_is_refused(self):
+    def test_remove_task_keeps_the_task_folder_when_a_clone_is_refused(self):
         lead = self.make()[1]["path"]
         put(os.path.join(lead, "a.txt"), "changed\n")
-        runs = self.home.write(".cache/agent-foreman/runs/o-r/t1/status.jsonl", "{}\n")
+        runs = self.home.write(".local/state/agent-foreman/tasks/o-r/t1/status.jsonl", "{}\n")
         self.assertEqual(self.clone("remove", "--project", "o/r", "--task", "t1")[0], 1)
         self.assertTrue(os.path.exists(runs))
+
+    def test_archive_copies_the_task_folder_to_the_foreman(self):
+        self.home.write(".local/state/agent-foreman/tasks/o-r/t1/plan.md", "# Plan\n")
+        self.home.write(".local/state/agent-foreman/tasks/o-r/t1/reviews/qa-1.json", "{}\n")
+        code, out, err = self.clone("archive", "--project", "o/r", "--task", "t1")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out["files"], 2)
+        dest = os.path.join(self.home.root, "state", "agent-foreman", "projects", "o-r", "tasks", "t1")
+        self.assertEqual(out["archived"], dest)
+        self.assertTrue(os.path.isfile(os.path.join(dest, "reviews", "qa-1.json")))
+        code, out, _ = self.clone("archive", "--project", "o/r", "--task", "none")
+        self.assertEqual(code, 1)
+        self.assertIn("no task folder", out["error"])
 
     def test_fresh_replaces_a_clean_clone_only(self):
         first = self.make()[1]

@@ -75,20 +75,21 @@ H agent rename <pane> <name>
 
 ## Send the brief
 
-The brief and its gate file go to `<cache>/briefs/<owner>-<repo>/` on the
-agent's machine as `<task>.md` and `<task>.gate.json`. For `local`, write
-them there. For a remote machine, write them to the scratchpad and copy them:
+The task's records go to its task folder on the agent's machine (`status.py
+dir --project <repo> --task <task>`): `task.md`, `brief.md`, `loop.json` and
+`gate.json`. For `local`, write them there. For a remote machine, write them
+to the scratchpad and copy them:
 
 ```bash
-ssh -o BatchMode=yes <target> mkdir -p <cache>/briefs/<owner>-<repo>
-scp -q -o BatchMode=yes <task>.md <task>.gate.json <target>:<cache>/briefs/<owner>-<repo>/
+ssh -o BatchMode=yes <target> mkdir -p <task folder>
+scp -q -o BatchMode=yes task.md brief.md loop.json gate.json <target>:<task folder>/
 ```
 
-`<target>` and `<cache>` (absolute) come from `bundle.py push`. Then, with
-`run_in_background`:
+`<target>` comes from `bundle.py push`; `<task folder>` keeps its `~`, which
+the machine expands. Then, with `run_in_background`:
 
 ```bash
-H agent prompt <pane> "Read <cache>/briefs/<owner>-<repo>/<task>.md and do what it says." --wait --timeout 3600000
+H agent prompt <pane> "Read <task folder>/brief.md and do what it says." --wait --timeout 3600000
 ```
 
 ## Read

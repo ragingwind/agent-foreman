@@ -20,6 +20,7 @@ Usage:
   config.py plugin-dir-candidates   (this session's --plugin-dir directories, agent-foreman left out)
   config.py skills [--plugin-dir DIR ...]   (skills with these directories added, nothing saved)
   config.py tier --difficulty low|mid|high --role ROLE [--skip PROFILE,...]
+      (a role other than the lead gets its tier and higher ones, never the lead's profile)
   config.py profiles | projects | machines | skills
 
 `plugin_dirs` in the settings lists plugin directories the person loads with
@@ -50,11 +51,12 @@ EVENTS = ["started", "stage", "done", "blocked", "stalled", "exited",
           "owner-decision", "approved", "merged", "all-approved"]
 LABEL_EVENTS = ["blocked", "exited", "owner-decision"]
 PLACEHOLDERS = ["task", "stage", "round", "machine", "profile", "project"]
-SECTIONS = ["plugin_dirs", "gateways", "profiles", "tiers", "difficulty", "launch", "bundle", "loop", "labels", "report", "ops"]
-PROJECT_KEYS = ["repo", "workspace", "machines"]
-# Model tiers, lowest first. Reviewers and retracers take one tier above the lead.
+SECTIONS = ["plugin_dirs", "gateways", "profiles", "tiers", "difficulty", "launch", "bundle", "skills", "loop", "labels",
+            "report", "ops"]
+PROJECT_KEYS = ["repo", "workspace", "machines", "tests"]
+# Model tiers, lowest first. The red team and QA take one tier above the lead.
 TIERS = loops.LEVELS
-ROLE_STEP = {"code-reviewer": 1, "retracer": 1}  # when the settings' loop.roles do not say
+ROLE_STEP = {"redteam": 1, "qa": 1}  # when the settings' loop.roles do not say
 LOCAL = "local"
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -318,6 +320,18 @@ def validate(cfg, saved=None, skills=None, project=False):
 
     problems += loops.validate_loop(cfg.get("loop", {}))
 
+    overrides = cfg.get("skills", {})
+    if not isinstance(overrides, dict):
+        problems.append("skills must map a default skill's name to the skill that replaces it")
+    else:
+        for name, ref in overrides.items():
+            if name not in loops.KIT:
+                problems.append(f"skills: {name!r} is not a default skill ({', '.join(loops.KIT)})")
+            elif not (isinstance(ref, str) and ref.strip()):
+                problems.append(f"skills: {name} must name the skill that replaces it")
+    if isinstance(cfg.get("loop"), dict) and isinstance(cfg.get("tiers"), dict) and not loops.validate_loop(cfg["loop"]):
+        problems += candidate_problems(cfg)
+
     diff = cfg.get("difficulty", {})
     for key in ("lines", "files", "top_dirs", "fix_days"):
         if not isinstance(diff.get(key), int) or isinstance(diff.get(key), bool) or diff[key] <= 0:
@@ -394,6 +408,11 @@ def validate(cfg, saved=None, skills=None, project=False):
         problems.append("ops: after_merge must be a list of steps")
 
     if project:
+        tests = cfg.get("tests", {})
+        if not isinstance(tests, dict) or any(k != "full" for k in tests):
+            problems.append("project: tests may only name full, the project's full test command")
+        elif "full" in tests and not (isinstance(tests["full"], str) and tests["full"].strip()):
+            problems.append("project: tests.full must be a command")
         if not REPO.match(str(cfg.get("repo", ""))):
             problems.append("project: repo must look like owner/name")
         if not str(cfg.get("workspace", "")).strip():
@@ -586,12 +605,49 @@ def project_skills(cfg, extra=()):
 def role_tier(difficulty, role="lead", cfg=None):
     """The model tier a role takes for a task of that difficulty: the
     difficulty's tier raised by the role's `step` (loop.roles), capped at high.
-    Standard: reviewers and retracers one above, every other role the same."""
+    Standard: the red team and QA one above, every other role the same."""
     if difficulty not in TIERS:
         raise ValueError(f"difficulty must be one of {', '.join(TIERS)}")
     roles = (cfg or {}).get("loop", {}).get("roles", {})
     step = roles[role].get("step", 0) if role in roles else ROLE_STEP.get(role, 0)
     return TIERS[min(len(TIERS) - 1, TIERS.index(difficulty) + step)]
+
+
+def lead_profile(cfg, difficulty):
+    """The profile a lead starts with: the first of the difficulty's tier."""
+    profiles = tier_profiles(cfg, difficulty)
+    return profiles[0] if profiles else None
+
+
+def role_candidates(cfg, difficulty, role, skip=()):
+    """The profiles a role may run on, in order: its tier and then each higher
+    one, never a lower one, and never the lead's profile, so the agents that
+    check the work always run on another model than the one that built it."""
+    lead = lead_profile(cfg, difficulty)
+    top = TIERS.index(role_tier(difficulty, role, cfg))
+    out = []
+    for tier in TIERS[top:]:
+        out += [p for p in tier_profiles(cfg, tier, skip) if p not in out and p != lead]
+    return out
+
+
+def candidate_problems(cfg):
+    """A difficulty whose lead has no profile, or whose checking role has no
+    profile other than the lead's."""
+    problems = []
+    loop = cfg.get("loop", {})
+    roles = sorted({s["actor"] for w in ("work", "check") for s in loop.get(w, [])
+                    if isinstance(s, dict) and s.get("actor") in loop.get("roles", {})})
+    for difficulty in TIERS:
+        if not tier_profiles(cfg, difficulty):
+            problems.append(f"tiers: {difficulty} has no profile for the lead")
+            continue
+        for role in roles:
+            if not role_candidates(cfg, difficulty, role):
+                problems.append(f"tiers: at {difficulty} difficulty, role {role} has no profile other than the lead's "
+                                f"({lead_profile(cfg, difficulty)}); add one to tier {role_tier(difficulty, role, cfg)} "
+                                f"or above")
+    return problems
 
 
 def tier_profiles(cfg, tier, skip=()):
@@ -723,7 +779,8 @@ def _cli(argv):
         cfg = load(args.project)
         tier = role_tier(args.difficulty, args.role, cfg)
         skip = [x for x in args.skip.split(",") if x]
-        profiles = tier_profiles(cfg, tier, skip)
+        profiles = (tier_profiles(cfg, tier, skip) if args.role == "lead"
+                    else role_candidates(cfg, args.difficulty, args.role, skip))
         print(json.dumps({"tier": tier, "profiles": profiles, "pick": profiles[0] if profiles else None}))
         if not profiles:
             return EXIT_SETUP_NEEDED

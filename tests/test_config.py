@@ -106,6 +106,14 @@ class Problems(unittest.TestCase):
         self.assertTrue(any("machine ghost is not a saved herdr machine" in x for x in p))
         self.assertTrue(any("machines must name" in x for x in self.problems({"repo": "o/r"}, project=True)))
 
+    def test_project_full_test_command(self):
+        base = {"repo": "o/r", "workspace": "r", "machines": {"local": "/r"}}
+        self.assertEqual(self.problems({**base, "tests": {"full": "make test"}}, project=True), [])
+        self.assertIn("project: tests.full must be a command",
+                      self.problems({**base, "tests": {"full": " "}}, project=True))
+        self.assertIn("project: tests may only name full, the project's full test command",
+                      self.problems({**base, "tests": {"unit": "x"}}, project=True))
+
 
 class MergeById(unittest.TestCase):
     BASE = {"loop": {"work": [{"id": "a", "does": "x", "skills": []}, {"id": "b", "does": "y", "skills": []},
@@ -130,11 +138,11 @@ class MergeById(unittest.TestCase):
         home = TempHome()
         try:
             full = config.load()
-            full["loop"]["work"][3]["skills"] = ["deep-clean-code"]
-            _, written, problems = config.save("user", full, saved={}, skills={})
+            full["loop"]["work"][4]["skills"] = ["deep-clean-code"]
+            _, written, problems = config.save("user", full, saved={}, skills={"deep-clean-code": "/x"})
             self.assertEqual(problems, [])
-            self.assertEqual(written, {"loop": {"work": [{"id": "refactor", "skills": ["deep-clean-code"]}]}})
-            self.assertEqual(config.load()["loop"]["work"][3]["does"], config.standard()["loop"]["work"][3]["does"])
+            self.assertEqual(written, {"loop": {"work": [{"id": "simplify", "skills": ["deep-clean-code"]}]}})
+            self.assertEqual(config.load()["loop"]["work"][4]["does"], config.standard()["loop"]["work"][4]["does"])
         finally:
             home.close()
 
@@ -146,19 +154,31 @@ class Tiers(unittest.TestCase):
     def tearDown(self):
         self.home.close()
 
-    def test_standard_tiers_are_the_harness_models_without_fable(self):
-        tiers = config.load()["tiers"]
-        self.assertEqual(tiers, {"low": ["haiku"], "mid": ["sonnet"], "high": ["opus"]})
-        self.assertNotIn("fable", json.dumps(tiers))
+    def test_standard_tiers_give_every_checking_role_another_model(self):
+        cfg = config.load()
+        self.assertEqual(cfg["tiers"], {"low": ["haiku"], "mid": ["sonnet"], "high": ["opus", "sonnet"]})
+        self.assertNotIn("fable", json.dumps(cfg["tiers"]))
+        self.assertEqual(config.candidate_problems(cfg), [])
 
     def test_role_tier(self):
         self.assertEqual(config.role_tier("low"), "low")
-        self.assertEqual(config.role_tier("low", "code-reviewer"), "mid")
-        self.assertEqual(config.role_tier("mid", "retracer"), "high")
-        self.assertEqual(config.role_tier("high", "code-reviewer"), "high")
-        self.assertEqual(config.role_tier("mid", "tester"), "mid")
+        self.assertEqual(config.role_tier("low", "redteam"), "mid")
+        self.assertEqual(config.role_tier("mid", "qa"), "high")
+        self.assertEqual(config.role_tier("high", "redteam"), "high")
+        self.assertEqual(config.role_tier("mid", "pair"), "mid")
         with self.assertRaises(ValueError):
             config.role_tier("huge")
+
+    def test_role_candidates_never_the_lead_and_never_lower(self):
+        cfg = config.load()
+        self.assertEqual(config.lead_profile(cfg, "high"), "opus")
+        self.assertEqual(config.role_candidates(cfg, "low", "pair"), ["sonnet", "opus"])
+        self.assertEqual(config.role_candidates(cfg, "mid", "redteam"), ["opus"])
+        self.assertEqual(config.role_candidates(cfg, "high", "qa"), ["sonnet"])
+        lone = config.merge(cfg, {"tiers": {"high": ["opus"]}})
+        self.assertEqual(config.role_candidates(lone, "high", "pair"), [])
+        self.assertTrue(any("at high difficulty, role pair has no profile other than the lead's (opus)" in p
+                            for p in config.validate(lone)))
 
     def test_order_and_fallback(self):
         cfg = config.merge(config.load(), {"tiers": {"mid": ["sonnet", "haiku"]}})
@@ -173,10 +193,12 @@ class Tiers(unittest.TestCase):
         self.assertIn("tiers: high names profile 'ghost', which does not exist", p)
 
     def test_tier_cli(self):
-        r = run("config.py", "tier", "--difficulty", "mid", "--role", "code-reviewer")
+        r = run("config.py", "tier", "--difficulty", "mid", "--role", "redteam")
         self.assertEqual(json.loads(r.stdout), {"tier": "high", "profiles": ["opus"], "pick": "opus"})
-        r = run("config.py", "tier", "--difficulty", "mid", "--role", "code-reviewer", "--skip", "opus")
+        r = run("config.py", "tier", "--difficulty", "mid", "--role", "redteam", "--skip", "opus")
         self.assertEqual(r.returncode, 3)
+        r = run("config.py", "tier", "--difficulty", "high")
+        self.assertEqual(json.loads(r.stdout)["pick"], "opus")
         self.assertEqual(run("config.py", "tier").returncode, 2)
 
 
@@ -286,9 +308,16 @@ class Skills(unittest.TestCase):
         self.assertEqual(config.plugin_dirs({"plugin_dirs": [plug, "/no/such/dir"]}), [plug])
 
     def test_project_skills_order_without_repeats(self):
-        cfg = config.merge(config.load(), {"bundle": {"skills": ["a"]}})
-        cfg["loop"]["work"][3]["skills"] = ["b", "a"]
-        self.assertEqual(config.project_skills(cfg, ["c", "b"]), ["a", "b", "c"])
+        cfg = {"bundle": {"skills": ["a"]}, "loop": {"work": [{"skills": ["b", "a"]}], "check": [{"skills": ["d"]}]}}
+        self.assertEqual(config.project_skills(cfg, ["c", "b"]), ["a", "b", "d", "c"])
+
+    def test_default_skill_replacements(self):
+        cfg = config.load()
+        self.assertEqual(config.validate(config.merge(cfg, {"skills": {"cross-check": "scenario"}})), [])
+        p = config.validate(config.merge(cfg, {"skills": {"ghost": "x", "smoke": " "}}))
+        self.assertIn("skills: 'ghost' is not a default skill", "\n".join(p))
+        self.assertIn("skills: smoke must name the skill that replaces it", p)
+        self.assertIn("skills must map", "\n".join(config.validate(config.merge(cfg, {"skills": ["x"]}))))
 
 
 class Labels(unittest.TestCase):

@@ -3,18 +3,20 @@
 
 Usage:
   python3 launch.py [PROFILE] [--name NAME] [--session-id UUID] [--project OWNER/REPO]
-                    [--no-worktree] [--status FILE] [--disallow TOOL,...] [--dry-run]
-  python3 launch.py [PROFILE] --print --prompt-file FILE --out FILE [--session-id UUID]
-                    [--status FILE] [--disallow TOOL,...] [--dry-run]
+                    [--no-worktree] [--task-dir DIR] [--status FILE] [--disallow TOOL,...] [--dry-run]
+  python3 launch.py [PROFILE] --print --prompt-file FILE --out FILE [--role ROLE] [--name NAME]
+                    [--session-id UUID] [--task-dir DIR] [--status FILE] [--disallow TOOL,...] [--dry-run]
 
 --disallow TOOL,... removes tools from the agent (a reviewer gets no edit
 tools). It narrows what the agent can do; it is not a sandbox.
 
---status FILE gives the agent its task's status file (`status.py path`): it
-sets AF_STATUS_FILE, with `~` expanded on this machine, and AF_AGENT (the
---name, or the profile). The bundle's hooks then append heartbeats there, and
-`status.py note` writes there. Without --status both variables are cleared,
-so an agent never writes into the status file of the agent that started it.
+--task-dir DIR gives the agent its task folder (`status.py dir`): it sets
+AF_TASK_DIR, and AF_STATUS_FILE to the folder's status.jsonl unless --status
+names another file. --status FILE sets AF_STATUS_FILE alone. Both expand `~`
+on this machine and set AF_AGENT (the --name, or the profile). The bundle's
+hooks then append heartbeats there, and `status.py note` writes there. Without
+them the variables are cleared, so an agent never writes into the status file
+of the agent that started it.
 
 The profile's `agent` kind (default `claude`) picks the adapter that builds
 the command (scripts/adapters/). Run from a bundle (a directory that holds
@@ -29,6 +31,9 @@ agent, so it runs the same in any shell.
 --print runs the agent once in prompt mode, where it is started (no
 worktree): the prompt comes from --prompt-file, the agent's JSON result goes
 to --out, and one line of JSON is printed: ok, session_id, cost, denials, out.
+Next to --out it writes `<out without .json>.meta.json`: the role (--role),
+the agent's name, the profile and its model, the commit checked out where the
+agent ran, and when it started and ended. The gate reads verdicts from there.
 
 --dry-run prints the command and the names of the variables it sets or
 clears, never their values.
@@ -50,7 +55,7 @@ from config import (EXIT_AGENT_ERROR, EXIT_SETUP_NEEDED, EXIT_TOKEN_MISSING, REP
                     validate_launch)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STATUS_VARS = ("AF_STATUS_FILE", "AF_AGENT")
+STATUS_VARS = ("AF_STATUS_FILE", "AF_AGENT", "AF_TASK_DIR")
 
 
 def fail(code, message):
@@ -79,6 +84,8 @@ def main():
     parser.add_argument("--out", help="with --print: where the agent's JSON result goes")
     parser.add_argument("--disallow", default="", metavar="TOOL,...", help="tools the agent may not use")
     parser.add_argument("--status", metavar="FILE", help="the task's status file, for heartbeats and stage notes")
+    parser.add_argument("--task-dir", metavar="DIR", help="the task folder; sets AF_TASK_DIR and its status file")
+    parser.add_argument("--role", help="with --print: the loop role this agent plays, recorded for the gate")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.print_mode and not (args.prompt_file and args.out):
@@ -114,10 +121,15 @@ def main():
                                            disallowed=[t.strip() for t in args.disallow.split(",") if t.strip()])
     except adapters.TokenMissing as e:
         fail(EXIT_TOKEN_MISSING, f"token variable {e.variable} is not set in this environment")
-    if args.status:
-        env.update(AF_STATUS_FILE=os.path.abspath(os.path.expanduser(args.status)), AF_AGENT=args.name or profile_name)
-    else:
-        clear = set(clear) | set(STATUS_VARS)
+    task_dir = os.path.abspath(os.path.expanduser(args.task_dir)) if args.task_dir else None
+    status = args.status or (os.path.join(task_dir, "status.jsonl") if task_dir else None)
+    clear = set(clear) | set(STATUS_VARS)
+    if status:
+        env.update(AF_STATUS_FILE=os.path.abspath(os.path.expanduser(status)), AF_AGENT=args.name or profile_name)
+        clear -= {"AF_STATUS_FILE", "AF_AGENT"}
+    if task_dir:
+        env["AF_TASK_DIR"] = task_dir
+        clear.discard("AF_TASK_DIR")
 
     if args.dry_run:
         print(f"profile: {profile_name}")
@@ -133,21 +145,46 @@ def main():
     child.update(env)
     if not args.print_mode:
         os.execvpe(adapter.EXECUTABLE, argv, child)
-    return run_once(adapter, argv, child, args.prompt_file, args.out)
+    meta = {"role": args.role, "agent": args.name or profile_name, "profile": profile_name,
+            "gateway": profile["gateway"], "model": profile["model"], "head": head_commit()}
+    return run_once(adapter, argv, child, args.prompt_file, args.out, meta)
 
 
-def run_once(adapter, argv, env, prompt_file, out):
-    """Prompt mode: run the agent once, keep its raw result, print a summary."""
+def head_commit():
+    """The commit checked out where the agent runs, or None outside a git checkout."""
+    r = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def now_iso():
+    import time
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def meta_path(out):
+    return (out[:-5] if out.endswith(".json") else out) + ".meta.json"
+
+
+def write_atomic(path, text):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".tmp.")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def run_once(adapter, argv, env, prompt_file, out, meta=None):
+    """Prompt mode: run the agent once, keep its raw result and what ran it,
+    print a summary."""
+    started = now_iso()
     with open(prompt_file, "rb") as prompt:
         proc = subprocess.run(argv, stdin=prompt, capture_output=True, env=env)
     text = proc.stdout.decode("utf-8", "replace")
-    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(out)), prefix=".tmp.")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.replace(tmp, out)
+    write_atomic(out, text)
     summary = adapter.parse_print(text)
     ok = summary["ok"] and proc.returncode == 0
+    write_atomic(meta_path(out), json.dumps({**(meta or {}), "started": started, "ended": now_iso(), "ok": ok,
+                                             "session_id": summary["session_id"]}, indent=2) + "\n")
     print(json.dumps({"ok": ok, "session_id": summary["session_id"], "cost": summary["cost"],
                       "denials": len(summary["denials"]), "out": os.path.abspath(out),
                       "error": None if ok else (summary["result"] or proc.stderr.decode("utf-8", "replace"))[-300:]}))

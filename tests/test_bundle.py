@@ -9,6 +9,7 @@ from helpers import TempHome, run
 
 import bundle
 import config
+import loop as loops
 
 
 class Bundle(unittest.TestCase):
@@ -22,6 +23,12 @@ class Bundle(unittest.TestCase):
         patcher = mock.patch.object(bundle, "local_skills", return_value={"p:tidy": self.skill})
         patcher.start()
         self.addCleanup(patcher.stop)
+        for name in loops.KIT:
+            self.home.write(f"kit/skills/{name}/SKILL.md", f"---\nname: {name}\n---\nDo {name}.")
+        kit = mock.patch.object(bundle, "KIT_DIR", os.path.join(self.home.root, "kit", "skills"))
+        kit.start()
+        self.addCleanup(kit.stop)
+        self.kit = [f"foreman-kit:{n}" for n in loops.KIT]
 
     def tearDown(self):
         self.home.close()
@@ -30,8 +37,9 @@ class Bundle(unittest.TestCase):
         h1, files, skills, _ = bundle.build("o/r", [])
         h2, _, _, _ = bundle.build("o/r", [])
         self.assertEqual(h1, h2)
-        self.assertEqual(skills, ["foreman-kit:tidy"])
+        self.assertEqual(skills, ["foreman-kit:tidy"] + self.kit)
         self.assertIn("skills/tidy/scripts/run.py", files)
+        self.assertIn("skills/cross-check/SKILL.md", files)  # every default skill is carried
         self.assertNotIn("skills/tidy/__pycache__/x.pyc", files)
         for rel in ("bundle.json", ".claude-plugin/plugin.json", "config.json", "loop.md", "scripts/launch.py",
                     "scripts/config.py", "scripts/transcript.py", "scripts/adapters/__init__.py",
@@ -95,12 +103,24 @@ class Bundle(unittest.TestCase):
 
     def test_loop_skills_project_first_then_bundle_then_warning(self):
         self.home.write("config/agent-foreman/config.json",
-                        {"loop": {"work": [{"id": "refactor", "skills": ["tidy", "scenario", "ghost"]}]}})
+                        {"loop": {"work": [{"id": "simplify", "skills": ["tidy", "scenario", "ghost"]}]}})
         _, files, skills, warnings = bundle.build("o/r", [], project_names=["scenario"])
-        self.assertEqual(skills, ["foreman-kit:tidy"])          # bundle.skills and the loop name the same skill
+        self.assertEqual(skills, ["foreman-kit:tidy"] + self.kit)  # bundle.skills and the loop name the same skill
         self.assertFalse(any(rel.startswith("skills/scenario/") for rel in files))  # a project skill stays put
         self.assertEqual(len(warnings), 1)
         self.assertIn("ghost", warnings[0])
+
+    def test_a_replacement_comes_from_the_project_or_the_person(self):
+        self.home.write("config/agent-foreman/config.json", {"skills": {"cross-check": "scenario", "simplify": "tidy"}})
+        _, files, skills, warnings = bundle.build("o/r", [], project_names=["scenario"])
+        self.assertEqual((skills.count("foreman-kit:tidy"), warnings), (1, []))
+        self.assertIn("skills/cross-check/SKILL.md", files)  # the default stays in the bundle for the flow and record
+
+    def test_a_missing_default_skill_is_a_warning(self):
+        os.remove(os.path.join(self.home.root, "kit", "skills", "smoke", "SKILL.md"))
+        _, _, skills, warnings = bundle.build("o/r", [])
+        self.assertNotIn("foreman-kit:smoke", skills)
+        self.assertTrue(any("default skill smoke is missing" in w for w in warnings))
 
     def test_unknown_or_disabled_machine(self):
         machines = {"off": {"target": "h", "enabled": False}}

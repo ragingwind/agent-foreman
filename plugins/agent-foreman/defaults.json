@@ -27,7 +27,8 @@
       "sonnet"
     ],
     "high": [
-      "opus"
+      "opus",
+      "sonnet"
     ]
   },
   "difficulty": {
@@ -113,32 +114,44 @@
   "bundle": {
     "skills": []
   },
+  "skills": {},
   "loop": {
     "roles": {
-      "code-reviewer": {
+      "pair": {
         "mode": "prompt",
-        "step": 1,
+        "step": 0,
         "prompt": "review",
         "deny_tools": [
           "Edit",
           "Write",
           "NotebookEdit"
         ],
-        "verdict_title": "Code review",
         "accept": [
           "approved"
         ]
       },
-      "retracer": {
+      "redteam": {
         "mode": "prompt",
         "step": 1,
-        "prompt": "retrace",
+        "prompt": "redteam",
         "deny_tools": [
           "Edit",
           "Write",
           "NotebookEdit"
         ],
-        "verdict_title": "Scenario retrace",
+        "accept": [
+          "approved"
+        ]
+      },
+      "qa": {
+        "mode": "prompt",
+        "step": 1,
+        "prompt": "qa",
+        "deny_tools": [
+          "Edit",
+          "Write",
+          "NotebookEdit"
+        ],
         "accept": [
           "pass"
         ]
@@ -157,71 +170,63 @@
       }
     },
     "prompts": {
-      "review": "Code review of pull request #<PR> of <repo>, closing #<issue>, difficulty <difficulty>. You did not write this change. Read the issue with its comments, the repository's CLAUDE.md and rules, and the diff <of the whole pull request | since <SHA>, the head of the last review>. Try to break it: correctness under every input and timing the code allows, a test that would pass without the change, scope beyond or short of the issue, and the repository's rules. Read the test changes before the code: an assertion rewritten to match new behavior, a removed or skipped test, a skipped check, a lowered threshold or an edited CI file is blocking unless the issue asks for it. Check that CI passes and that the pull request carries the manual scenario with its raw output, or a one-line reason for skipping it under ## Tests. Mark each finding blocking (wrong behavior, a security hole, a missing test for new behavior, a broken rule) or non-blocking. The verdict is changes requested only when a blocking finding exists. Post one comment titled `## Code review of #<PR> at <head SHA>`: the first line is `Verdict: approved` or `Verdict: changes requested`, then each finding with one line of evidence; keep it under 3000 characters. Work only in your own clone; do not edit, commit or push, and do not start other agents. End with the verdict line.",
-      "retrace": "Scenario retrace of pull request #<PR> of <repo>, closing #<issue>. You did not write this change and you do not read its diff. Read only the issue (its completion criteria) and the manual scenario comment on the pull request. First check that the scenario covers every criterion and name any it misses. Then clone the pull request's head into <dir> and follow the scenario's steps exactly as written, keeping each step's raw output. Post one comment titled `## Scenario retrace of #<PR> at <head SHA>`: the first line is `Verdict: pass`, `Verdict: code problem` or `Verdict: scenario problem` (a wrong step or a missing criterion), then each step with pass or fail and its evidence. Work only in your own clone; do not edit, commit or push, and do not start other agents. End with the verdict line."
+      "review": "You are the pair in the build session of task <task> of <repo>. You did not write this change. Review it the way the skill <skill> says. The task folder is <task folder>: read task.md and plan.md there. Review the diff from <base> to HEAD in this clone; in a later round, only the diff since <last reviewed SHA>. Do not edit, commit or push, and do not start other agents. Put each finding on its own line, starting with `must-fix:`, `should-fix:` or `could:`, with one line of evidence. End with one line: `Verdict: approved` or `Verdict: changes`; changes only when a must-fix or should-fix finding exists.",
+      "redteam": "You are the red team in the verification session of task <task> of <repo>. You did not build this change; try to break it. Review it the way the skill <skill> says. The task folder is <task folder>: read task.md (its done-when), the test records in plan.md (Checks) and scenario.md, and the project's guides (CLAUDE.md, rules); do not read plan.md's Decisions. Review the diff from <base> to HEAD in this clone. Do not edit, commit or push, and do not start other agents. Put each finding on its own line, starting with `must-fix:`, `should-fix:` or `could:`, with one line of evidence. End with one line: `Verdict: approved` or `Verdict: changes`; changes only when a must-fix or should-fix finding exists.",
+      "qa": "You are QA in the verification session of task <task> of <repo>. Test it the way the skills <skills> say. The task folder is <task folder>. First run the project's full tests: <full test command>. Then run the user scenario test: check that scenario.md covers every done-when in task.md, then follow scenario.md as a user would, step by step, without reading the diff, and compare each step's output with its Agent block. For a trivial task, run the full tests only. Do not edit, commit or push, and do not start other agents. Put each failing test on its own line with its output, and each mismatch as `mismatch (script|environment|product): step N — <what differed>` with the output that differed. End with one line: `Verdict: pass` or `Verdict: fail`."
     },
     "work": [
       {
-        "id": "start",
+        "id": "plan",
         "stage": "plan",
         "actor": "lead",
-        "does": "Set the issue's labels, cut the branch from the base, and post one handoff comment: owner, branch, difficulty, and the issue's completion criteria in your own words. Unless the change is trivial, draft the manual scenario as the target before writing code.",
-        "skills": [],
+        "does": "Read task.md, the code and the project's guides. Write plan.md (the work breakdown) and scenario.md (the scenario script; for a bug, reproduce it first). A trivial task has no scenario.",
+        "skills": [
+          "work-breakdown",
+          "cross-check"
+        ],
         "next": {
-          "done": "implement"
+          "done": "build"
         }
       },
       {
-        "id": "implement",
+        "id": "build",
         "stage": "build",
         "actor": "lead",
-        "does": "Write the failing check first (a new test, or the scenario's step), then the change, following the repository's CLAUDE.md and rules and the ADRs the issue links. In a fix round, fix the findings.",
-        "skills": [],
+        "does": "For each work item in plan.md: implement it (a failing test first if the project uses TDD), run its tests, commit once, and mark it done. Do not start the next item while a test of this item fails.",
+        "skills": [
+          "tdd",
+          "unit",
+          "commit"
+        ],
         "next": {
-          "done": "test"
+          "done": "verify"
         }
       },
       {
-        "id": "test",
-        "stage": "build",
-        "actor": "lead",
-        "does": "Show the new tests failing without the change and passing with it (set the change aside, run, restore, run), and run the related tests. Pin a minimized failing case as a regression test.",
-        "skills": [],
-        "next": {
-          "done": "refactor"
-        }
-      },
-      {
-        "id": "refactor",
-        "stage": "build",
-        "actor": "lead",
-        "does": "Restructure this round's diff for readability without changing its behavior; the tests stay green.",
-        "skills": [],
-        "next": {
-          "done": "regression"
-        }
-      },
-      {
-        "id": "regression",
+        "id": "verify",
         "stage": "verify",
         "actor": "lead",
-        "does": "Rebase onto the current base, then run the full test suite on the result. Read your own test changes: an edited assertion must state the intended behavior, not whatever the new code does.",
-        "skills": [],
+        "does": "Run the tests near the change and the smoke test, and run scenario.md in a fresh clone (not for a trivial task). Write the results in plan.md's Checks and in scenario.md's Agent blocks.",
+        "skills": [
+          "unit",
+          "smoke",
+          "cross-check"
+        ],
         "next": {
-          "done": "scenario"
-        },
-        "extra": {
-          "high": "Also run the checks that run only on the main branch when the change reaches them."
+          "fail": "build",
+          "done": "review"
         }
       },
       {
-        "id": "scenario",
-        "stage": "verify",
-        "actor": "lead",
-        "does": "Run the manual scenario end to end through the surface the change reaches (an API, a CLI, a UI, a job), as a user or caller would, keeping each step's raw output, and screens for a UI. In a fix round, only the steps the fix touches.",
-        "skills": [],
+        "id": "review",
+        "stage": "review",
+        "actor": "pair",
+        "does": "The pair, on another model, reviews the diff against task.md and plan.md.",
+        "skills": [
+          "review"
+        ],
         "next": {
-          "done": "pull-request"
+          "done": "simplify"
         },
         "run": {
           "low": "if-not-trivial",
@@ -230,55 +235,66 @@
         }
       },
       {
-        "id": "pull-request",
+        "id": "simplify",
         "stage": "review",
         "actor": "lead",
-        "does": "Open a draft pull request into the base, or push in a fix round. Body: ## Purpose (what the change is for), ## Decisions (each choice, the alternatives ruled out and why), ## Tests (the commands and their pass counts; for a trivial change, the one-line reason it has no scenario). Keep it small: over 400 changed lines, split it or say why not. Post or update one comment titled `## Manual scenario`: each step with its raw output in code blocks.",
-        "skills": [],
+        "does": "Clean up the code in this task's diff without changing its behavior. Existing tests stay unchanged. Commit the clean-up apart from the feature commits.",
+        "skills": [
+          "simplify"
+        ],
         "next": {
-          "done": "code-review"
-        }
-      },
-      {
-        "id": "code-review",
-        "stage": "review",
-        "actor": "code-reviewer",
-        "does": "Judge the diff (in a fix round, the diff since the last review), the rules, attempts to break it, the test changes, CI, and the scenario or its skip reason. With two reviewers, each runs on a different model.",
-        "skills": [],
-        "next": {
-          "changes": "implement",
-          "approved": "scenario-retrace"
-        },
-        "count": {
-          "low": 1,
-          "mid": 1,
-          "high": 2
-        }
-      },
-      {
-        "id": "scenario-retrace",
-        "stage": "review",
-        "actor": "retracer",
-        "does": "Without reading the diff: check the scenario against the issue's criteria, then follow it in a fresh clone.",
-        "skills": [],
-        "next": {
-          "code": "implement",
-          "scenario": "scenario",
-          "pass": "ready"
+          "done": "fix"
         },
         "run": {
-          "low": "never",
+          "low": "if-not-trivial",
           "mid": "if-not-trivial",
           "high": "if-not-trivial"
         }
       },
       {
-        "id": "ready",
-        "stage": "handoff",
+        "id": "fix",
+        "stage": "review",
         "actor": "lead",
-        "does": "Run the gate in your clone (`gate.py run <gate file> --cwd <clone> --before-ready`) and fix what it blocks; when it passes, mark the pull request ready, update the handoff comment, post the gate result, and report.",
+        "does": "Fix the pair's must-fix and should-fix findings. For one you do not fix, write the reason in plan.md's Decisions. A fix that needs a new work item goes back to build.",
         "skills": [],
         "next": {
+          "large": "build",
+          "done": "recheck"
+        },
+        "run": {
+          "low": "if-not-trivial",
+          "mid": "if-not-trivial",
+          "high": "if-not-trivial"
+        }
+      },
+      {
+        "id": "recheck",
+        "stage": "review",
+        "actor": "pair",
+        "does": "The pair checks only the fixes and the clean-up.",
+        "skills": [
+          "review"
+        ],
+        "next": {
+          "changes": "fix",
+          "approved": "finalize"
+        },
+        "run": {
+          "low": "if-not-trivial",
+          "mid": "if-not-trivial",
+          "high": "if-not-trivial"
+        }
+      },
+      {
+        "id": "finalize",
+        "stage": "finalize",
+        "actor": "lead",
+        "does": "Rebase onto the base (back to build if you had to fix a conflict). Write handoff.md. Open a draft pull request whose body is handoff.md, run the gate with --before-ready, and when it passes mark the pull request ready.",
+        "skills": [
+          "handoff"
+        ],
+        "next": {
+          "conflict": "build",
           "done": "stop"
         }
       }
@@ -287,7 +303,7 @@
       {
         "id": "register",
         "actor": "foreman",
-        "does": "Register the work as issues of the smallest useful size.",
+        "does": "Write the task as task.md (goal, done-when, out of scope) from the person's words, in a new task folder.",
         "skills": [],
         "next": {
           "done": "brief"
@@ -296,7 +312,7 @@
       {
         "id": "brief",
         "actor": "foreman",
-        "does": "Judge the difficulty and write the brief: the removal rule first, then the issue, difficulty, base, isolation, the rendered loop, the gate file and the reporting rule.",
+        "does": "Judge the difficulty and write brief.md, loop.json and the gate file in the task folder: the task, its difficulty and base, the lead's clone, the rendered loop with the skill of each step, and the reporting rule.",
         "skills": [],
         "next": {
           "done": "launch"
@@ -305,7 +321,7 @@
       {
         "id": "launch",
         "actor": "foreman",
-        "does": "Make the lead's clone, open the task's tab and start the lead in its clone.",
+        "does": "Make the lead's clone, open the task's tab and start the lead in its clone with launch.py --task-dir.",
         "skills": [],
         "next": {
           "done": "watch"
@@ -314,7 +330,7 @@
       {
         "id": "watch",
         "actor": "foreman",
-        "does": "Check every interval: status files, screens, disk. Relay permission prompts and blocked removals to the person in one line.",
+        "does": "Check every interval: the status files, the screens, the disk. Relay permission prompts and blocked removals to the person in one line.",
         "skills": [],
         "next": {
           "done": "coordinate"
@@ -326,13 +342,22 @@
         "does": "Run tasks that touch the same files in sequence. Relay the person's decisions in the person's own words.",
         "skills": [],
         "next": {
+          "done": "verify-session"
+        }
+      },
+      {
+        "id": "verify-session",
+        "actor": "foreman",
+        "does": "When the lead is ready, start the verification session: the red team and QA, each in its own clone at the head, on a model other than the lead's (loop.py render --loop check). Send the findings back as the check loop says; after 3 rounds, ask the person.",
+        "skills": [],
+        "next": {
           "done": "merge-gate"
         }
       },
       {
         "id": "merge-gate",
         "actor": "foreman",
-        "does": "Run the task's gate again: both verdicts at the head SHA, scenario and evidence, CI, ready. A clean rebase whose range-diff shows the same change needs no new review.",
+        "does": "Run the task's gate again with --task-dir: the verdicts at the head from models other than the lead's, the documents, CI, ready.",
         "skills": [],
         "next": {
           "done": "merge"
@@ -350,7 +375,7 @@
       {
         "id": "cleanup",
         "actor": "foreman",
-        "does": "Labels, branches, agents, tabs, clones, run directories, disk; then the project's own steps (tags, docs) from its memory. When a review finding recurs, write it into the project's memory and propose a rule, a test or a hook so it does not happen again.",
+        "does": "Archive the task folder, then remove the clones and the folder, close the tab, and record the disk; then the project's own steps from its memory. When a review finding recurs, write it into the project's memory and propose a rule, a test or a hook.",
         "skills": [],
         "next": {
           "done": "stop"
@@ -413,6 +438,36 @@
           "done": "stop"
         }
       }
+    ],
+    "check": [
+      {
+        "id": "redteam-review",
+        "stage": "redteam-review",
+        "actor": "redteam",
+        "does": "The red team reviews the change and tries to break it.",
+        "skills": [
+          "redteam-review"
+        ],
+        "next": {
+          "changes": "build",
+          "approved": "stop"
+        }
+      },
+      {
+        "id": "test",
+        "stage": "test",
+        "actor": "qa",
+        "does": "QA runs the full tests and the user scenario test.",
+        "skills": [
+          "full",
+          "cross-check"
+        ],
+        "next": {
+          "fail": "build",
+          "script": "verify",
+          "pass": "stop"
+        }
+      }
     ]
   },
   "labels": {
@@ -441,11 +496,11 @@
     "disk_check": true,
     "disk_min_free_gb": 20,
     "after_merge": [
-      "Set the issue to `status:done`.",
       "Check that the local branch head equals the merged pull request's head, then delete the remote and the local branch.",
       "Stop each agent of the task (terminals/herdr.md \"Close\").",
       "Close the task's tab.",
-      "Remove the task's clones and run directory: `clone.py remove --project <repo> --task <task> --machine <label>`; a refusal names what would be lost, which goes to the person.",
+      "Archive the task folder to the foreman's project folder: `clone.py archive --project <repo> --task <task> --machine <label>`.",
+      "Remove the task's clones and its task folder: `clone.py remove --project <repo> --task <task> --machine <label>`; a refusal names what would be lost, which goes to the person.",
       "Remove the task's containers and build directories on its machine.",
       "Check `df -h /` on the task's machine and record it in the ledger.",
       "Remove the task's rows from the ledger and log the event."

@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import shutil
 import stat
 import subprocess
 import unittest
@@ -25,8 +26,29 @@ def pr(**over):
     return data
 
 
+PLAN = ("# Plan: x\n\n## Work breakdown\n\n| id | goal | done when | files | test | status | commit |\n"
+        "|---|---|---|---|---|---|---|\n| W1 | a | b | c | unit | done | abc1234 |\n\n## Decisions\n- none\n")
+HANDOFF = "# Handoff: x\n\n## Purpose\na\n\n## Decisions\nb\n\n## Tests\nc\n\n## Not touched\nd\n\n## Follow-ups\ne\n"
+SCENARIO = ("# Scenario: x\n\n### 1 · run it\nWhy.\n\n**Expect** — `ok`\n\n**Do**\n\n```bash\nrun\n```\n\n"
+            "**Agent**\n\n```\nok\n```\n\n## Closing\nVerdict: pass\nNothing left up.\n")
+
+
+def task_folder(home, answers=(), plan=PLAN, handoff=HANDOFF, scenario=SCENARIO):
+    """A task folder with the records and one answer per (agent, role, profile, verdict, head, ended)."""
+    root = os.path.join(home.root, "task")
+    for name, text in (("plan.md", plan), ("handoff.md", handoff), ("scenario.md", scenario)):
+        if text is not None:
+            home.write(f"task/{name}", text)
+    for agent, role, profile, verdict, head, ended in answers:
+        home.write(f"task/reviews/{agent}-{ended}.json", {"result": f"must-fix: none\nVerdict: {verdict}"})
+        home.write(f"task/reviews/{agent}-{ended}.meta.json", {"role": role, "agent": agent, "profile": profile,
+                                                              "head": head, "ended": ended, "ok": True})
+    return root
+
+
 def check(name, data, **spec):
-    return gate.CHECKS[name](data, {"check": name, **spec}, {"cwd": spec.pop("cwd", None)})
+    ctx = {"cwd": spec.pop("cwd", None), "task_dir": spec.pop("task_dir", None)}
+    return gate.CHECKS[name](data, {"check": name, **spec}, ctx)
 
 
 class Checks(unittest.TestCase):
@@ -91,9 +113,60 @@ class Checks(unittest.TestCase):
         self.assertEqual(gate.validate_gate({"repo": "o/r", "pr": None, "checks": [{"check": "ci"}]}), [])
         p = gate.validate_gate({"repo": "o/r", "pr": "1", "checks": [{"check": "magic"}, {"check": "verdict"},
                                                                      {"check": "command"}, {"check": "ci", "severity": "x"}]})
-        for words in ("pr must be a number", "'magic'", "needs a title", "needs run", "severity must be"):
+        for words in ("pr must be a number", "'magic'", "needs a role", "needs run", "severity must be"):
             self.assertTrue(any(words in x for x in p), words)
         self.assertEqual(gate.validate_gate({"repo": "bad"}), ["gate: repo must look like owner/name"])
+
+
+class RoleChecks(unittest.TestCase):
+    def setUp(self):
+        self.home = TempHome()
+
+    def tearDown(self):
+        self.home.close()
+
+    def test_role_verdict_from_the_task_folder(self):
+        spec = {"role": "pair", "accept": ["approved"], "not_profiles": ["opus"]}
+        good = task_folder(self.home, [("pair-1", "pair", "sonnet", "approved", HEAD, "2026-11-14T01:00:00Z")])
+        self.assertTrue(check("verdict", pr(), task_dir=good, **spec)[0])
+        self.assertFalse(check("verdict", pr(), **spec)[0])  # needs --task-dir
+
+    def test_role_verdict_refuses_the_lead_old_heads_and_takes_the_latest(self):
+        spec = {"role": "pair", "accept": ["approved"], "not_profiles": ["opus"]}
+        lead = task_folder(self.home, [("pair-1", "pair", "opus", "approved", HEAD, "2026-11-14T01:00:00Z")])
+        ok, evidence = check("verdict", pr(), task_dir=lead, **spec)
+        self.assertFalse(ok)
+        self.assertIn("(the lead's profile)", evidence)
+
+    def test_role_verdict_old_head_and_latest_run(self):
+        spec = {"role": "pair", "accept": ["approved"], "not_profiles": []}
+        root = task_folder(self.home, [("pair-1", "pair", "sonnet", "approved", "0" * 40, "2026-11-14T01:00:00Z")])
+        self.assertFalse(check("verdict", pr(), task_dir=root, **spec)[0])
+        task_folder(self.home, [("pair-1", "pair", "sonnet", "changes", HEAD, "2026-11-14T02:00:00Z"),
+                                ("pair-1", "pair", "sonnet", "approved", HEAD, "2026-11-14T01:30:00Z")])
+        self.assertFalse(check("verdict", pr(), task_dir=root, **spec)[0])  # the latest run says changes
+        task_folder(self.home, [("pair-1", "pair", "sonnet", "approved", HEAD, "2026-11-14T03:00:00Z")])
+        self.assertTrue(check("verdict", pr(), task_dir=root, **spec)[0])
+        shutil.rmtree(os.path.join(root, "reviews"))
+        qa = task_folder(self.home, [("qa-1", "qa", "sonnet", "pass", HEAD, "2026-11-14T03:00:00Z")])
+        self.assertFalse(check("verdict", pr(), task_dir=qa, **spec)[0])  # a qa answer is not the pair's
+        self.assertTrue(check("verdict", pr(), task_dir=qa, role="qa", accept=["pass"])[0])
+
+    def test_docs(self):
+        root = task_folder(self.home)
+        self.assertTrue(check("docs", pr(), task_dir=root)[0])
+        todo = PLAN.replace("| done |", "| todo |")
+        root = task_folder(self.home, plan=todo)
+        self.assertIn("work items not done: W1", check("docs", pr(), task_dir=root)[1])
+        root = task_folder(self.home, plan=PLAN, handoff="# Handoff\n\n## Purpose\nx\n")
+        self.assertIn("handoff.md lacks Decisions", check("docs", pr(), task_dir=root)[1])
+        failing = SCENARIO.replace("Verdict: pass", "Verdict: fail")
+        root = task_folder(self.home, handoff=HANDOFF, scenario=failing)
+        self.assertIn("closing verdict is not pass", check("docs", pr(), task_dir=root)[1])
+        self.assertTrue(check("docs", pr(), task_dir=root, trivial=True)[0])  # no scenario for a trivial task
+        empty = SCENARIO.replace("**Agent**\n\n```\nok\n```", "**Agent**\n\n```\n```")
+        root = task_folder(self.home, scenario=empty)
+        self.assertIn("empty Agent block", check("docs", pr(), task_dir=root)[1])
 
 
 class Template(unittest.TestCase):
@@ -106,13 +179,19 @@ class Template(unittest.TestCase):
 
     def test_follows_the_loop(self):
         high = gate.template(self.cfg, "o/r", 7, "high", False)
-        verdicts = [(c["title"], c["count"], c["accept"]) for c in high["checks"] if c["check"] == "verdict"]
-        self.assertEqual(verdicts, [("Code review", 2, ["approved"]), ("Scenario retrace", 1, ["pass"])])
+        verdicts = [(c["role"], c["count"], c["accept"], c["not_profiles"], c.get("at"))
+                    for c in high["checks"] if c["check"] == "verdict"]
+        self.assertEqual(verdicts, [("pair", 1, ["approved"], ["opus"], None),
+                                    ("redteam", 1, ["approved"], ["opus"], "merge"),
+                                    ("qa", 1, ["pass"], ["opus"], "merge")])
         self.assertEqual(gate.validate_gate(high), [])
         low = gate.template(self.cfg, "o/r", 7, "low", True)
-        self.assertEqual([c["title"] for c in low["checks"] if c["check"] == "verdict"], ["Code review"])
-        self.assertTrue([c for c in low["checks"] if c["check"] == "scenario"][0]["trivial"])
+        self.assertEqual([c["role"] for c in low["checks"] if c["check"] == "verdict"], ["redteam", "qa"])
+        self.assertTrue([c for c in low["checks"] if c["check"] == "docs"][0]["trivial"])
         self.assertEqual([c for c in low["checks"] if c["check"] == "size"][0]["severity"], "warn")
+        self.assertFalse([c for c in low["checks"] if c["check"] == "command"])
+        cmd = gate.template(config.merge(self.cfg, {"tests": {"full": "make test"}}), "o/r", 7, "low", False)
+        self.assertEqual([c["run"] for c in cmd["checks"] if c["check"] == "command"], ["make test"])
 
 
 class SameChange(unittest.TestCase):
@@ -178,22 +257,28 @@ class Cli(unittest.TestCase):
         self.home.close()
 
     def test_run_passes_and_blocks(self):
+        task = task_folder(self.home, [("pair-1", "pair", "sonnet", "approved", HEAD, "2026-11-14T01:00:00Z")])
         g = self.home.write("gate.json", gate.template(config.load(), "o/r", 7, "low", False))
-        r = run("gate.py", "run", g, "--before-ready", env=self.env)
+        r = run("gate.py", "run", g, "--task-dir", task, "--before-ready", env=self.env)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertTrue(json.loads(r.stdout)["pass"])
-        g = self.home.write("gate2.json", gate.template(config.load(), "o/r", 7, "high", False))
-        r = run("gate.py", "run", g, "--before-ready", env=self.env)
+        self.assertTrue(json.loads(r.stdout)["pass"])  # the verification session's verdicts wait for the merge gate
+        r = run("gate.py", "run", g, "--task-dir", task, env=self.env)
         self.assertEqual(r.returncode, 6)
-        self.assertIn("verdict Code review", json.loads(r.stdout)["blocked"])
+        self.assertEqual(json.loads(r.stdout)["blocked"], ["verdict redteam", "verdict qa"])
+        task_folder(self.home, [("redteam-1", "redteam", "opus", "approved", HEAD, "2026-11-14T02:00:00Z"),
+                                ("qa-1", "qa", "opus", "pass", HEAD, "2026-11-14T02:00:00Z")])
+        r = run("gate.py", "run", g, "--task-dir", task, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stdout)
 
     def test_pull_request_named_at_run_time(self):
+        task = task_folder(self.home, [("pair-1", "pair", "sonnet", "approved", HEAD, "2026-11-14T01:00:00Z")])
         g = self.home.write("gate.json", gate.template(config.load(), "o/r", None, "low", False))
         self.assertEqual(run("gate.py", "run", g, "--before-ready", env=self.env).returncode, 2)  # no PR yet
-        r = run("gate.py", "run", g, "--pr", "7", "--before-ready", env=self.env)
+        r = run("gate.py", "run", g, "--pr", "7", "--task-dir", task, "--before-ready", env=self.env)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         named = self.home.write("named.json", gate.template(config.load(), "o/r", 7, "low", False))
-        self.assertEqual(run("gate.py", "run", named, "--pr", "7", "--before-ready", env=self.env).returncode, 0)
+        self.assertEqual(run("gate.py", "run", named, "--pr", "7", "--task-dir", task, "--before-ready",
+                             env=self.env).returncode, 0)
         r = run("gate.py", "run", named, "--pr", "8", env=self.env)
         self.assertEqual(r.returncode, 2)
         self.assertIn("for #7, not #8", r.stderr)

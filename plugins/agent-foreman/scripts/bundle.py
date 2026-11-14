@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Build a project's skill bundle and put it on a herdr machine once.
 
-A bundle holds the project's skills (each skill directory whole, with its
-scripts) in the layout the agent kind loads (its adapter's bundle_layout; for
-claude, a plugin named foreman-kit), the lead's guide, launch.py with the
+A bundle holds agent-foreman's default skills (kit/skills), the project's
+other skills (each skill directory whole, with its scripts), in the layout the
+agent kind loads (its adapter's bundle_layout; for claude, a plugin named
+foreman-kit), the lead's guide, launch.py with the
 project's launch settings and the adapters, and transcript.py. `bundle.json`
 names the agent kind. Its name is a hash of its content: a machine that
 already holds it is not sent it again, and any change makes a new one.
@@ -36,6 +37,7 @@ from config import (EXIT_SETUP_NEEDED, LOCAL, REPO, SKILL_DIR, cache_dir, projec
                     herdr_machines, load, local_skills, plugin_list, plugin_dirs, validate)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+KIT_DIR = os.path.join(SKILL_DIR, "kit", "skills")
 REMOTE_CACHE = "~/.cache/agent-foreman"
 SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv"}
 SKIP_FILES = {".DS_Store"}
@@ -155,11 +157,13 @@ def push_remote(target, bundle_hash, files):
 def build(repo, extra, kind=adapters.DEFAULT, project_names=()):
     """The bundle for a project: (hash, files, skills it carries, warnings).
 
-    Every skill the project's loops name is looked up the way an agent will
-    find it: a project skill (in `project_names`, the checkout's
-    `.claude/skills`) is used where it is and not bundled; otherwise the
-    person's skill of that name is bundled. A loop skill found nowhere is a
-    warning; a skill named in `extra` or in bundle.skills must exist.
+    Every default skill is bundled. Every other skill the project's loops
+    name, or the settings' `skills` map names as a replacement, is looked up
+    the way an agent will find it: a project skill (in `project_names`, the
+    checkout's `.claude/skills`) is used where it is and not bundled;
+    otherwise the person's skill of that name is bundled. A loop skill found
+    nowhere is a warning; a skill named in `extra` or in bundle.skills must
+    exist.
     """
     if not os.path.exists(project_path(repo)):
         fail(EXIT_SETUP_NEEDED, f"project {repo} has no settings yet; run /agent-foreman:agent-foreman setup")
@@ -168,11 +172,22 @@ def build(repo, extra, kind=adapters.DEFAULT, project_names=()):
     if problems:
         fail(EXIT_SETUP_NEEDED, f"project {repo}: {problems[0]}")
     names = project_skills(cfg, extra)
-    available = local_skills(plugin_list(plugin_dirs(cfg))) if names else {}
+    overrides = cfg.get("skills", {})
+    needs_local = [n for n in names if n not in loops.KIT] or any(overrides.get(n) for n in names)
+    available = local_skills(plugin_list(plugin_dirs(cfg))) if needs_local else {}
     required = set(extra) | set(cfg.get("bundle", {}).get("skills", []))
     refs, warnings = [], []
+    kit = {}
+    for name in loops.KIT:
+        path = os.path.join(KIT_DIR, name)
+        if os.path.isfile(os.path.join(path, "SKILL.md")):
+            kit[name] = path
+        elif name in names:
+            warnings.append(f"default skill {name} is missing from {KIT_DIR}")
     for name in names:
-        source, value = loops.resolve_skill(name, project_names, available)
+        source, value = loops.resolve(name, project_names, available, overrides)
+        if source == "kit":
+            continue
         if source == "bundle" and value not in refs:
             refs.append(value)
         elif source == "missing":
@@ -181,11 +196,11 @@ def build(repo, extra, kind=adapters.DEFAULT, project_names=()):
                                         f"ones that are; a plugin loaded with --plugin-dir goes in plugin_dirs: "
                                         f"/agent-foreman:agent-foreman setup loop)")
             warnings.append(value)
-    shorts = [r.split(":")[-1] for r in refs]
+    shorts = [r.split(":")[-1] for r in refs] + list(kit)
     if len(set(shorts)) != len(shorts):
-        fail(EXIT_SETUP_NEEDED, f"two skills share one name in the bundle: {', '.join(refs)}")
-    files = contents(cfg, {r: available[r] for r in refs}, kind)
-    return digest(files), files, [adapters.get(kind).skill_name(r) for r in refs], warnings
+        fail(EXIT_SETUP_NEEDED, f"two skills share one name in the bundle: {', '.join(refs + list(kit))}")
+    files = contents(cfg, {**{r: available[r] for r in refs}, **kit}, kind)
+    return (digest(files), files, [adapters.get(kind).skill_name(r) for r in refs + list(kit)], warnings)
 
 
 def main(argv):

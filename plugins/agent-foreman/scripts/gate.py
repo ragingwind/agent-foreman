@@ -5,7 +5,7 @@ it merges.
 
 Usage:
   gate.py template --project OWNER/REPO [--pr N] --difficulty low|mid|high [--trivial]
-  gate.py run GATE.json [--pr N] [--cwd CLONE] [--skip CHECK,...] [--before-ready]
+  gate.py run GATE.json [--pr N] [--cwd CLONE] [--task-dir DIR] [--skip CHECK,...] [--before-ready]
 
 A gate file:
   {"repo": "owner/name", "pr": 12, "checks": [{"check": "<name>", ...}, ...]}
@@ -19,15 +19,23 @@ Checks (each may say "severity": "warn" to report without blocking):
   sections        the body has the `## <name>` headings in "names"
   ci              every status check finished and passed
   base-fresh      the head contains the base branch's head
-  verdict         at least "count" comments titled `## <title> of #<PR> at <sha>`
-                  whose last `Verdict:` line is one of "accept", at the head SHA
-                  (with --cwd, also at an earlier SHA whose change is the same)
+  verdict         with "role": at least "count" agents of that role whose latest
+                  answer in the task folder's reviews/ (launch.py --role) ends
+                  with a `Verdict:` in "accept", given at the head SHA (with
+                  --cwd, also at an earlier SHA whose change is the same), on a
+                  profile not in "not_profiles" (the lead's). Without "role",
+                  the old form: comments titled `## <title> of #<PR> at <sha>`
+  docs            the task folder's records: plan.md's work breakdown all done,
+                  handoff.md's sections, and scenario.md's closing verdict pass
+                  with no empty Agent block (not for a trivial task)
   scenario        a comment titled "title" holding raw output in a code block;
                   for a trivial change, a skip reason under `## Tests` instead
   tests-weakened  no removed test file, added skip marker, edited CI file or
                   changed coverage threshold, except the kinds in "allow"
   size            additions + deletions at most "max_lines"
-  ready           the pull request is no longer a draft (--before-ready skips it)
+  ready           the pull request is no longer a draft
+                  (--before-ready skips it and every check marked "at": "merge":
+                  the lead runs the gate before the verification session)
   command         "run" exits 0 in the clone (--cwd)
 
 `run` prints one JSON object and exits 0 when nothing blocks, 6 when a check
@@ -36,6 +44,7 @@ blocks, 2 on bad arguments, 1 when gh or git fails.
 import argparse
 import fnmatch
 import json
+import os
 import re
 import subprocess
 import sys
@@ -146,7 +155,104 @@ def verdicts(pr, title):
     return out
 
 
+def latest_answers(task_dir, role):
+    """(agent, meta, answer text) of each agent of a role: its latest run in the
+    task folder's reviews/ (launch.py --print --role writes `<out>.meta.json`)."""
+    import glob
+    by_agent = {}
+    for meta_file in glob.glob(os.path.join(task_dir, "reviews", "*.meta.json")):
+        try:
+            with open(meta_file, encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if meta.get("role") != role:
+            continue
+        agent = meta.get("agent") or meta_file
+        if agent not in by_agent or str(meta.get("ended", "")) > str(by_agent[agent][0].get("ended", "")):
+            by_agent[agent] = (meta, meta_file[:-len(".meta.json")] + ".json")
+    out = []
+    for agent, (meta, answer_file) in sorted(by_agent.items()):
+        text = ""
+        try:
+            with open(answer_file, encoding="utf-8") as f:
+                text = str(json.load(f).get("result") or "")
+        except (OSError, ValueError, AttributeError):
+            pass
+        out.append((agent, meta, text))
+    return out
+
+
+def check_role_verdict(pr, spec, ctx):
+    if not ctx.get("task_dir"):
+        return False, "needs --task-dir"
+    accept = [a.lower() for a in spec.get("accept", ["approved"])]
+    count = spec.get("count", 1)
+    banned = set(spec.get("not_profiles", []))
+    good, seen = 0, []
+    for agent, meta, text in latest_answers(ctx["task_dir"], spec["role"]):
+        lines = re.findall(r"^Verdict:\s*(.+?)\s*$", text, re.M)
+        verdict = lines[-1].lower() if lines else ""
+        head = meta.get("head") or ""
+        at_head = bool(head) and (same_sha(head, pr["headRefOid"]) or bool(
+            ctx.get("cwd") and same_change(ctx["cwd"], pr["baseRefName"], head, pr["headRefOid"])))
+        ok = verdict in accept and at_head and meta.get("profile") not in banned and meta.get("ok", True)
+        good += ok
+        seen.append(f"{agent} {meta.get('profile')} {head[:7] or '?'} {verdict or 'no verdict'}"
+                    + ("" if meta.get("profile") not in banned else " (the lead's profile)"))
+    return good >= count, f"{good} of {count} {spec['role']} at the head; seen: {', '.join(seen) or 'none'}"
+
+
+def _section_rows(text, heading):
+    body = section(text, heading)
+    if body is None:
+        return None
+    rows = [l for l in body.splitlines() if l.strip().startswith("|")]
+    return [[c.strip() for c in r.strip().strip("|").split("|")] for r in rows[2:]] if len(rows) >= 2 else []
+
+
+def check_docs(pr, spec, ctx):
+    if not ctx.get("task_dir"):
+        return False, "needs --task-dir"
+    def read(name):
+        try:
+            with open(os.path.join(ctx["task_dir"], name), encoding="utf-8") as f:
+                return f.read()
+        except OSError:
+            return None
+    problems = []
+    plan_text = read("plan.md")
+    rows = _section_rows(plan_text or "", "Work breakdown") if plan_text is not None else None
+    if rows is None:
+        problems.append("plan.md has no work breakdown")
+    else:
+        open_rows = [r[0] for r in rows if len(r) >= 6 and r[5].lower() != "done"]
+        if not rows:
+            problems.append("plan.md's work breakdown is empty")
+        if open_rows:
+            problems.append(f"work items not done: {', '.join(open_rows)}")
+    handoff = read("handoff.md")
+    missing = [n for n in ("Purpose", "Decisions", "Tests", "Not touched", "Follow-ups")
+               if section(handoff or "", n) is None]
+    if handoff is None:
+        problems.append("no handoff.md")
+    elif missing:
+        problems.append(f"handoff.md lacks {', '.join(missing)}")
+    if not spec.get("trivial"):
+        scenario = read("scenario.md")
+        closing = section(scenario or "", "Closing")
+        if scenario is None:
+            problems.append("no scenario.md")
+        elif closing is None or not re.search(r"^Verdict:\s*pass\s*$", closing.strip().splitlines()[0] if closing.strip() else "", re.I):
+            problems.append("scenario.md's closing verdict is not pass")
+        elif re.search(r"\*\*Agent\*\*\s*```[^\n]*\n\s*```", scenario):
+            problems.append("scenario.md has an empty Agent block")
+    return not problems, "; ".join(problems) if problems else "plan, handoff and scenario in order"
+
+
 def check_verdict(pr, spec, ctx):
+    if spec.get("role"):
+        return check_role_verdict(pr, spec, ctx)
     accept = [a.lower() for a in spec.get("accept", ["approved"])]
     count = spec.get("count", 1)
     found = verdicts(pr, spec["title"])
@@ -214,18 +320,18 @@ def check_command(pr, spec, ctx):
 
 
 CHECKS = {"pr-open": check_pr_open, "sections": check_sections, "ci": check_ci, "base-fresh": check_base_fresh,
-          "verdict": check_verdict, "scenario": check_scenario, "tests-weakened": check_tests_weakened,
-          "size": check_size, "ready": check_ready, "command": check_command}
+          "verdict": check_verdict, "docs": check_docs, "scenario": check_scenario,
+          "tests-weakened": check_tests_weakened, "size": check_size, "ready": check_ready, "command": check_command}
 
 
-def evaluate(pr, gate, cwd=None, skip=()):
+def evaluate(pr, gate, cwd=None, skip=(), task_dir=None, before_ready=False):
     results = []
     for spec in gate["checks"]:
         name = spec["check"]
-        if name in skip:
+        if name in skip or (before_ready and spec.get("at") == "merge"):
             continue
-        ok, evidence = CHECKS[name](pr, spec, {"cwd": cwd})
-        label = name + (f" {spec['title']}" if name == "verdict" else "")
+        ok, evidence = CHECKS[name](pr, spec, {"cwd": cwd, "task_dir": task_dir})
+        label = name + (f" {spec.get('role') or spec.get('title')}" if name == "verdict" else "")
         results.append({"check": label, "ok": ok, "severity": spec.get("severity", "block"), "evidence": evidence})
     blocked = [r for r in results if not r["ok"] and r["severity"] == "block"]
     return {"repo": gate["repo"], "pr": gate["pr"], "head": pr["headRefOid"], "pass": not blocked,
@@ -242,8 +348,8 @@ def validate_gate(gate):
         name = spec.get("check") if isinstance(spec, dict) else None
         if name not in CHECKS:
             problems.append(f"gate: check {i + 1} is {name!r}; known: {', '.join(CHECKS)}")
-        elif name == "verdict" and not spec.get("title"):
-            problems.append(f"gate: verdict check {i + 1} needs a title")
+        elif name == "verdict" and not (spec.get("title") or spec.get("role")):
+            problems.append(f"gate: verdict check {i + 1} needs a role (or the old title)")
         elif name == "command" and not spec.get("run"):
             problems.append(f"gate: command check {i + 1} needs run")
         if isinstance(spec, dict) and spec.get("severity", "block") not in ("block", "warn"):
@@ -254,17 +360,28 @@ def validate_gate(gate):
 
 
 def template(cfg, repo, pr, difficulty, trivial):
-    """The standard gate for a task: one verdict check per judging stage that
-    runs, the scenario or its skip reason, and the standing checks."""
+    """The standard gate for a task: the task folder's records, one verdict
+    check per judging role that runs (the build session's before ready, the
+    verification session's at merge), each refusing the lead's profile, and
+    the standing checks."""
     import loop
-    checks = [{"check": "pr-open"}, {"check": "sections", "names": ["Purpose", "Decisions", "Tests"]},
-              {"check": "ci"}, {"check": "base-fresh"}]
-    for st in loop.plan(cfg["loop"], difficulty, trivial):
-        role = cfg["loop"]["roles"].get(st["actor"], {})
-        if role.get("verdict_title"):
-            checks.append({"check": "verdict", "title": role["verdict_title"], "count": st["count"],
-                           "accept": role.get("accept", ["approved"])})
-    checks.append({"check": "scenario", "trivial": trivial})
+    from config import lead_profile
+    lead = lead_profile(cfg, difficulty)
+    checks = [{"check": "pr-open"}, {"check": "docs", "trivial": trivial}, {"check": "ci"}, {"check": "base-fresh"}]
+    for which, at in (("work", "ready"), ("check", "merge")):
+        counts = {}
+        for st in loop.plan(cfg["loop"], difficulty, trivial, which):
+            if st["actor"] in cfg["loop"]["roles"]:
+                counts[st["actor"]] = max(counts.get(st["actor"], 1), st["count"])
+        for role, count in counts.items():
+            spec = {"check": "verdict", "role": role, "count": count,
+                    "accept": cfg["loop"]["roles"][role].get("accept", ["approved"]), "not_profiles": [lead] if lead else []}
+            if at == "merge":
+                spec["at"] = "merge"
+            checks.append(spec)
+    full = cfg.get("tests", {}).get("full")
+    if full:
+        checks.append({"check": "command", "run": full})
     checks += [{"check": "tests-weakened", "allow": []},
                {"check": "size", "max_lines": cfg["difficulty"]["lines"], "severity": "warn"},
                {"check": "ready"}]
@@ -280,6 +397,7 @@ def main(argv):
     ap.add_argument("--difficulty", choices=["low", "mid", "high"])
     ap.add_argument("--trivial", action="store_true")
     ap.add_argument("--cwd")
+    ap.add_argument("--task-dir", help="the task folder (status.py dir): reviews/ and the records")
     ap.add_argument("--skip", default="")
     ap.add_argument("--before-ready", action="store_true")
     args = ap.parse_args(argv)
@@ -309,7 +427,8 @@ def main(argv):
         print("gate.py: the gate file names no pull request yet; add --pr N", file=sys.stderr)
         return 2
     skip = {s.strip() for s in args.skip.split(",") if s.strip()} | ({"ready"} if args.before_ready else set())
-    report = evaluate(fetch(gate["repo"], gate["pr"]), gate, args.cwd, skip)
+    task_dir = os.path.abspath(os.path.expanduser(args.task_dir)) if args.task_dir else None
+    report = evaluate(fetch(gate["repo"], gate["pr"]), gate, args.cwd, skip, task_dir, args.before_ready)
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0 if report["pass"] else EXIT_GATE_FAILED
 

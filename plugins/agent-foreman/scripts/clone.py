@@ -17,6 +17,7 @@ Usage:
                 [--from PATH] [--machine MACHINE] [--no-push] [--fresh] [--force]
   clone.py check PATH [--machine MACHINE]
   clone.py remove --project OWNER/REPO --task TASK [--agent AGENT] [--machine MACHINE] [--force]
+  clone.py archive --project OWNER/REPO --task TASK [--machine MACHINE]
 
 make: --from defaults to the project's checkout on that machine (its
 settings); --ref is what to check out (detached), such as `origin/main` or a
@@ -27,10 +28,14 @@ check: whether PATH is a clone agent-foreman made under the work root. Only
 such a folder's trust question may be answered for the person.
 
 remove: one agent's clone, or with no --agent every clone of the task and
-its run directory (`~/.cache/agent-foreman/runs/<owner>-<repo>/<task>`). It
-refuses a folder without the marker, a folder holding the caller's working
-directory, and, unless --force, a clone with changes to tracked files or
-commits that are on no remote.
+its task folder (`~/.local/state/agent-foreman/tasks/<owner>-<repo>/<task>`, the
+task's records: archive it first). It refuses a folder without the marker, a
+folder holding the caller's working directory, and, unless --force, a clone
+with changes to tracked files or commits that are on no remote.
+
+archive: copies the task folder from MACHINE to the foreman's project folder
+(`config.py paths --project` state, `projects/<owner>-<repo>/tasks/<task>`) and
+checks that every file arrived. Run it on the foreman's machine.
 
 MACHINE is a herdr machine label, or `local` (the default); a remote machine
 runs this same file over SSH. Prints one JSON object.
@@ -47,7 +52,7 @@ import sys
 import time
 
 WORK = "~/.cache/agent-foreman/work"
-RUNS = "~/.cache/agent-foreman/runs"
+TASKS = "~/.local/state/agent-foreman/tasks"
 MARK = "agent-foreman.json"
 NO_PUSH = "no-push-from-this-clone"
 
@@ -117,10 +122,10 @@ def remove(key, task, agent=None, force=False):
         reason = _remove_one(path, force)
         (refused.append({"path": path, "reason": reason}) if reason else removed.append(path))
     if not agent and not refused:
-        runs = os.path.join(os.path.expanduser(RUNS), key, task)
-        if os.path.isdir(runs):
-            shutil.rmtree(runs)
-            removed.append(runs)
+        records = os.path.join(os.path.expanduser(TASKS), key, task)
+        if os.path.isdir(records):
+            shutil.rmtree(records)
+            removed.append(records)
     for empty in (task_dir, os.path.dirname(task_dir)):
         if os.path.isdir(empty) and not os.listdir(empty):
             os.rmdir(empty)
@@ -194,13 +199,50 @@ def on_machine(label, request, saved=None):
     return json.loads(r.stdout)
 
 
+def archive(label, key, task, dest, saved=None):
+    """Copy a task folder from a machine to `dest` on this one, then compare
+    the file lists. Returns {"archived": dest, "files": n} or {"error": ...}."""
+    src = f"{TASKS}/{key}/{task}"
+    os.makedirs(dest, exist_ok=True)
+    if label == "local":
+        root = os.path.expanduser(src)
+        if not os.path.isdir(root):
+            return {"error": f"no task folder at {root}"}
+        shutil.copytree(root, dest, dirs_exist_ok=True)
+        want = sorted(os.path.relpath(os.path.join(d, n), root) for d, _, ns in os.walk(root) for n in ns)
+    else:
+        if saved is None:
+            from config import herdr_machines
+            saved = herdr_machines()
+        if label not in saved:
+            raise ValueError(f"{label} is not a saved herdr machine")
+        target = saved[label]["target"]
+        quoted = src.replace("~/", "$HOME/", 1)
+        listing = subprocess.run(["ssh", "-o", "BatchMode=yes", target, f'cd "{quoted}" && find . -type f'],
+                                 capture_output=True, text=True)
+        if listing.returncode != 0:
+            return {"error": f"no task folder at {src} on {label}: {listing.stderr.strip()[:200]}"}
+        want = sorted(os.path.normpath(l) for l in listing.stdout.split("\n") if l.strip())
+        pack = subprocess.Popen(["ssh", "-o", "BatchMode=yes", target, f'tar -C "{quoted}" -cf - .'],
+                                stdout=subprocess.PIPE)
+        unpack = subprocess.run(["tar", "-C", dest, "-xf", "-"], stdin=pack.stdout, capture_output=True)
+        pack.wait()
+        if pack.returncode != 0 or unpack.returncode != 0:
+            return {"error": f"copying from {label} failed: {unpack.stderr.decode(errors='replace')[:200]}"}
+    got = {os.path.relpath(os.path.join(d, n), dest) for d, _, ns in os.walk(dest) for n in ns}
+    lost = [f for f in want if f not in got]
+    if lost:
+        return {"error": f"{len(lost)} file(s) did not arrive: {', '.join(lost[:5])}"}
+    return {"archived": dest, "files": len(want)}
+
+
 def main(argv):
     if argv[:1] == ["_run"]:
         print(json.dumps(run(json.loads(argv[1]))))
         return 0
     from config import EXIT_SETUP_NEEDED, NAME, REPO, load
     ap = argparse.ArgumentParser(prog="clone.py", description="agent-foreman agent clones")
-    ap.add_argument("command", choices=["make", "check", "remove"])
+    ap.add_argument("command", choices=["make", "check", "remove", "archive"])
     ap.add_argument("path", nargs="?")
     ap.add_argument("--project", metavar="OWNER/REPO")
     ap.add_argument("--task")
@@ -229,6 +271,15 @@ def main(argv):
         if args.agent is not None and not NAME.match(args.agent):
             return bad("--agent may hold letters, digits, '.', '_' and '-' only")
         key = args.project.replace("/", "-")
+        if args.command == "archive":
+            from config import project_dir
+            try:
+                out = archive(args.machine, key, args.task, os.path.join(project_dir(args.project), "tasks", args.task))
+            except (ValueError, RuntimeError) as e:
+                print(f"clone.py: {e}", file=sys.stderr)
+                return 1
+            print(json.dumps({"machine": args.machine, **out}, indent=2))
+            return 1 if out.get("error") else 0
         if args.command == "remove":
             request = {"op": "remove", "key": key, "task": args.task, "agent": args.agent, "force": args.force}
         else:

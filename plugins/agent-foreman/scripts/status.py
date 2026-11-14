@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
 """Status files: what each lead reports, and what the foreman reads.
 
-A task's status file is `~/.cache/agent-foreman/runs/<owner>-<repo>/<task>/status.jsonl`
-on its machine; launch.py --status hands it to an agent as AF_STATUS_FILE.
-The bundle's hooks append `heartbeat` and `turn-end` lines; the lead appends
-a `start`, `end` or `progress` line for its stages (naming the step) and a
-`stop` line at a stop point.
+A task's records live in one task folder on its machine,
+`~/.local/state/agent-foreman/tasks/<owner>-<repo>/<task>/`; its status file is
+`status.jsonl` there. launch.py --task-dir hands the folder to an agent as
+AF_TASK_DIR and the status file as AF_STATUS_FILE. The bundle's hooks append
+`heartbeat` and `turn-end` lines; the lead appends a `start`, `end` or
+`progress` line for its stages (naming the step) and a `stop` line at a stop
+point.
+
+When the task folder holds `loop.json` (loop.py render --json), `note` refuses
+a stage or step that is not in the task's loop, renames the herdr tab to the
+stage's label at a `start` line (when HERDR_TAB_ID is set), and prints what to
+do next: at `start`, the step itself; at `end`, the step each outcome leads to.
 
 Usage:
+  status.py dir --project OWNER/REPO --task TASK
   status.py path --project OWNER/REPO --task TASK
   status.py note --stage ID [--step ID] --event start|end|progress|stop [--round N]
                  [--done TEXT] [--next TEXT] [--blocked TEXT] [--runs JSON] [--file FILE]
   status.py read --project OWNER/REPO [--machine MACHINE] [--stall MINUTES]
 
-`path` prints the path with `~`, for the machine to expand. `note` writes to
+`dir` prints the task folder and `path` its status file, with `~`, for the
+machine to expand. `note` writes to
 --file, or to AF_STATUS_FILE. `read` reads every task's status file on the
 project's machines (one SSH call per remote machine) and prints, per task:
 the last stage line with its step, the last heartbeat and its agent, the
@@ -35,7 +44,7 @@ import time
 
 from config import LOCAL, NAME, REPO
 
-RUNS = "~/.cache/agent-foreman/runs"
+TASKS = "~/.local/state/agent-foreman/tasks"
 EVENTS = ["start", "end", "progress", "stop"]
 BEATS = ["heartbeat", "turn-end"]
 TAIL = 200
@@ -55,11 +64,58 @@ print(json.dumps({"tasks": tasks, "free_gb": round(free / 1024 ** 3, 1)}))
 
 
 def project_root(repo):
-    return f"{RUNS}/{repo.replace('/', '-')}"
+    return f"{TASKS}/{repo.replace('/', '-')}"
+
+
+def dir_for(repo, task):
+    return f"{project_root(repo)}/{task}"
 
 
 def path_for(repo, task):
-    return f"{project_root(repo)}/{task}/status.jsonl"
+    return f"{dir_for(repo, task)}/status.jsonl"
+
+
+def load_loop(status_file):
+    """The task's loop.json next to the status file, or None."""
+    path = os.path.join(os.path.dirname(os.path.abspath(status_file)), "loop.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def check_note(task_loop, stage, step):
+    """(the step's entry, problem): a stage line must name a stage of the
+    task's loop, and a step in that stage; with no step, the stage's first."""
+    steps = [s for w in ("work", "check") for s in task_loop.get(w, [])]
+    stages = []
+    for s in steps:
+        if s["stage"] not in stages:
+            stages.append(s["stage"])
+    if stage not in stages:
+        return None, f"stage {stage!r} is not in this task's loop; its stages are {', '.join(stages)}"
+    in_stage = [s for s in steps if s["stage"] == stage]
+    if not step:
+        return in_stage[0], ""
+    found = next((s for s in in_stage if s["id"] == step), None)
+    if found is None:
+        return None, f"step {step!r} is not in stage {stage}; its steps are {', '.join(s['id'] for s in in_stage)}"
+    return found, ""
+
+
+def describe(task_loop, step_id):
+    s = next((x for x in task_loop.get("work", []) + task_loop.get("check", []) if x["id"] == step_id), None)
+    if s is None:
+        return step_id
+    skills = f" Skills: {', '.join(s['skills'])}." if s.get("skills") else ""
+    return f"{s['id']} ({s['stage']}, {s['actor']}): {s['does']}{skills}"
+
+
+def rename_tab(label):
+    tab = os.environ.get("HERDR_TAB_ID")
+    if tab and label:
+        subprocess.run(["herdr", "tab", "rename", tab, label], capture_output=True)
 
 
 def now_iso():
@@ -115,7 +171,7 @@ def read_machine(label, repo, saved):
 
 def main(argv):
     ap = argparse.ArgumentParser(prog="status.py", description="agent-foreman status files")
-    ap.add_argument("command", choices=["path", "note", "read"])
+    ap.add_argument("command", choices=["dir", "path", "note", "read"])
     ap.add_argument("--project", metavar="OWNER/REPO")
     ap.add_argument("--task")
     ap.add_argument("--machine")
@@ -134,15 +190,15 @@ def main(argv):
         print(f"status.py: --project must look like owner/name, not {args.project!r}", file=sys.stderr)
         return 2
 
-    if args.command == "path":
+    if args.command in ("dir", "path"):
         if not (args.project and args.task):
-            print("status.py: path needs --project and --task", file=sys.stderr)
+            print(f"status.py: {args.command} needs --project and --task", file=sys.stderr)
             return 2
         if not NAME.match(args.task):
             print(f"status.py: --task may hold letters, digits, '.', '_' and '-' only, not {args.task!r}",
                   file=sys.stderr)
             return 2
-        print(path_for(args.project, args.task))
+        print(dir_for(args.project, args.task) if args.command == "dir" else path_for(args.project, args.task))
         return 0
 
     if args.command == "note":
@@ -158,12 +214,28 @@ def main(argv):
         if not isinstance(runs, list):
             print("status.py: --runs must be a JSON list", file=sys.stderr)
             return 2
-        row = {"time": now_iso(), "stage": args.stage, "step": args.step, "event": args.event, "round": args.round,
-               "done": args.done, "next": args.next, "blocked": args.blocked, "runs": runs}
         path = os.path.expanduser(path)
+        task_loop = load_loop(path)
+        entry = None
+        if task_loop is not None:
+            entry, problem = check_note(task_loop, args.stage, args.step)
+            if problem:
+                print(f"status.py: {problem}", file=sys.stderr)
+                return 2
+        row = {"time": now_iso(), "stage": args.stage, "step": args.step or (entry or {}).get("id", ""),
+               "event": args.event, "round": args.round, "done": args.done, "next": args.next,
+               "blocked": args.blocked, "runs": runs}
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        if entry is not None:
+            if args.event == "start":
+                rename_tab(entry.get("label", "").replace("<N>", str(args.round or 1)))
+                print("now: " + describe(task_loop, entry["id"]))
+            elif args.event == "end":
+                for outcome, target in entry["next"].items():
+                    print(f"next, if {outcome}: " + ("stop and report" if target == "stop"
+                                                     else describe(task_loop, target)))
         return 0
 
     if not args.project:

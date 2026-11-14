@@ -5,11 +5,18 @@ how they change with a task's difficulty.
 Settings shape (`loop` in the settings):
 
   roles    name -> {"mode": "prompt"|"pane", "step": 0|1, "prompt": key, "deny_tools": [...],
-                   "verdict_title": title of its verdict comment, "accept": [passing verdicts]}
+                   "accept": [passing verdicts]}
   prompts  key -> fixed prompt text a role gets, filled in
-  work     the work loop's steps (one issue, one pull request), run by a lead
+  work     the build session's steps (one task, one pull request), run by a lead
+  check    the verification session's steps, started by the foreman once the
+           lead is ready; an outcome may send the task back to a work step
   manage   the foreman's loop
   epic     the batch loop before an epic goes to main
+
+A step's "skills" name what it uses. A default skill (KIT) is the one
+agent-foreman ships in the bundle, unless the settings' `skills` map names a
+project or local skill that replaces it; the replacement changes only how
+the action is done, never the flow or the record.
 
 A loop is a list of steps. A step: {"id", "stage", "actor", "does",
 "skills": [...], "next": {outcome: step id or "stop"}, and optionally "run":
@@ -25,10 +32,14 @@ stages; the rules above stay on the steps. A stage whose steps all do not
 run for a task is skipped.
 
 Usage:
-  loop.py show [--project OWNER/REPO] [--loop work|manage|epic]
+  loop.py show [--project OWNER/REPO] [--loop work|check|manage|epic]
   loop.py skills --project OWNER/REPO --machine MACHINE
   loop.py render --project OWNER/REPO --task N --difficulty low|mid|high
-                 --machine MACHINE [--trivial] [--agent KIND]
+                 --machine MACHINE [--loop work|check] [--trivial] [--agent KIND] [--json]
+
+`render --json` prints the task's work and check loops as data; the foreman
+saves it as `loop.json` in the task folder, and `status.py note` checks each
+stage line against it.
 
 Exit codes: 2 = bad arguments, 3 = setup needed.
 """
@@ -41,7 +52,10 @@ import subprocess
 import sys
 
 LEVELS = ["low", "mid", "high"]
-LOOPS = ["work", "manage", "epic"]
+LOOPS = ["work", "check", "manage", "epic"]
+# The default skills agent-foreman ships (kit/skills/<name>), one per loop action.
+KIT = ["work-breakdown", "cross-check", "tdd", "unit", "commit", "smoke", "review", "simplify", "handoff",
+       "redteam-review", "full"]
 PEOPLE = ["lead", "foreman", "person"]
 MODES = ["prompt", "pane"]
 RUNS = ["always", "never", "if-not-trivial"]
@@ -86,6 +100,7 @@ def validate_loop(loop):
             problems.append(f"loop: {which} must be a list of steps")
             continue
         ids = [s.get("id") for s in steps if isinstance(s, dict)]
+        targets = ids + (step_ids(loop) if which == "check" else [])
         problems += _stage_problems(which, [s for s in steps if isinstance(s, dict) and NAME.match(str(s.get("id", "")))])
         for i, s in enumerate(steps):
             where = f"loop: {which} step {i + 1}"
@@ -107,7 +122,7 @@ def validate_loop(loop):
                 problems.append(f"{where}: next must name at least one outcome")
             else:
                 for outcome, target in nxt.items():
-                    if target != STOP and target not in ids:
+                    if target != STOP and target not in targets:
                         problems.append(f"{where}: outcome {outcome} goes to {target!r}, which is not a step")
             for key, allowed in (("run", RUNS), ("count", None), ("extra", None)):
                 table = s.get(key, {})
@@ -173,7 +188,7 @@ def plan(loop, difficulty, trivial=False, which="work"):
     by_id = {s["id"]: s for s in steps}
 
     def land(target, seen=()):
-        while target != STOP and not runs[target]:
+        while target != STOP and target in runs and not runs[target]:  # a target in another loop stays as it is
             if target in seen:
                 raise ValueError(f"loop: skipped steps form a cycle at {target}")
             seen = seen + (target,)
@@ -229,17 +244,32 @@ def resolve_skill(name, project_names, local):
     return "missing", f"{name} is neither a project skill there nor a skill on this machine"
 
 
-def resolve_all(loop, project_names, local, which=LOOPS):
-    """Every stage skill of the given loops: name -> (source, value)."""
+def resolve(name, project_names, local, overrides=None):
+    """Where one step skill comes from. A default skill is ("kit", name) unless
+    `overrides` (the settings' `skills`) names a skill that replaces it; any
+    other name is looked up as resolve_skill does."""
+    if name in KIT:
+        replacement = (overrides or {}).get(name)
+        return resolve_skill(replacement, project_names, local) if replacement else ("kit", name)
+    return resolve_skill(name, project_names, local)
+
+
+def resolve_all(loop, project_names, local, which=LOOPS, overrides=None):
+    """Every step skill of the given loops: name -> (source, value)."""
     out = {}
     for w in which:
         for s in loop.get(w, []):
             for name in s.get("skills", []):
-                out.setdefault(name, resolve_skill(name, project_names, local))
+                out.setdefault(name, resolve(name, project_names, local, overrides))
     return out
 
 
-ROUNDS = ("code-review", "scenario-retrace")
+def has_rounds(steps, stage):
+    """Whether a stage repeats: one of its steps sends the task back to an
+    earlier step."""
+    order = [s["id"] for s in steps]
+    return any(t != STOP and t in order and order.index(t) < order.index(s["id"])
+               for s in steps if s["stage"] == stage for t in s["next"].values())
 
 
 def assign(candidates, count):
@@ -254,18 +284,46 @@ def assign(candidates, count):
                    if short else "")
 
 
-def render(cfg, task, difficulty, trivial, resolved, profiles, call_name):
-    """The loop one lead follows, as Markdown for its brief.
+def stage_labels(cfg, task, steps):
+    """The tab label of each stage, with `<N>` for the round where it repeats."""
+    from config import label
+    out = {}
+    for s in steps:
+        st = s["stage"]
+        if st not in out:
+            rounds = has_rounds(steps, st)
+            out[st] = label(cfg, st, task=task, stage=st + (" <N>" if rounds else ""), round="<N>" if rounds else "",
+                            project=cfg.get("workspace", ""))
+    return out
+
+
+def as_data(cfg, task, difficulty, trivial, resolved, call_name):
+    """A task's work and check loops as data, for `loop.json`."""
+    out = {"task": task, "difficulty": difficulty, "trivial": trivial}
+    for which in ("work", "check"):
+        steps = plan(cfg["loop"], difficulty, trivial, which)
+        labels = stage_labels(cfg, task, steps)
+        out[which] = [{"id": s["id"], "stage": s["stage"], "label": labels[s["stage"]], "actor": s["actor"],
+                       "does": s["does"] + (f" {s['extra']}" if s["extra"] else ""), "count": s["count"],
+                       "skills": [call_name(*resolved[n]) for n in s.get("skills", []) if resolved[n][0] != "missing"],
+                       "next": s["next"]} for s in steps]
+    return out
+
+
+def render(cfg, task, difficulty, trivial, resolved, profiles, call_name, which="work"):
+    """One loop of a task, as Markdown: the work loop for the lead's brief, or
+    the check loop for the foreman.
 
     resolved: skill name -> (source, value); profiles: role -> candidate
-    profiles in order (the role's tier first, then lower tiers);
-    call_name(source, value) -> the name the agent calls it by.
+    profiles in order (config.role_candidates); call_name(source, value) ->
+    the name the agent calls it by.
     """
-    from config import label
     loop = cfg["loop"]
-    steps = plan(loop, difficulty, trivial)
+    steps = plan(loop, difficulty, trivial, which)
     stage = {s["id"]: s["stage"] for s in steps}
-    lines = [f"# Loop for {task} (difficulty {difficulty}{', trivial' if trivial else ''})", ""]
+    labels = stage_labels(cfg, task, steps)
+    title = "Loop" if which == "work" else "Verification session"
+    lines = [f"# {title} for {task} (difficulty {difficulty}{', trivial' if trivial else ''})", ""]
     ops = cfg["ops"]
     lines += [f"**Status**: a line at the start and end of every stage, naming the step, and at least every "
               f"{ops['report_minutes']} minutes; {ops['stall_minutes']} minutes without a line counts as a stall.", ""]
@@ -278,15 +336,12 @@ def render(cfg, task, difficulty, trivial, resolved, profiles, call_name):
     for i, s in enumerate(steps, 1):
         st = s["stage"]
         first = i == 1 or steps[i - 2]["stage"] != st
-        tab = ""
-        if first:
-            rounds = any(x["id"] in ROUNDS for x in steps if x["stage"] == st)
-            tab = "`" + label(cfg, st, task=task, stage=st + (" <N>" if rounds else ""), round="<N>" if rounds else "",
-                              project=cfg.get("workspace", "")) + "`"
+        tab = f"`{labels[st]}`" if first else ""
         actor = s["actor"] + (f" × {s['count']}" if s["count"] > 1 else "")
         skills = ", ".join(call_name(*resolved[n]) for n in s.get("skills", []) if resolved[n][0] != "missing") or "-"
         does = s["does"] + (f" {s['extra']}" if s["extra"] else "")
-        nxt = "; ".join(f"{k} → {v}" + (f" ({stage[v]})" if v != STOP and stage[v] != st else "")
+        nxt = "; ".join(f"{k} → {v}" + (f" ({stage[v]})" if v in stage and stage[v] != st else "")
+                        + (" (build session)" if v != STOP and v not in stage else "")
                         for k, v in s["next"].items())
         lines.append(f"| {i} | {st if first else ''} | {tab} | {s['id']} | {actor} | {does.replace('|', '/')} | "
                      f"{skills} | {nxt} |")
@@ -295,13 +350,14 @@ def render(cfg, task, difficulty, trivial, resolved, profiles, call_name):
         if s["actor"] not in PEOPLE:
             acting[s["actor"]] = max(acting.get(s["actor"], 1), s["count"])
     if acting:
-        lines += ["", "| Role | Mode | Agents and profiles | Fallback | `launch.py` adds |", "| --- | --- | --- | --- | --- |"]
+        lines += ["", "| Role | Mode | Agents and profiles | Fallback (never the lead's) | `launch.py` adds |",
+                  "| --- | --- | --- | --- | --- |"]
         for r, n in acting.items():
             picks, warning = assign(profiles.get(r, []), n)
             agents = "; ".join(f"agent {i}: {p}" for i, p in enumerate(picks, 1)) or "-"
             rest = [p for p in profiles.get(r, []) if p not in picks]
             deny = loop["roles"][r].get("deny_tools", [])
-            flags = f"`--disallow {','.join(deny)}`" if deny else "-"
+            flags = f"`--role {r}`" + (f" `--disallow {','.join(deny)}`" if deny else "")
             lines.append(f"| {r} | {loop['roles'][r]['mode']} | {agents}{' (' + warning + ')' if warning else ''} | "
                          f"{', '.join(rest) or '-'} | {flags} |")
         for r in acting:
@@ -314,7 +370,7 @@ def render(cfg, task, difficulty, trivial, resolved, profiles, call_name):
 def _cli(argv):
     import adapters
     from config import (EXIT_SETUP_NEEDED, REPO, herdr_machines, load, local_skills, plugin_dirs, plugin_list,
-                        role_tier, tier_profiles)
+                        role_candidates)
     ap = argparse.ArgumentParser(prog="loop.py", description="agent-foreman loops")
     ap.add_argument("command", choices=["show", "skills", "render"])
     ap.add_argument("--project", metavar="OWNER/REPO")
@@ -324,6 +380,7 @@ def _cli(argv):
     ap.add_argument("--difficulty", choices=LEVELS)
     ap.add_argument("--trivial", action="store_true", help="docs or text only, a typo, a rename with no behavior change")
     ap.add_argument("--agent", default=adapters.DEFAULT, choices=adapters.KINDS)
+    ap.add_argument("--json", action="store_true", help="render: the work and check loops as data")
     args = ap.parse_args(argv)
     if args.project and not REPO.match(args.project):
         print(f"loop.py: --project must look like owner/name, not {args.project!r}", file=sys.stderr)
@@ -360,7 +417,7 @@ def _cli(argv):
     project_names = project_skill_names(args.machine, machines[args.machine],
                                         None if args.machine == "local" else herdr_machines())
     local = local_skills(plugin_list(plugin_dirs(cfg)))
-    resolved = resolve_all(cfg["loop"], project_names, local)
+    resolved = resolve_all(cfg["loop"], project_names, local, overrides=cfg.get("skills", {}))
     if args.command == "skills":
         print(json.dumps({"machine": args.machine, "project_skills": project_names,
                           "skills": {k: {"source": v[0], "value": v[1]} for k, v in resolved.items()}}, indent=2))
@@ -370,21 +427,16 @@ def _cli(argv):
         print("loop.py: render needs --task and --difficulty", file=sys.stderr)
         return 2
     adapter = adapters.get(args.agent)
-    def candidates(role):
-        """The role's tier first, then each lower tier, without repeats."""
-        from config import TIERS
-        top = TIERS.index(role_tier(args.difficulty, role, cfg))
-        out = []
-        for tier in reversed(TIERS[:top + 1]):
-            out += [p for p in tier_profiles(cfg, tier) if p not in out]
-        return out
-
-    profiles = {r: candidates(r) for r in cfg["loop"]["roles"]}
+    profiles = {r: role_candidates(cfg, args.difficulty, r) for r in cfg["loop"]["roles"]}
 
     def call_name(source, value):
         return value if source == "project" else adapter.skill_name(value)
 
-    print(render(cfg, args.task, args.difficulty, args.trivial, resolved, profiles, call_name), end="")
+    if args.json:
+        print(json.dumps(as_data(cfg, args.task, args.difficulty, args.trivial, resolved, call_name), indent=2))
+    else:
+        which = args.loop if args.loop in ("work", "check") else "work"
+        print(render(cfg, args.task, args.difficulty, args.trivial, resolved, profiles, call_name, which), end="")
     for src, value in resolved.values():
         if src == "missing":
             print(f"loop.py: missing skill: {value}", file=sys.stderr)

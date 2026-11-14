@@ -79,9 +79,35 @@ class Note(unittest.TestCase):
 
     def test_path_is_for_the_machine_to_expand(self):
         r = run("status.py", "path", "--project", "o/r", "--task", "issue-7")
-        self.assertEqual(r.stdout.strip(), "~/.cache/agent-foreman/runs/o-r/issue-7/status.jsonl")
+        self.assertEqual(r.stdout.strip(), "~/.local/state/agent-foreman/tasks/o-r/issue-7/status.jsonl")
+        r = run("status.py", "dir", "--project", "o/r", "--task", "issue-7")
+        self.assertEqual(r.stdout.strip(), "~/.local/state/agent-foreman/tasks/o-r/issue-7")
         for args in (["--project", "o/r", "--task", "../x"], ["--project", "bad", "--task", "t"], ["--project", "o/r"]):
             self.assertEqual(run("status.py", "path", *args).returncode, 2, args)
+
+    def test_note_follows_the_task_loop(self):
+        task_loop = {"work": [
+            {"id": "build", "stage": "build", "label": "7 build", "actor": "lead", "does": "Build it.",
+             "skills": ["foreman-kit:unit"], "next": {"done": "verify"}},
+            {"id": "verify", "stage": "verify", "label": "7 verify", "actor": "lead", "does": "Check it.",
+             "skills": [], "next": {"fail": "build", "done": "stop"}}],
+            "check": [{"id": "test", "stage": "test", "label": "7 test", "actor": "qa", "does": "Test it.",
+                       "skills": [], "next": {"pass": "stop"}}]}
+        self.home.write("loop.json", task_loop)
+        env = {"AF_STATUS_FILE": self.file, "HERDR_TAB_ID": ""}
+        r = run("status.py", "note", "--stage", "implement", "--event", "start", env=env)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("stage 'implement' is not in this task's loop; its stages are build, verify, test", r.stderr)
+        r = run("status.py", "note", "--stage", "build", "--step", "verify", "--event", "start", env=env)
+        self.assertIn("step 'verify' is not in stage build", r.stderr)
+        self.assertFalse(os.path.exists(self.file))
+        r = run("status.py", "note", "--stage", "build", "--event", "start", env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("now: build (build, lead): Build it. Skills: foreman-kit:unit.", r.stdout)
+        self.assertEqual(lines(self.file)[0]["step"], "build")  # filled in from the loop
+        r = run("status.py", "note", "--stage", "verify", "--step", "verify", "--event", "end", env=env)
+        self.assertIn("next, if fail: build (build, lead): Build it.", r.stdout)
+        self.assertIn("next, if done: stop and report", r.stdout)
 
 
 def row(minutes_ago, now, **fields):
@@ -123,9 +149,9 @@ class Read(unittest.TestCase):
 
     def test_reads_every_task_on_a_local_machine(self):
         now = time.time()
-        self.home.write(".cache/agent-foreman/runs/o-r/issue-7/status.jsonl",
+        self.home.write(".local/state/agent-foreman/tasks/o-r/issue-7/status.jsonl",
                         row(1, now, stage="test", event="start") + "\n")
-        self.home.write(".cache/agent-foreman/runs/o-r/issue-8/status.jsonl",
+        self.home.write(".local/state/agent-foreman/tasks/o-r/issue-8/status.jsonl",
                         row(45, now, stage="implement", event="progress") + "\n")
         r = run("status.py", "read", "--project", "o/r", env=self.env)
         self.assertEqual(r.returncode, 0, r.stderr)

@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import unittest
 
@@ -7,9 +8,9 @@ from helpers import TempHome, run
 import config
 import loop
 
-WORK = ["start", "implement", "test", "refactor", "regression", "scenario", "pull-request", "code-review",
-        "scenario-retrace", "ready"]
-STAGES = ["plan", "build", "verify", "review", "handoff"]
+WORK = ["plan", "build", "verify", "review", "simplify", "fix", "recheck", "finalize"]
+STAGES = ["plan", "build", "verify", "review", "finalize"]
+CHECK = ["redteam-review", "test"]
 
 
 def stage(id, actor="lead", nxt=None, **kw):
@@ -20,11 +21,27 @@ def stage(id, actor="lead", nxt=None, **kw):
 
 class Validate(unittest.TestCase):
     def test_standard_loops_are_valid(self):
-        self.assertEqual(loop.validate_loop(config.standard()["loop"]), [])
         std = config.standard()["loop"]
+        self.assertEqual(loop.validate_loop(std), [])
         self.assertEqual(loop.step_ids(std), WORK)
         self.assertEqual(loop.stage_ids(std), STAGES)
+        self.assertEqual(loop.step_ids(std, "check"), CHECK)
+        self.assertEqual(loop.stage_ids(std, "check"), CHECK)
         self.assertEqual(loop.stage_ids(std, "manage"), loop.step_ids(std, "manage"))  # a step without a stage is one
+
+    def test_every_default_skill_is_used(self):
+        std = config.standard()["loop"]
+        used = {n for w in loop.LOOPS for s in std.get(w, []) for n in s.get("skills", [])}
+        self.assertEqual(used, set(loop.KIT))
+
+    def test_check_steps_may_send_the_task_back_to_a_work_step(self):
+        base = {"roles": {"r": {"mode": "prompt"}}, "prompts": {}, "work": [stage("build")]}
+        ok = dict(base, check=[stage("x", actor="r", nxt={"changes": "build", "pass": "stop"})])
+        self.assertEqual(loop.validate_loop(ok), [])
+        bad = dict(base, check=[stage("x", actor="r", nxt={"changes": "nowhere"})])
+        self.assertIn("goes to 'nowhere'", "\n".join(loop.validate_loop(bad)))
+        back = dict(base, work=[stage("a", nxt={"done": "x"})], check=[stage("x", actor="r")])
+        self.assertIn("goes to 'x'", "\n".join(loop.validate_loop(back)))  # a work step cannot jump into the check loop
 
     def test_stage_problems(self):
         base = {"roles": {}, "prompts": {}}
@@ -56,30 +73,32 @@ class Plan(unittest.TestCase):
     def setUp(self):
         self.loop = config.standard()["loop"]
 
-    def ids(self, difficulty, trivial=False):
-        return [s["id"] for s in loop.plan(self.loop, difficulty, trivial)]
+    def ids(self, difficulty, trivial=False, which="work"):
+        return [s["id"] for s in loop.plan(self.loop, difficulty, trivial, which)]
 
-    def test_every_non_trivial_change_gets_a_scenario(self):
-        self.assertEqual(self.ids("mid"), WORK)
-        self.assertEqual(self.ids("high"), WORK)
-        self.assertEqual(self.ids("low"), [s for s in WORK if s != "scenario-retrace"])
+    def test_every_difficulty_runs_the_whole_build_session(self):
+        for level in loop.LEVELS:
+            self.assertEqual(self.ids(level), WORK)
+            self.assertEqual(self.ids(level, which="check"), CHECK)
 
-    def test_trivial_change_skips_scenario_and_retrace(self):
+    def test_trivial_task_skips_the_review_stage(self):
         trivial = {s["id"]: s for s in loop.plan(self.loop, "mid", trivial=True)}
-        self.assertNotIn("scenario", trivial)
-        self.assertNotIn("scenario-retrace", trivial)
-        self.assertEqual(trivial["regression"]["next"], {"done": "pull-request"})
-        self.assertEqual(trivial["code-review"]["next"], {"changes": "implement", "approved": "ready"})
+        self.assertEqual(list(trivial), ["plan", "build", "verify", "finalize"])
+        self.assertEqual(trivial["verify"]["next"], {"fail": "build", "done": "finalize"})
+        self.assertEqual(self.ids("mid", True, "check"), CHECK)  # QA always runs
 
-    def test_high_counts_and_extras(self):
-        high = {s["id"]: s for s in loop.plan(self.loop, "high")}
-        self.assertEqual(high["code-review"]["count"], 2)
-        self.assertIn("main branch", high["regression"]["extra"])
-        self.assertEqual(high["scenario-retrace"]["next"], {"code": "implement", "scenario": "scenario", "pass": "ready"})
+    def test_review_stage_repeats_and_check_goes_back_to_work(self):
+        mid = {s["id"]: s for s in loop.plan(self.loop, "mid")}
+        self.assertEqual(mid["recheck"]["next"], {"changes": "fix", "approved": "finalize"})
+        steps = loop.plan(self.loop, "mid")
+        self.assertTrue(loop.has_rounds(steps, "review"))
+        self.assertFalse(loop.has_rounds(steps, "plan"))
+        check = {s["id"]: s for s in loop.plan(self.loop, "mid", which="check")}
+        self.assertEqual(check["test"]["next"], {"fail": "build", "script": "verify", "pass": "stop"})
 
     def test_steps_carry_their_stage_and_an_empty_stage_drops(self):
-        self.assertEqual([(s["stage"], s["id"]) for s in loop.plan(self.loop, "mid")][:3],
-                         [("plan", "start"), ("build", "implement"), ("build", "test")])
+        self.assertEqual([(s["stage"], s["id"]) for s in loop.plan(self.loop, "mid")][3:5],
+                         [("review", "review"), ("review", "simplify")])
         l = {"roles": {}, "prompts": {}, "work": [stage("a", stage="s1", nxt={"done": "b"}),
                                                     stage("b", stage="s2", nxt={"done": "c"}, run={"low": "never"}),
                                                     stage("c", stage="s3")]}
@@ -104,6 +123,14 @@ class Skills(unittest.TestCase):
         self.assertIn("pstack:how", loop.resolve_skill("how", [], self.LOCAL)[1])
         self.assertEqual(loop.resolve_skill("ghost", [], self.LOCAL)[0], "missing")
 
+    def test_default_skill_unless_replaced(self):
+        self.assertEqual(loop.resolve("review", [], self.LOCAL), ("kit", "review"))
+        self.assertEqual(loop.resolve("simplify", [], self.LOCAL, {"simplify": "tidy"}), ("bundle", "local-skills:tidy"))
+        self.assertEqual(loop.resolve("cross-check", ["scenario"], self.LOCAL, {"cross-check": "scenario"}),
+                         ("project", "scenario"))
+        self.assertEqual(loop.resolve("smoke", [], self.LOCAL, {"smoke": "ghost"})[0], "missing")
+        self.assertEqual(loop.resolve("tidy", [], self.LOCAL), ("bundle", "local-skills:tidy"))  # not a default skill
+
     def test_project_skill_names_local(self):
         home = TempHome()
         try:
@@ -115,53 +142,58 @@ class Skills(unittest.TestCase):
             home.close()
 
 
+def kit_name(src, v):
+    return v if src == "project" else "foreman-kit:" + v.split(":")[-1]
+
+
 class Render(unittest.TestCase):
     def setUp(self):
         self.home = TempHome()
         self.cfg = copy.deepcopy(config.load("o/r"))
-        work = {s["id"]: s for s in self.cfg["loop"]["work"]}
-        work["refactor"]["skills"] = ["tidy", "ghost"]
-        work["scenario"]["skills"] = ["scenario"]
+        self.resolved = {n: ("kit", n) for n in loop.KIT}
+        self.resolved["simplify"] = ("bundle", "local-skills:tidy")
+        self.profiles = {"pair": ["sonnet", "opus"], "redteam": ["opus", "sonnet"], "qa": ["opus"]}
 
     def tearDown(self):
         self.home.close()
 
-    def render(self, difficulty, trivial=False, profiles=None):
-        resolved = {"tidy": ("bundle", "local-skills:tidy"), "ghost": ("missing", "ghost is nowhere"),
-                    "scenario": ("project", "scenario")}
-        profiles = profiles or {"code-reviewer": ["opus", "sonnet", "haiku"], "retracer": ["opus", "sonnet"]}
-        return loop.render(self.cfg, "634", difficulty, trivial, resolved, profiles,
-                           lambda src, v: v if src == "project" else "foreman-kit:" + v.split(":")[-1])
+    def render(self, difficulty, trivial=False, which="work", profiles=None):
+        return loop.render(self.cfg, "634", difficulty, trivial, self.resolved, profiles or self.profiles, kit_name,
+                           which)
 
     def test_mid_task(self):
         out = self.render("mid")
-        self.assertIn("**Missing skills**", out)
-        self.assertIn("- ghost is nowhere", out)
-        self.assertIn("| 2 | build | `634 build` | implement | lead |", out)
-        self.assertIn("| 4 |  |  | refactor | lead |", out)
-        self.assertIn("| foreman-kit:tidy | done → regression (verify) |", out)
-        self.assertIn("| 5 | verify | `634 verify` | regression | lead |", out)
-        self.assertIn("| 6 |  |  | scenario | lead |", out)
-        self.assertIn("approved → scenario-retrace", out)
-        self.assertIn("changes → implement (build)", out)
-        self.assertIn("| 10 | handoff | `634 handoff` | ready | lead |", out)
-        self.assertIn("| code-reviewer | prompt | agent 1: opus | sonnet, haiku | `--disallow Edit,Write,NotebookEdit` |", out)
-        self.assertIn("## Prompt for retracer", out)
+        self.assertIn("| 1 | plan | `634 plan` | plan | lead |", out)
+        self.assertIn("| foreman-kit:work-breakdown, foreman-kit:cross-check | done → build (build) |", out)
+        self.assertIn("| 4 | review | `634 review <N>` | review | pair |", out)
+        self.assertIn("| foreman-kit:tidy | done → fix |", out)  # a replaced default skill
+        self.assertIn("changes → fix; approved → finalize (finalize)", out)
+        self.assertIn("| pair | prompt | agent 1: sonnet | opus | `--role pair` `--disallow Edit,Write,NotebookEdit` |", out)
+        self.assertIn("## Prompt for pair", out)
+        self.assertNotIn("Missing skills", out)
 
     def test_trivial_task(self):
         out = self.render("mid", trivial=True)
         self.assertIn("(difficulty mid, trivial)", out)
-        self.assertNotIn("| scenario |", out)
-        self.assertIn("approved → ready (handoff)", out)
-        self.assertNotIn("## Prompt for retracer", out)
+        self.assertNotIn("| recheck |", out)
+        self.assertIn("done → finalize (finalize)", out)
+        self.assertNotIn("## Prompt for pair", out)
 
-    def test_high_task_reviewers_on_different_models(self):
-        out = self.render("high")
-        self.assertIn("code-reviewer × 2", out)
-        self.assertIn("agent 1: opus; agent 2: sonnet | haiku |", out)
-        self.assertIn("| 7 | review | `634 review <N>` | pull-request |", out)
-        one = self.render("high", profiles={"code-reviewer": ["opus"], "retracer": ["opus"]})
-        self.assertIn("agent 1: opus; agent 2: opus (only 1 different profile(s) for 2 agents", one)
+    def test_check_loop_for_the_foreman(self):
+        out = self.render("high", which="check")
+        self.assertIn("# Verification session for 634", out)
+        self.assertIn("| 1 | redteam-review | `634 redteam-review` | redteam-review | redteam |", out)
+        self.assertIn("changes → build (build session); approved → stop", out)
+        self.assertIn("script → verify (build session)", out)
+        self.assertIn("## Prompt for qa", out)
+
+    def test_as_data(self):
+        data = loop.as_data(self.cfg, "634", "mid", False, self.resolved, kit_name)
+        self.assertEqual([s["id"] for s in data["work"]], WORK)
+        self.assertEqual([s["id"] for s in data["check"]], CHECK)
+        recheck = next(s for s in data["work"] if s["id"] == "recheck")
+        self.assertEqual((recheck["stage"], recheck["label"], recheck["skills"]),
+                         ("review", "634 review <N>", ["foreman-kit:review"]))
 
     def test_assign(self):
         self.assertEqual(loop.assign(["a", "b", "c"], 2), (["a", "b"], ""))
@@ -180,8 +212,10 @@ class Cli(unittest.TestCase):
     def test_show_and_bad_arguments(self):
         r = run("loop.py", "show")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("| review | scenario-retrace | retracer |", r.stdout)
-        self.assertIn("never | if-not-trivial | if-not-trivial", r.stdout)
+        self.assertIn("| review | recheck | pair |", r.stdout)
+        self.assertIn("if-not-trivial | if-not-trivial | if-not-trivial", r.stdout)
+        r = run("loop.py", "show", "--loop", "check")
+        self.assertIn("| test | test | qa |", r.stdout)
         self.assertEqual(run("loop.py", "render").returncode, 2)
         self.assertEqual(run("loop.py", "show", "--project", "bad").returncode, 2)
 
@@ -189,16 +223,15 @@ class Cli(unittest.TestCase):
         repo = os.path.join(self.home.root, "repo")
         self.home.write("repo/.claude/skills/scenario/SKILL.md", "x")
         self.home.write("state/agent-foreman/projects/o-r/project.json",
-                        {"repo": "o/r", "machines": {"local": repo},
-                         "loop": {"work": [{"id": "scenario", "skills": ["scenario"]}]}})
+                        {"repo": "o/r", "machines": {"local": repo}, "skills": {"cross-check": "scenario"}})
         r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "high", "--machine", "local")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("| 6 |  |  | scenario | lead |", r.stdout)
-        self.assertIn("| scenario |", r.stdout)
-        self.assertIn("agent 1: opus; agent 2: sonnet", r.stdout)  # high reviewers fall back to the next tier
+        self.assertIn("| foreman-kit:work-breakdown, scenario |", r.stdout)  # the project's skill replaces cross-check
+        self.assertIn("| pair | prompt | agent 1: sonnet |", r.stdout)  # high: never the lead's opus
         r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "low", "--machine", "local",
-                "--trivial")
-        self.assertNotIn("| scenario |", r.stdout)
+                "--json")
+        data = json.loads(r.stdout)
+        self.assertEqual([s["id"] for s in data["check"]], CHECK)
         r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "low", "--machine", "ghost")
         self.assertEqual(r.returncode, 3)
 
