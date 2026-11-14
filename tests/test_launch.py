@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import unittest
 
 from helpers import SCRIPTS, TempHome, run
@@ -102,6 +103,8 @@ out = {"type": "result", "subtype": "success", "is_error": False, "session_id": 
        "total_cost_usd": 0.01, "permission_denials": [],
        "result": "|".join([prompt, " ".join(sys.argv[1:]), os.environ.get("ANTHROPIC_BASE_URL", "-")]),
        "status": [os.environ.get("AF_STATUS_FILE", "-"), os.environ.get("AF_AGENT", "-")]}
+if os.environ.get("FAKE_RESULT"):
+    out["result"] = os.environ["FAKE_RESULT"]
 if mode == "error":
     out.update(is_error=True, subtype="error_during_execution", result="rate limited")
 print(json.dumps(out))
@@ -163,20 +166,64 @@ class PromptMode(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.load(open(self.out))["status"], ["-", "-"])  # never the starter's file
 
+    def git_checkout(self):
+        repo = os.path.join(self.home.root, "clone")
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q",
+                        "--allow-empty", "-m", "x"], check=True)
+        return repo, subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
     def test_task_folder_and_run_record(self):
         task = os.path.join(self.home.root, "task")
-        r = self.launch("opus", "--role", "pair", "--name", "pair-1", "--task-dir", task)
+        out = os.path.join(task, "reviews", "pair-1-1.json")
+        clone, head = self.git_checkout()
+        self.home.write("config/agent-foreman/config.json", {"gateways": {"gw": GATEWAY}, "profiles": {"p": PROFILE}})
+        r = run("launch.py", "p", "--print", "--prompt-file", self.prompt, "--out", out, "--role", "pair",
+                "--name", "pair-1", "--task-dir", task, env={**self.env, "HF_TEST_TOKEN": "t"}, workdir=clone)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(json.load(open(self.out))["status"], [os.path.join(task, "status.jsonl"), "pair-1"])
-        meta = json.load(open(self.out[:-5] + ".meta.json"))
-        self.assertEqual((meta["role"], meta["agent"], meta["profile"], meta["model"], meta["ok"], meta["session_id"]),
-                         ("pair", "pair-1", "opus", "opus", True, "s-1"))
+        self.assertEqual(json.load(open(out))["status"], [os.path.join(task, "status.jsonl"), "pair-1"])
+        meta = json.load(open(out[:-5] + ".meta.json"))
+        self.assertEqual((meta["role"], meta["agent"], meta["profile"], meta["gateway"], meta["model"], meta["head"],
+                          meta["ok"], meta["session_id"]), ("pair", "pair-1", "p", "gw", "m", head, True, "s-1"))
         self.assertTrue(meta["started"] <= meta["ended"])
+        self.assertRegex(meta["ended"], r"\.\d{6}Z$")  # to the microsecond, so runs in one second still sort
         r = self.launch("opus", FAKE_MODE="error")
         self.assertFalse(json.load(open(self.out[:-5] + ".meta.json"))["ok"])
         r = run("launch.py", "opus", "--task-dir", task, "--dry-run", env=self.env)
         self.assertIn("AF_TASK_DIR", r.stdout.split("set:")[1].split("\n")[0])
         self.assertNotIn(task, r.stdout)
+
+    def test_verdict_in_the_summary(self):
+        r = self.launch("opus", FAKE_RESULT="must-fix: none\n**Verdict: approved**")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["verdict"], "approved")
+        with open(self.out[:-5] + ".meta.json") as f:
+            self.assertEqual(json.load(f)["verdict"], "approved")
+        self.assertEqual(json.loads(self.launch("opus", FAKE_RESULT="no verdict here").stdout)["verdict"], "")
+
+    def test_role_run_must_land_in_the_task_folder(self):
+        task = os.path.join(self.home.root, "task")
+        inside = os.path.join(task, "reviews", "pair-1-1.json")
+        clone, _ = self.git_checkout()
+        cases = [(["--name", "pair-1", "--out", inside], clone, "--task-dir"),
+                 (["--task-dir", task, "--out", inside], clone, "--name"),
+                 (["--task-dir", task, "--name", "pair-1", "--out", self.out], clone, "reviews/"),
+                 (["--task-dir", task, "--name", "pair-1", "--out", inside], self.home.root, "not a git checkout")]
+        for extra, where, words in cases:
+            r = run("launch.py", "opus", "--print", "--prompt-file", self.prompt, "--role", "pair", *extra,
+                    env=self.env, workdir=where)
+            self.assertEqual(r.returncode, 2, extra)
+            self.assertIn(words, r.stderr)
+        self.assertFalse(os.path.exists(task))
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_paths_with_a_tilde(self):
+        prompt = "~/" + os.path.relpath(self.prompt, self.home.root)
+        out = "~/runs/tilde.json"
+        r = run("launch.py", "opus", "--print", "--prompt-file", prompt, "--out", out,
+                env={**self.env, "HOME": self.home.root})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(os.path.isfile(os.path.join(self.home.root, "runs", "tilde.json")))
 
     def test_status_in_dry_run_names_only(self):
         r = run("launch.py", "opus", "--name", "t-7", "--status", "/x/status.jsonl", "--dry-run", env=self.env)

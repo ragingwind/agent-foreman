@@ -59,19 +59,20 @@ class Note(unittest.TestCase):
         self.home.close()
 
     def test_note_appends_a_stage_line(self):
-        runs = '[{"role": "code-reviewer", "profile": "opus", "verdict": "approved", "cost": 0.4, "out": "r.json"}]'
-        r = run("status.py", "note", "--stage", "review", "--step", "code-review", "--event", "end", "--round", "2",
-                "--done", "리뷰 통과", "--next", "scenario-retrace", "--runs", runs, env={"AF_STATUS_FILE": self.file})
+        r = run("status.py", "note", "--stage", "review", "--step", "recheck", "--event", "end", "--round", "2",
+                "--outcome", "approved", "--done", "리뷰 통과", env={"AF_STATUS_FILE": self.file})
         self.assertEqual(r.returncode, 0, r.stderr)
         row = lines(self.file)[0]
-        self.assertEqual((row["stage"], row["step"], row["event"], row["round"], row["done"], row["runs"][0]["verdict"]),
-                         ("review", "code-review", "end", 2, "리뷰 통과", "approved"))
+        self.assertEqual((row["stage"], row["step"], row["event"], row["round"], row["done"], row["outcome"]),
+                         ("review", "recheck", "end", 2, "리뷰 통과", "approved"))
+        self.assertNotIn("runs", row)
 
     def test_bad_notes_are_refused(self):
         for args, env in ((["--event", "end"], {"AF_STATUS_FILE": self.file}),
                           (["--stage", "x", "--event", "end"], {"AF_STATUS_FILE": ""}),
-                          (["--stage", "x", "--event", "end", "--runs", "{}"], {"AF_STATUS_FILE": self.file}),
-                          (["--stage", "x", "--event", "end", "--runs", "nope"], {"AF_STATUS_FILE": self.file})):
+                          (["--stage", "x", "--event", "start", "--outcome", "done"], {"AF_STATUS_FILE": self.file}),
+                          (["--stage", "x", "--event", "end", "--runs", "[]"], {"AF_STATUS_FILE": self.file}),
+                          (["--stage", "x", "--event", "end", "--next", "y"], {"AF_STATUS_FILE": self.file})):
             self.assertEqual(run("status.py", "note", *args, env=env).returncode, 2, args)
         self.assertNotEqual(run("status.py", "note", "--stage", "x", "--event", "done",
                                 env={"AF_STATUS_FILE": self.file}).returncode, 0)
@@ -89,10 +90,10 @@ class Note(unittest.TestCase):
         task_loop = {"work": [
             {"id": "build", "stage": "build", "label": "7 build", "actor": "lead", "does": "Build it.",
              "skills": ["foreman-kit:unit"], "next": {"done": "verify"}},
-            {"id": "verify", "stage": "verify", "label": "7 verify", "actor": "lead", "does": "Check it.",
+            {"id": "verify", "stage": "verify", "label": "7 verify <N>", "actor": "lead", "does": "Check it.",
              "skills": [], "next": {"fail": "build", "done": "stop"}}],
             "check": [{"id": "test", "stage": "test", "label": "7 test", "actor": "qa", "does": "Test it.",
-                       "skills": [], "next": {"pass": "stop"}}]}
+                       "skills": [], "next": {"script": "verify", "pass": "stop"}}]}
         self.home.write("loop.json", task_loop)
         env = {"AF_STATUS_FILE": self.file, "HERDR_TAB_ID": ""}
         r = run("status.py", "note", "--stage", "implement", "--event", "start", env=env)
@@ -105,9 +106,35 @@ class Note(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("now: build (build, lead): Build it. Skills: foreman-kit:unit.", r.stdout)
         self.assertEqual(lines(self.file)[0]["step"], "build")  # filled in from the loop
-        r = run("status.py", "note", "--stage", "verify", "--step", "verify", "--event", "end", env=env)
-        self.assertIn("next, if fail: build (build, lead): Build it.", r.stdout)
-        self.assertIn("next, if done: stop and report", r.stdout)
+        for outcome in (None, "pass"):  # an end line names one of the step's own outcomes
+            r = run("status.py", "note", "--stage", "verify", "--event", "end",
+                    *(["--outcome", outcome] if outcome else []), env=env)
+            self.assertEqual(r.returncode, 2, outcome)
+            self.assertIn("needs --outcome, one of fail, done (step verify)", r.stderr)
+        r = run("status.py", "note", "--stage", "verify", "--event", "end", "--outcome", "fail", env=env)
+        self.assertEqual(r.stdout.strip(), "next: build (build, lead): Build it. Skills: foreman-kit:unit.")
+        self.assertEqual((lines(self.file)[-1]["outcome"], lines(self.file)[-1]["to"]), ("fail", "build"))
+        r = run("status.py", "note", "--stage", "verify", "--event", "end", "--outcome", "done", env=env)
+        self.assertIn("next: stop: no step follows", r.stdout)
+        r = run("status.py", "note", "--file", self.file, "--stage", "test", "--event", "end", "--outcome", "script",
+                env={"AF_STATUS_FILE": ""})  # the foreman, for a check step
+        self.assertIn("next: verify (verify, lead): Check it.", r.stdout)
+
+    def test_only_the_agents_own_note_renames_its_tab(self):
+        self.home.write("loop.json", {"work": [{"id": "verify", "stage": "verify", "label": "7 verify <N>",
+                                                "actor": "lead", "does": "x", "skills": [], "next": {"done": "stop"}}]})
+        bindir = os.path.join(self.home.root, "bin")
+        os.makedirs(bindir)
+        calls = os.path.join(self.home.root, "herdr-calls")
+        with open(os.path.join(bindir, "herdr"), "w") as f:
+            f.write(f"#!/bin/sh\necho \"$@\" >> {calls}\n")
+        os.chmod(os.path.join(bindir, "herdr"), 0o755)
+        env = {"PATH": bindir + os.pathsep + os.environ["PATH"], "HERDR_TAB_ID": "wA:t2"}
+        run("status.py", "note", "--stage", "verify", "--event", "start", "--round", "2",
+            env={**env, "AF_STATUS_FILE": self.file})
+        run("status.py", "note", "--file", self.file, "--stage", "verify", "--event", "start", env=env)
+        with open(calls) as f:
+            self.assertEqual(f.read().splitlines(), ["tab rename wA:t2 7 verify 2"])
 
 
 def row(minutes_ago, now, **fields):
@@ -129,10 +156,16 @@ class Summarize(unittest.TestCase):
         self.assertFalse(status.summarize(rows, 40, now=self.NOW)["stalled"])
 
     def test_a_stop_point_is_not_a_stall(self):
-        rows = [row(90, self.NOW, stage="ready", event="stop", done="REPORT: ready — #12"),
+        rows = [row(90, self.NOW, stage="plan", event="stop", done="REPORT: decision — which format"),
                 row(89, self.NOW, event="turn-end", agent="issue-7")]
         s = status.summarize(rows, 30, now=self.NOW)
-        self.assertEqual((s["stopped"], s["stalled"], s["done"]), (True, False, "REPORT: ready — #12"))
+        self.assertEqual((s["stopped"], s["stalled"], s["done"]), (True, False, "REPORT: decision — which format"))
+        rows = [row(90, self.NOW, stage="finalize", step="finalize", event="end", outcome="done", to="stop",
+                    done="REPORT: ready — #12")]
+        s = status.summarize(rows, 30, now=self.NOW)
+        self.assertEqual((s["stopped"], s["stalled"], s["outcome"], s["to"]), (True, False, "done", "stop"))
+        rows = [row(90, self.NOW, stage="test", step="test", event="end", outcome="fail", to="build")]
+        self.assertTrue(status.summarize(rows, 30, now=self.NOW)["stalled"])  # sent back: the lead must move
 
     def test_no_lines_is_a_stall(self):
         self.assertTrue(status.summarize([], 30, now=self.NOW)["stalled"])
@@ -207,7 +240,7 @@ class Settings(unittest.TestCase):
     def test_the_brief_says_how_often(self):
         cfg = config.merge(config.load(), {"ops": {"report_minutes": 10, "stall_minutes": 25}})
         text = loop.render(cfg, "issue-7", "low", False, loop.resolve_all(cfg["loop"], [], {}), {}, lambda src, v: v)
-        self.assertIn("at least every 10 minutes; 25 minutes without a line counts as a stall", text)
+        self.assertIn("at least every 10 minutes in a long step; 25 minutes without a line counts as a stall", text)
 
 
 class Log(unittest.TestCase):

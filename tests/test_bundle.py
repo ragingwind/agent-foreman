@@ -42,7 +42,8 @@ class Bundle(unittest.TestCase):
         self.assertIn("skills/cross-check/SKILL.md", files)  # every default skill is carried
         self.assertNotIn("skills/tidy/__pycache__/x.pyc", files)
         for rel in ("bundle.json", ".claude-plugin/plugin.json", "config.json", "loop.md", "scripts/launch.py",
-                    "scripts/config.py", "scripts/transcript.py", "scripts/adapters/__init__.py",
+                    "scripts/config.py", "scripts/transcript.py", "scripts/gate.py", "scripts/status.py",
+                    "scripts/clone.py", "scripts/loop.py", "scripts/heartbeat.py", "scripts/adapters/__init__.py",
                     "scripts/adapters/base.py", "scripts/adapters/claude.py"):
             self.assertIn(rel, files)
         self.home.write("skills/tidy/SKILL.md", "---\nname: tidy\n---\nTidy more.")

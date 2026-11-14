@@ -4,45 +4,58 @@ lead runs it before it reports ready, and the foreman runs it again before
 it merges.
 
 Usage:
-  gate.py template --project OWNER/REPO [--pr N] --difficulty low|mid|high [--trivial]
-  gate.py run GATE.json [--pr N] [--cwd CLONE] [--task-dir DIR] [--skip CHECK,...] [--before-ready]
+  gate.py template --loop LOOP.json [--pr N]
+  gate.py hash GATE.json
+  gate.py run GATE.json [--pr N] [--cwd CLONE] [--task-dir DIR] [--skip CHECK,...] [--before-ready] [--sha HEX]
 
 A gate file:
   {"repo": "owner/name", "pr": 12, "checks": [{"check": "<name>", ...}, ...]}
 
-The foreman writes it with the brief, before the pull request exists, so
-"pr" may be null; `run --pr N` names the pull request then. A file that
-names one and a different --pr is refused.
+`template` builds the standard gate from the task's `loop.json` (`loop.py
+render --json`), so the gate and the loop come from one place. The foreman
+writes it with the brief, before the pull request exists, so "pr" may be
+null; `run --pr N` names the pull request then. A file that names one and a
+different --pr is refused.
+
+The lead can write in its task folder, so the foreman records the gate
+file's `hash` with the brief and passes it to every run it makes with --sha:
+a changed gate file blocks. The `loop-file` check does the same for
+`loop.json`, whose hash the template writes into the gate file.
 
 Checks (each may say "severity": "warn" to report without blocking):
   pr-open         the pull request exists and is open
-  sections        the body has the `## <name>` headings in "names"
+  loop-file       the task folder's loop.json has the "sha256" in the check
+  steps           the task folder's status.jsonl has an `end` line for each
+                  step in "ids" (status.py note)
+  docs            the task folder's records: every row of plan.md's work
+                  breakdown is done, handoff.md has its sections, and
+                  scenario.md's closing verdict is pass with every Agent block
+                  filled (not for a trivial task)
   ci              every status check finished and passed
   base-fresh      the head contains the base branch's head
-  verdict         with "role": at least "count" agents of that role whose latest
-                  answer in the task folder's reviews/ (launch.py --role) ends
-                  with a `Verdict:` in "accept", given at the head SHA (with
-                  --cwd, also at an earlier SHA whose change is the same), on a
-                  profile not in "not_profiles" (the lead's). Without "role",
-                  the old form: comments titled `## <title> of #<PR> at <sha>`
-  docs            the task folder's records: plan.md's work breakdown all done,
-                  handoff.md's sections, and scenario.md's closing verdict pass
-                  with no empty Agent block (not for a trivial task)
-  scenario        a comment titled "title" holding raw output in a code block;
-                  for a trivial change, a skip reason under `## Tests` instead
+  verdict         at least "count" agents of "role" whose latest answer in the
+                  task folder's reviews/ (launch.py --role) ends with a
+                  `Verdict:` in "accept", given at the head SHA (with --cwd,
+                  also at an earlier SHA whose change is the same), on a
+                  profile not in "not_profiles" (the lead's)
   tests-weakened  no removed test file, added skip marker, edited CI file or
                   changed coverage threshold, except the kinds in "allow"
   size            additions + deletions at most "max_lines"
   ready           the pull request is no longer a draft
-                  (--before-ready skips it and every check marked "at": "merge":
-                  the lead runs the gate before the verification session)
   command         "run" exits 0 in the clone (--cwd)
+
+--before-ready skips `ready` and every check marked "at": "merge": the lead
+runs the gate before the verification session. --skip names checks to leave
+out; a verdict check is named with its role, `verdict:qa`, and only when the
+person said so.
 
 `run` prints one JSON object and exits 0 when nothing blocks, 6 when a check
 blocks, 2 on bad arguments, 1 when gh or git fails.
 """
 import argparse
 import fnmatch
+import glob
+import hashlib
 import json
 import os
 import re
@@ -58,11 +71,29 @@ SKIP_MARKERS = re.compile(r"@pytest\.mark\.(skip|xfail)|\b(it|test|describe)\.sk
                           r"\bt\.Skip(Now|f)?\(|@Ignore\b|@Disabled\b|#\[ignore\]|unittest\.skip|\.only\(")
 COVERAGE = re.compile(r"fail_under|fail-under|cov-fail-under|coverageThreshold|min(imum)?_coverage", re.I)
 PASSED = {"SUCCESS", "NEUTRAL", "SKIPPED"}
+HANDOFF_SECTIONS = ("Purpose", "Decisions", "Tests", "Not touched", "Follow-ups")
+VERDICT = re.compile(r"^Verdict:\s*([A-Za-z][\w-]*)\W*$", re.I)
 
 
 def matches(path, pattern):
     pat = pattern[3:] if pattern.startswith("**/") else pattern
     return fnmatch.fnmatch("/" + path, "*/" + pat) or fnmatch.fnmatch(path, pat)
+
+
+def sha256_file(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def last_verdict(text):
+    """The word on the answer's last `Verdict:` line, lower case, or "". Bold,
+    backticks or a period around the line do not count against it."""
+    found = ""
+    for line in str(text or "").splitlines():
+        m = VERDICT.match(line.strip().strip("*_`> ").strip())
+        if m:
+            found = m.group(1).lower()
+    return found
 
 
 def gh_json(*args):
@@ -76,7 +107,7 @@ def gh_json(*args):
 def fetch(repo, pr):
     """Everything the checks read about one pull request."""
     view = gh_json("pr", "view", str(pr), "--repo", repo, "--json",
-                   "number,state,isDraft,baseRefName,headRefOid,body,additions,deletions,comments,statusCheckRollup")
+                   "number,state,isDraft,baseRefName,headRefOid,additions,deletions,statusCheckRollup")
     files = gh_json("api", "--paginate", f"repos/{repo}/pulls/{pr}/files?per_page=100")
     compare = gh_json("api", f"repos/{repo}/compare/{view['baseRefName']}...{view['headRefOid']}")
     view["files"] = files
@@ -116,13 +147,111 @@ def section(body, name):
     return m.group(1) if m else None
 
 
+def read_task_file(ctx, name):
+    try:
+        with open(os.path.join(ctx["task_dir"], name), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
 def check_pr_open(pr, spec, ctx):
     return pr["state"] == "OPEN", f"state {pr['state']}"
 
 
-def check_sections(pr, spec, ctx):
-    missing = [n for n in spec.get("names", []) if section(pr["body"], n) is None]
-    return not missing, f"missing: {', '.join(missing)}" if missing else "all present"
+def check_loop_file(pr, spec, ctx):
+    if not ctx.get("task_dir"):
+        return False, "needs --task-dir"
+    path = os.path.join(ctx["task_dir"], "loop.json")
+    if not os.path.isfile(path):
+        return False, "no loop.json in the task folder"
+    found = sha256_file(path)
+    return found == spec.get("sha256"), ("loop.json is the one in the brief" if found == spec.get("sha256")
+                                         else "loop.json changed after the brief")
+
+
+def check_steps(pr, spec, ctx):
+    if not ctx.get("task_dir"):
+        return False, "needs --task-dir"
+    ended = set()
+    for line in (read_task_file(ctx, "status.jsonl") or "").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("event") == "end":
+            ended.add(row.get("step"))
+    missing = [s for s in spec.get("ids", []) if s not in ended]
+    return not missing, (f"no end line for: {', '.join(missing)}" if missing
+                         else f"an end line for each of {', '.join(spec.get('ids', []))}")
+
+
+def table(text, heading):
+    """(header, rows) of the first table under `## heading`, each a list of
+    cells, or None when there is no such heading."""
+    body = section(text, heading)
+    if body is None:
+        return None
+    lines = [l.strip() for l in body.splitlines() if l.strip().startswith("|")]
+    cells = [[c.strip() for c in l.strip("|").split("|")] for l in lines]
+    return (cells[0], cells[2:]) if len(cells) >= 2 else ([], [])
+
+
+def plan_problems(plan_text):
+    if plan_text is None:
+        return ["no plan.md"]
+    found = table(plan_text, "Work breakdown")
+    if found is None:
+        return ["plan.md has no work breakdown"]
+    header, rows = found
+    names = [h.lower() for h in header]
+    if "status" not in names:
+        return ["plan.md's work breakdown has no status column"]
+    if not rows:
+        return ["plan.md's work breakdown is empty"]
+    at = names.index("status")
+    open_rows, broken = [], []
+    for r in rows:
+        if len(r) != len(header):
+            broken.append(f"{r[0] or '?'} ({len(r)} cells, not {len(header)})")
+        elif r[at].lower() != "done":
+            open_rows.append(r[0])
+    return ([f"work items not done: {', '.join(open_rows)}"] if open_rows else []) + (
+        [f"rows that do not fit the header: {', '.join(broken)}"] if broken else [])
+
+
+def empty_agent_blocks(scenario):
+    """How many `**Agent**` blocks hold no output: no fence after the label,
+    an empty fence, or a fence that holds only `<...>` placeholders."""
+    empty = 0
+    for after in scenario.split("**Agent**")[1:]:
+        m = re.match(r"\s*```[^\n]*\n(.*?)```", after, re.S)
+        if not m or not m.group(1).strip() or re.fullmatch(r"(\s*<[^>\n]*>\s*)+", m.group(1)):
+            empty += 1
+    return empty
+
+
+def check_docs(pr, spec, ctx):
+    if not ctx.get("task_dir"):
+        return False, "needs --task-dir"
+    problems = plan_problems(read_task_file(ctx, "plan.md"))
+    handoff = read_task_file(ctx, "handoff.md")
+    if handoff is None:
+        problems.append("no handoff.md")
+    else:
+        missing = [n for n in HANDOFF_SECTIONS if section(handoff, n) is None]
+        if missing:
+            problems.append(f"handoff.md lacks {', '.join(missing)}")
+    if not spec.get("trivial"):
+        scenario = read_task_file(ctx, "scenario.md")
+        closing = (section(scenario or "", "Closing") or "").strip()
+        if scenario is None:
+            problems.append("no scenario.md")
+        elif not re.fullmatch(r"Verdict:\s*pass", closing.splitlines()[0].strip() if closing else "", re.I):
+            problems.append("scenario.md's closing verdict is not pass")
+        elif empty_agent_blocks(scenario):
+            problems.append(f"scenario.md has {empty_agent_blocks(scenario)} Agent block(s) with no output")
+    return not problems, "; ".join(problems) if problems else "plan, handoff and scenario in order"
 
 
 def check_ci(pr, spec, ctx):
@@ -141,24 +270,9 @@ def check_base_fresh(pr, spec, ctx):
     return behind == 0, f"{behind} commit(s) behind {pr['baseRefName']}"
 
 
-def verdicts(pr, title):
-    """(sha, verdict) for each comment under the fixed title."""
-    head = re.compile(rf"^##\s+{re.escape(title)} of #{pr['number']} at ([0-9a-fA-F]{{7,40}})")
-    out = []
-    for c in pr.get("comments") or []:
-        body = (c.get("body") or "").strip()
-        m = head.match(body)
-        if not m:
-            continue
-        lines = re.findall(r"^Verdict:\s*(.+?)\s*$", body, re.M)
-        out.append((m.group(1), lines[-1].lower() if lines else ""))
-    return out
-
-
 def latest_answers(task_dir, role):
     """(agent, meta, answer text) of each agent of a role: its latest run in the
     task folder's reviews/ (launch.py --print --role writes `<out>.meta.json`)."""
-    import glob
     by_agent = {}
     for meta_file in glob.glob(os.path.join(task_dir, "reviews", "*.meta.json")):
         try:
@@ -166,7 +280,7 @@ def latest_answers(task_dir, role):
                 meta = json.load(f)
         except (OSError, ValueError):
             continue
-        if meta.get("role") != role:
+        if not isinstance(meta, dict) or meta.get("role") != role:
             continue
         agent = meta.get("agent") or meta_file
         if agent not in by_agent or str(meta.get("ended", "")) > str(by_agent[agent][0].get("ended", "")):
@@ -183,7 +297,7 @@ def latest_answers(task_dir, role):
     return out
 
 
-def check_role_verdict(pr, spec, ctx):
+def check_verdict(pr, spec, ctx):
     if not ctx.get("task_dir"):
         return False, "needs --task-dir"
     accept = [a.lower() for a in spec.get("accept", ["approved"])]
@@ -191,96 +305,16 @@ def check_role_verdict(pr, spec, ctx):
     banned = set(spec.get("not_profiles", []))
     good, seen = 0, []
     for agent, meta, text in latest_answers(ctx["task_dir"], spec["role"]):
-        lines = re.findall(r"^Verdict:\s*(.+?)\s*$", text, re.M)
-        verdict = lines[-1].lower() if lines else ""
+        verdict = last_verdict(text)
         head = meta.get("head") or ""
         at_head = bool(head) and (same_sha(head, pr["headRefOid"]) or bool(
             ctx.get("cwd") and same_change(ctx["cwd"], pr["baseRefName"], head, pr["headRefOid"])))
-        ok = verdict in accept and at_head and meta.get("profile") not in banned and meta.get("ok", True)
+        ok = verdict in accept and at_head and meta.get("profile") not in banned and meta.get("ok") is True
         good += ok
         seen.append(f"{agent} {meta.get('profile')} {head[:7] or '?'} {verdict or 'no verdict'}"
+                    + ("" if meta.get("ok") is True else " (the run failed)")
                     + ("" if meta.get("profile") not in banned else " (the lead's profile)"))
     return good >= count, f"{good} of {count} {spec['role']} at the head; seen: {', '.join(seen) or 'none'}"
-
-
-def _section_rows(text, heading):
-    body = section(text, heading)
-    if body is None:
-        return None
-    rows = [l for l in body.splitlines() if l.strip().startswith("|")]
-    return [[c.strip() for c in r.strip().strip("|").split("|")] for r in rows[2:]] if len(rows) >= 2 else []
-
-
-def check_docs(pr, spec, ctx):
-    if not ctx.get("task_dir"):
-        return False, "needs --task-dir"
-    def read(name):
-        try:
-            with open(os.path.join(ctx["task_dir"], name), encoding="utf-8") as f:
-                return f.read()
-        except OSError:
-            return None
-    problems = []
-    plan_text = read("plan.md")
-    rows = _section_rows(plan_text or "", "Work breakdown") if plan_text is not None else None
-    if rows is None:
-        problems.append("plan.md has no work breakdown")
-    else:
-        open_rows = [r[0] for r in rows if len(r) >= 6 and r[5].lower() != "done"]
-        if not rows:
-            problems.append("plan.md's work breakdown is empty")
-        if open_rows:
-            problems.append(f"work items not done: {', '.join(open_rows)}")
-    handoff = read("handoff.md")
-    missing = [n for n in ("Purpose", "Decisions", "Tests", "Not touched", "Follow-ups")
-               if section(handoff or "", n) is None]
-    if handoff is None:
-        problems.append("no handoff.md")
-    elif missing:
-        problems.append(f"handoff.md lacks {', '.join(missing)}")
-    if not spec.get("trivial"):
-        scenario = read("scenario.md")
-        closing = section(scenario or "", "Closing")
-        if scenario is None:
-            problems.append("no scenario.md")
-        elif closing is None or not re.search(r"^Verdict:\s*pass\s*$", closing.strip().splitlines()[0] if closing.strip() else "", re.I):
-            problems.append("scenario.md's closing verdict is not pass")
-        elif re.search(r"\*\*Agent\*\*\s*```[^\n]*\n\s*```", scenario):
-            problems.append("scenario.md has an empty Agent block")
-    return not problems, "; ".join(problems) if problems else "plan, handoff and scenario in order"
-
-
-def check_verdict(pr, spec, ctx):
-    if spec.get("role"):
-        return check_role_verdict(pr, spec, ctx)
-    accept = [a.lower() for a in spec.get("accept", ["approved"])]
-    count = spec.get("count", 1)
-    found = verdicts(pr, spec["title"])
-    good, rebased = 0, 0
-    for sha, verdict in found:
-        if verdict not in accept:
-            continue
-        if same_sha(sha, pr["headRefOid"]):
-            good += 1
-        elif ctx.get("cwd") and same_change(ctx["cwd"], pr["baseRefName"], sha, pr["headRefOid"]):
-            good += 1
-            rebased += 1
-    note = f"{good} of {count} at the head" + (f" ({rebased} after a rebase with the same change)" if rebased else "")
-    seen = ", ".join(f"{s[:7]} {v or 'no verdict'}" for s, v in found) or "none"
-    return good >= count, f"{note}; seen: {seen}"
-
-
-def check_scenario(pr, spec, ctx):
-    if spec.get("trivial"):
-        tests = section(pr["body"], "Tests") or ""
-        ok = bool(re.search(r"trivial|no scenario|scenario (is )?skipped|skip(s|ped)? the scenario", tests, re.I))
-        return ok, "skip reason under ## Tests" if ok else "trivial, but no skip reason under ## Tests"
-    title = spec.get("title", "## Manual scenario")
-    for c in pr.get("comments") or []:
-        body = (c.get("body") or "").strip()
-        if body.startswith(title):
-            return "```" in body, "scenario comment with raw output" if "```" in body else "scenario comment has no raw output"
-    return False, f"no comment starting with {title!r}"
 
 
 def check_tests_weakened(pr, spec, ctx):
@@ -319,20 +353,25 @@ def check_command(pr, spec, ctx):
     return out.returncode == 0, f"exit {out.returncode}: {' | '.join(tail)}"
 
 
-CHECKS = {"pr-open": check_pr_open, "sections": check_sections, "ci": check_ci, "base-fresh": check_base_fresh,
-          "verdict": check_verdict, "docs": check_docs, "scenario": check_scenario,
+CHECKS = {"pr-open": check_pr_open, "loop-file": check_loop_file, "steps": check_steps, "docs": check_docs,
+          "ci": check_ci, "base-fresh": check_base_fresh, "verdict": check_verdict,
           "tests-weakened": check_tests_weakened, "size": check_size, "ready": check_ready, "command": check_command}
+
+
+def check_name(spec):
+    """How a check is named in --skip and in the report: `verdict:<role>` for
+    a verdict, its check name otherwise."""
+    return f"verdict:{spec['role']}" if spec["check"] == "verdict" else spec["check"]
 
 
 def evaluate(pr, gate, cwd=None, skip=(), task_dir=None, before_ready=False):
     results = []
     for spec in gate["checks"]:
-        name = spec["check"]
-        if name in skip or (before_ready and spec.get("at") == "merge"):
+        name = check_name(spec)
+        if name in skip or (before_ready and (spec.get("at") == "merge" or name == "ready")):
             continue
-        ok, evidence = CHECKS[name](pr, spec, {"cwd": cwd, "task_dir": task_dir})
-        label = name + (f" {spec.get('role') or spec.get('title')}" if name == "verdict" else "")
-        results.append({"check": label, "ok": ok, "severity": spec.get("severity", "block"), "evidence": evidence})
+        ok, evidence = CHECKS[spec["check"]](pr, spec, {"cwd": cwd, "task_dir": task_dir})
+        results.append({"check": name, "ok": ok, "severity": spec.get("severity", "block"), "evidence": evidence})
     blocked = [r for r in results if not r["ok"] and r["severity"] == "block"]
     return {"repo": gate["repo"], "pr": gate["pr"], "head": pr["headRefOid"], "pass": not blocked,
             "blocked": [r["check"] for r in blocked], "checks": results}
@@ -348,10 +387,12 @@ def validate_gate(gate):
         name = spec.get("check") if isinstance(spec, dict) else None
         if name not in CHECKS:
             problems.append(f"gate: check {i + 1} is {name!r}; known: {', '.join(CHECKS)}")
-        elif name == "verdict" and not (spec.get("title") or spec.get("role")):
-            problems.append(f"gate: verdict check {i + 1} needs a role (or the old title)")
+        elif name == "verdict" and not spec.get("role"):
+            problems.append(f"gate: verdict check {i + 1} needs a role")
         elif name == "command" and not spec.get("run"):
             problems.append(f"gate: command check {i + 1} needs run")
+        elif name == "loop-file" and not spec.get("sha256"):
+            problems.append(f"gate: loop-file check {i + 1} needs sha256")
         if isinstance(spec, dict) and spec.get("severity", "block") not in ("block", "warn"):
             problems.append(f"gate: check {i + 1} severity must be block or warn")
     if not gate.get("checks"):
@@ -359,61 +400,77 @@ def validate_gate(gate):
     return problems
 
 
-def template(cfg, repo, pr, difficulty, trivial):
-    """The standard gate for a task: the task folder's records, one verdict
-    check per judging role that runs (the build session's before ready, the
-    verification session's at merge), each refusing the lead's profile, and
-    the standing checks."""
-    import loop
-    from config import lead_profile
-    lead = lead_profile(cfg, difficulty)
-    checks = [{"check": "pr-open"}, {"check": "docs", "trivial": trivial}, {"check": "ci"}, {"check": "base-fresh"}]
-    for which, at in (("work", "ready"), ("check", "merge")):
+def template(task_loop, loop_sha=None, pr=None):
+    """The standard gate for a task, from its loop.json: the loop file itself,
+    the steps the lead must end before finalize, the task folder's records,
+    one verdict check per judging role that runs (the build session's before
+    ready, the verification session's at merge), each refusing the lead's
+    profile, the full tests, and the standing checks."""
+    lead = task_loop.get("lead_profile")
+    roles = task_loop.get("roles", {})
+    work = task_loop["work"]
+    last_stage = work[-1]["stage"]
+    checks = [{"check": "pr-open"}]
+    if loop_sha:
+        checks.append({"check": "loop-file", "sha256": loop_sha})
+    checks += [{"check": "steps", "ids": [s["id"] for s in work if s["stage"] != last_stage]},
+               {"check": "docs", "trivial": task_loop["trivial"]}, {"check": "ci"}, {"check": "base-fresh"}]
+    for which, at in (("work", None), ("check", "merge")):
         counts = {}
-        for st in loop.plan(cfg["loop"], difficulty, trivial, which):
-            if st["actor"] in cfg["loop"]["roles"]:
-                counts[st["actor"]] = max(counts.get(st["actor"], 1), st["count"])
+        for s in task_loop[which]:
+            if s["actor"] in roles:
+                counts[s["actor"]] = max(counts.get(s["actor"], 1), s.get("count", 1))
         for role, count in counts.items():
-            spec = {"check": "verdict", "role": role, "count": count,
-                    "accept": cfg["loop"]["roles"][role].get("accept", ["approved"]), "not_profiles": [lead] if lead else []}
-            if at == "merge":
-                spec["at"] = "merge"
+            spec = {"check": "verdict", "role": role, "count": count, "accept": roles[role].get("accept", ["approved"]),
+                    "not_profiles": [lead] if lead else []}
+            if at:
+                spec["at"] = at
             checks.append(spec)
-    full = cfg.get("tests", {}).get("full")
-    if full:
-        checks.append({"check": "command", "run": full})
+    if task_loop.get("tests_full"):
+        checks.append({"check": "command", "run": task_loop["tests_full"]})
     checks += [{"check": "tests-weakened", "allow": []},
-               {"check": "size", "max_lines": cfg["difficulty"]["lines"], "severity": "warn"},
+               {"check": "size", "max_lines": task_loop.get("max_lines", 400), "severity": "warn"},
                {"check": "ready"}]
-    return {"repo": repo, "pr": pr, "difficulty": difficulty, "trivial": trivial, "checks": checks}
+    return {"repo": task_loop["repo"], "pr": pr, "task": task_loop["task"], "difficulty": task_loop["difficulty"],
+            "trivial": task_loop["trivial"], "checks": checks}
 
 
 def main(argv):
     ap = argparse.ArgumentParser(prog="gate.py", description="agent-foreman pass conditions")
-    ap.add_argument("command", choices=["template", "run"])
+    ap.add_argument("command", choices=["template", "hash", "run"])
     ap.add_argument("gate", nargs="?")
-    ap.add_argument("--project", metavar="OWNER/REPO")
+    ap.add_argument("--loop", metavar="LOOP.json", help="template: the task's loop.json")
     ap.add_argument("--pr", type=int)
-    ap.add_argument("--difficulty", choices=["low", "mid", "high"])
-    ap.add_argument("--trivial", action="store_true")
     ap.add_argument("--cwd")
     ap.add_argument("--task-dir", help="the task folder (status.py dir): reviews/ and the records")
     ap.add_argument("--skip", default="")
     ap.add_argument("--before-ready", action="store_true")
+    ap.add_argument("--sha", metavar="HEX", help="run: the gate file's hash the foreman recorded with the brief")
     args = ap.parse_args(argv)
 
     if args.command == "template":
-        if not (args.project and args.difficulty):
-            print("gate.py: template needs --project and --difficulty", file=sys.stderr)
+        if not args.loop:
+            print("gate.py: template needs --loop <the task's loop.json>", file=sys.stderr)
             return 2
-        from config import load
-        print(json.dumps(template(load(args.project), args.project, args.pr, args.difficulty, args.trivial), indent=2))
+        path = os.path.expanduser(args.loop)
+        try:
+            with open(path, encoding="utf-8") as f:
+                task_loop = json.load(f)
+            gate = template(task_loop, sha256_file(path), args.pr)
+        except (OSError, ValueError, KeyError, IndexError, TypeError) as e:
+            print(f"gate.py: {args.loop} is not a task's loop.json (loop.py render --json): {e}", file=sys.stderr)
+            return 2
+        print(json.dumps(gate, indent=2))
         return 0
 
     if not args.gate:
-        print("gate.py: run needs a gate file", file=sys.stderr)
+        print(f"gate.py: {args.command} needs a gate file", file=sys.stderr)
         return 2
-    with open(args.gate, encoding="utf-8") as f:
+    path = os.path.expanduser(args.gate)
+    if args.command == "hash":
+        print(sha256_file(path))
+        return 0
+    with open(path, encoding="utf-8") as f:
         gate = json.load(f)
     problems = validate_gate(gate)
     if problems:
@@ -426,9 +483,18 @@ def main(argv):
     if gate["pr"] is None:
         print("gate.py: the gate file names no pull request yet; add --pr N", file=sys.stderr)
         return 2
-    skip = {s.strip() for s in args.skip.split(",") if s.strip()} | ({"ready"} if args.before_ready else set())
+    skip = {s.strip() for s in args.skip.split(",") if s.strip()}
+    if "verdict" in skip:
+        print("gate.py: --skip names a verdict check with its role, such as verdict:qa", file=sys.stderr)
+        return 2
+    if args.sha and sha256_file(path) != args.sha.strip().lower():
+        print(json.dumps({"repo": gate["repo"], "pr": gate["pr"], "pass": False, "blocked": ["gate-file"],
+                          "checks": [{"check": "gate-file", "ok": False, "severity": "block",
+                                      "evidence": "the gate file changed after the brief"}]}, indent=2))
+        return EXIT_GATE_FAILED
     task_dir = os.path.abspath(os.path.expanduser(args.task_dir)) if args.task_dir else None
-    report = evaluate(fetch(gate["repo"], gate["pr"]), gate, args.cwd, skip, task_dir, args.before_ready)
+    cwd = os.path.expanduser(args.cwd) if args.cwd else None
+    report = evaluate(fetch(gate["repo"], gate["pr"]), gate, cwd, skip, task_dir, args.before_ready)
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0 if report["pass"] else EXIT_GATE_FAILED
 

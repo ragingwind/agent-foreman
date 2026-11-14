@@ -106,6 +106,24 @@ class Clone(unittest.TestCase):
         code, out, _ = self.clone("remove", "--project", "o/r", "--task", "t1", "--agent", "lead", "--force")
         self.assertEqual((code, out["removed"]), (0, [path]))
 
+    def test_a_judging_clone_of_unpushed_work_is_removed(self):
+        lead = self.make()[1]["path"]
+        git(lead, "switch", "-q", "-c", "fix-1")
+        put(os.path.join(lead, "c.txt"), "c\n")
+        git(lead, "add", "-A")
+        git(lead, "commit", "-q", "-m", "not pushed yet")
+        head = git(lead, "rev-parse", "HEAD")
+        pair = self.clone("make", "--project", "o/r", "--task", "t1", "--agent", "pair-1", "--from", lead,
+                          "--ref", head, "--no-push")[1]["path"]
+        put(os.path.join(pair, "c.txt"), "probe\n")
+        code, out, _ = self.clone("remove", "--project", "o/r", "--task", "t1", "--agent", "pair-1")
+        self.assertIn("changes to tracked files: c.txt", out["refused"][0]["reason"])
+        git(pair, "checkout", "--", "c.txt")
+        code, out, _ = self.clone("remove", "--project", "o/r", "--task", "t1", "--agent", "pair-1")
+        self.assertEqual((code, out["removed"]), (0, [pair]))  # its commits live in the lead's clone
+        code, out, _ = self.clone("remove", "--project", "o/r", "--task", "t1", "--agent", "lead")
+        self.assertIn("commits on no remote", out["refused"][0]["reason"])  # the lead's own are kept
+
     def test_remove_task_takes_clones_and_task_folder(self):
         lead = self.make()[1]["path"]
         self.make("qa-1")

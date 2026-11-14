@@ -14,29 +14,47 @@ session.
   `reviews/`, `status.jsonl`, and `loop.json`.
 - **The loop table** in the brief: each stage, its steps, who acts, what it
   does, the skill each step uses, and where each outcome goes.
-- **The gate file** (`gate.json` in the task folder).
+- **The gate file** (`gate.json` in the task folder). Do not edit it or
+  `loop.json`; the gate blocks when either changed.
 
-The brief confirms the whole loop: do not stop between steps to ask whether
-to go on.
+You have approval for every step in the brief: do not stop between steps to
+ask whether to go on.
 
 **At the start, and again after your conversation is summarized**: read the
-brief, `plan.md` if it exists, and the last line of the status file. When
-`plan.md` exists, do not plan again; go on from the first work item that is
-not done.
+brief, `plan.md` if it exists, and the last lines of `status.jsonl`. When
+`plan.md` exists, do not plan again; go on from the step the last line names.
 
 ## Each step
 
-1. Start it: `python3 <bundle>/scripts/status.py note --stage <stage> --step
-   <step> --event start [--round <N>]`. It refuses a stage or step that is not
-   in your loop, renames your tab, and prints what the step does.
-2. Do it with the skill the table names. A skill's **Action** says how,
-   its **Flow** says where each outcome goes, and its **Record** says what to
-   write in the task folder and in what shape.
-3. End it: the same command with `--event end --done "<one line>"`. It prints
-   where each outcome goes next. Follow the outcome that happened.
+`<bundle>` is the folder that holds this file.
+
+1. Start it:
+
+   ```bash
+   python3 <bundle>/scripts/status.py note --stage <stage> --step <step> --event start [--round <N>]
+   ```
+
+   It refuses a stage or step that is not in your loop, renames your tab,
+   and prints what the step does.
+2. Do it with the skills the table names. A skill's **Action** says how,
+   its **Flow** says which outcome to end with, and its **Record** says what
+   to write in the task folder and in what shape.
+3. End it with the outcome that happened, one of the step's `Next` keys in
+   the table:
+
+   ```bash
+   python3 <bundle>/scripts/status.py note --stage <stage> --step <step> --event end --outcome <outcome> --done "<one line>"
+   ```
+
+   It refuses an outcome the step does not have, and prints the next step.
+   Go there.
 
 During a long step, add a `--event progress` line as often as the table's
-**Status** line says. No line for as long as it says counts as a stall.
+**Status** line says. No line for as long as it says counts as a stall. The
+gate blocks until every step before finalize has an `end` line.
+
+`--round` is the build session's pass: 1 at first; the foreman gives the next
+number when it sends the task back.
 
 ## Steps another agent does (the pair)
 
@@ -45,62 +63,56 @@ model reviews your diff. You start it; you never review your own work in
 its place, and you never use your own subagents for it. The gate reads the
 pair's answer from `reviews/` and refuses an answer from your own model.
 
-1. Give it its own clone at your head: `python3 <bundle>/scripts/clone.py
-   make --project <repo> --task <task> --agent pair-<n> --from <your clone>
-   --ref <head SHA> --fresh --no-push`. Use the `path` it prints.
-2. Write its prompt to `<task folder>/reviews/pair-<n>-r<round>.prompt.md`:
-   the role's prompt from the brief, with the placeholders filled in. Add
-   nothing else.
-3. From inside its clone, with the first profile in the table's row for the
-   pair:
+1. Give it its own clone at your head:
 
    ```bash
-   python3 <bundle>/scripts/launch.py <profile> --print --role pair --name pair-<n> \
-     --prompt-file <task folder>/reviews/pair-<n>-r<round>.prompt.md \
-     --out <task folder>/reviews/pair-<n>-r<round>.json --task-dir <task folder> \
-     --disallow Edit,Write,NotebookEdit
+   python3 <bundle>/scripts/clone.py make --project <repo> --task <task> --agent pair-1 \
+     --from <your clone> --ref <head SHA> --fresh --no-push
    ```
 
-4. Exit code 5 (a usage limit or a gateway error): run it again with the next
-   profile in the Fallback column. It never lists your own profile.
-5. Its verdict is the last `Verdict:` line of its answer (`result` in the
-   `--out` file). Follow the step's outcome for that verdict.
+2. From inside the `path` it prints:
+   `python3 <bundle>/scripts/loop.py prompt --step <review or recheck>`. It
+   writes the pair's prompt into `reviews/` from `loop.json` and prints JSON
+   with `commands`. Do not write or change the prompt yourself.
+3. Run the first command there and wait. Exit 5 (a usage limit or a gateway
+   error): run the next one. None is ever on your own profile.
+4. The last line it prints has `verdict`. In `review`, end the step with
+   `done` whatever the verdict. In `recheck`, end it with the verdict as the
+   outcome (`approved` or `changes`). No verdict: run it once more; then stop
+   as blocked.
 
-After the clean-up and the fixes, `recheck` starts the pair again on the new
-head, for the fixes and the clean-up only. When the pair still asks for
-changes after three rounds, stop at a decision point.
+After the third `recheck` that still says `changes`, stop at a decision
+point.
 
 ## Finalize and the gate
 
-1. Rebase onto the base. When you had to fix a conflict, the code changed:
-   go back to build.
-2. Write `handoff.md` (the `handoff` skill).
-3. Open a draft pull request whose body is `handoff.md`.
-4. Run the gate in your clone:
+Follow the `handoff` skill: rebase, write `handoff.md`, push and open a draft
+pull request whose body is `handoff.md`, then run the gate in your clone:
 
-   ```bash
-   python3 <bundle>/scripts/gate.py run <task folder>/gate.json --pr <N> --cwd <your clone> \
-     --task-dir <task folder> --before-ready
-   ```
+```bash
+python3 <bundle>/scripts/gate.py run <task folder>/gate.json --pr <N> --cwd <your clone> \
+  --task-dir <task folder> --before-ready
+```
 
-   Exit 0: mark the pull request ready. Exit 6: fix what it lists under
-   `blocked` and run it again. Do not edit the gate file; a check you think
-   is wrong goes in your report.
-5. Write the `stop` status line and report `ready`.
+Exit 0: `gh pr ready <N>`, end the finalize step with `done`, and report
+`ready`. Exit 6: fix what it lists under `blocked` and run it again. A check
+you think is wrong goes in your report.
 
 ## When the verification session finds something
 
-The foreman sends you the red team's and QA's findings and the step to go
-back to (usually build; verify when only the scenario script was wrong).
-Start that step with the next `--round`, fix what was found, and go through
-the steps after it again, up to finalize. The gate's verdicts must all be
-for your new head commit.
+The foreman sends you a file with the red team's and QA's findings, the step
+to go back to (build, or verify when only the scenario script was wrong) and
+the next `--round`. Start that step with that round. In build, each finding
+you fix is a new row in `plan.md` (the `work-breakdown` skill). Then go
+through the steps after it again, up to finalize. The gate's verdicts must
+all be for your new head commit.
 
 ## Stop points
 
 Stop only at these, and report:
 
 1. **Ready**: finalize passed the gate and the pull request is marked ready.
+   The finalize `end` line is the stop line.
 2. **A decision for the person**: a choice that changes what a user or
    caller sees, an interface, a schema or file format, or a core module, and
    that the task does not settle. Write the question with your recommended
@@ -108,14 +120,20 @@ Stop only at these, and report:
    it, and stop when nothing else is left.
 3. **Blocked**: something you cannot get or do, after trying once more.
 
+For a decision or blocked, write the stop line yourself:
+
+```bash
+python3 <bundle>/scripts/status.py note --stage <current stage> --step <current step> --event stop \
+  --done "<the REPORT line>" [--blocked "<what you need>"]
+```
+
 Never merge. Decide any other question inside the task's scope with the
 option you would recommend, and write it in `plan.md`'s Decisions in one line
 with its reason.
 
 ## Report
 
-At a stop point, write the `stop` status line with the report in `--done`,
-then end your turn with one line:
+At a stop point, after the stop line, end your turn with one line:
 
 ```
 REPORT: <ready | decision | blocked> — <one line: the pull request, the verdicts and rounds, or what you need>
@@ -138,7 +156,7 @@ under `--blocked` in the status file and go on with what does not need them.
 ## Clean-up
 
 Remove what your run made: build directories, containers and volumes of
-stacks it started, temporary directories, and each round's pair clones
-(`clone.py remove --project <repo> --task <task> --agent pair-<n>`). Keep your
-clone, the branch and the task folder; the foreman archives and removes them
-after the merge.
+stacks it started, temporary directories, and the pair's and the scenario's
+clones (`clone.py remove --project <repo> --task <task> --agent <pair-1 or
+scenario>`). Keep your clone, the branch and the task folder; the foreman
+archives and removes them after the merge.

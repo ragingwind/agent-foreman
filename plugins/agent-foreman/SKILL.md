@@ -31,8 +31,8 @@ reviews no diff.
 | --- | --- |
 | `scripts/config.py` | Settings: `check`, `show`, `paths`, `save`, `check-machine`, `machines`, `projects`, `profiles`, `tier`, `skills` |
 | `scripts/score.py` | A task's difficulty: `estimate` from an issue, `diff` from a change (only goes up) |
-| `scripts/loop.py` | Loops: `show` the stages and steps, `render` one task's loop (`--loop check` for the verification session, `--json` for `loop.json`) |
-| `scripts/gate.py` | Pass conditions as code: `template` writes a task's gate file, `run` checks it |
+| `scripts/loop.py` | Loops: `show` the stages and steps, `render` one task's loop (`--json` for `loop.json`), `prompt` a role agent's prompt and launch commands from `loop.json` |
+| `scripts/gate.py` | Pass conditions as code: `template` writes a task's gate file from its `loop.json`, `hash` its hash for the ledger, `run` checks it |
 | `scripts/bundle.py` | `push <machine>`: the project's bundle (skills, scripts, lead guide), put on a machine once |
 | `scripts/clone.py` | Agent clones: `make`, `check` (made by the foreman), `remove` (refuses to lose work), `archive` (the task folder to the foreman's project folder) |
 | `scripts/launch.py` | Starts one agent from a profile; run it from the bundle |
@@ -71,6 +71,8 @@ reviews no diff.
   model tier and who merges. **Tier**: low, mid or high, an ordered list of
   profiles. The pair takes the lead's tier, the red team and QA one above;
   none of them ever runs on the lead's profile (`config.py tier --role`).
+- **Round**: the build session's pass. 1 at first; each time the
+  verification session sends the task back, the next one.
 - **`H`**: `herdr` for `local`, `herdr --machine <label>` for any other.
   Pane and tab ids are per machine: always record the machine with them.
 - **Memory**: what only this project has, such as its merge method, tag
@@ -137,8 +139,10 @@ Mark the task **trivial** only for docs or text only, a typo, or a rename
 that changes no behavior: a trivial task skips the scenario steps.
 
 When the pull request exists, `score.py diff --cwd <lead's clone> --previous
-<difficulty>` measures the real change. When it rises, send the lead the new
-loop and gate.
+<difficulty>` measures the real change. When it rises, write `loop.json`,
+`gate.json` and the brief's loop again (Brief) with the new difficulty and the
+same `--lead`, keep the checks you added, record the new gate hash, and tell
+the lead to read the brief's loop again.
 
 ### Place
 
@@ -151,8 +155,11 @@ loop and gate.
 - **Batch**: `ops.batch` is the most tasks running at once; `null` means no
   limit.
 - **Profile**: `config.py tier --difficulty <d> --role lead` gives the tier's
-  profiles in order; use the first. On exit 5 from a prompt-mode run, or a
-  usage limit on screen, use the next (`--skip <profile>`).
+  profiles in order; use the first. On a usage limit on screen, use the next
+  (`--skip <profile>`). The lead's profile goes into `loop.json` (`--lead`),
+  so the agents that check its work never run on it: when the lead moves to
+  another profile, write `loop.json`, `gate.json` and the brief's loop again
+  (Brief) with the new `--lead`, and record the new gate hash.
 
 ### Brief
 
@@ -160,13 +167,19 @@ Write the task's files into its task folder on the lead's machine
 (`terminals/herdr.md` "Send the brief"):
 
 - `task.md` from "Register".
-- `gate.json`: `gate.py template --project <repo> --difficulty <d>
-  [--trivial]`. It holds the pair's verdict for the lead's finalize and the
-  red team's and QA's for the merge, each refusing the lead's profile. Add a
-  `command` check for what must pass that the gate does not know, and an
-  `allow` on `tests-weakened` only for what the task asks.
-- `loop.json`: `loop.py render ... --json` (same arguments as below).
-  `status.py note` checks the lead's stage lines against it.
+- `loop.json`: `loop.py render --project <repo> --task <task> --difficulty
+  <d> --machine <machine> --base <base> --lead <profile> [--trivial] --json`.
+  The task's whole loop, the lead's profile and each role's prompt and
+  profiles: `status.py note`, `loop.py prompt` and the gate read it, so the
+  task keeps the settings it started with.
+- `gate.json`: `gate.py template --loop <loop.json>`. It holds the steps the
+  lead must end, the pair's verdict for the lead's finalize and the red
+  team's and QA's for the merge, each refusing the lead's profile, and the
+  hash of `loop.json`. Add a `command` check for what must pass that the gate
+  does not know, and an `allow` on `tests-weakened` only for what the task
+  asks. Then `gate.py hash <gate.json>`: the hash goes in the ledger, and
+  every gate run of yours passes it with `--sha`. The lead can write in its
+  task folder; the hash is how a changed gate or loop file is caught.
 - `brief.md`, in this order:
   1. The removal rule: "Run commands from outside any directory you remove;
      a refused removal is reported, never retried or worked around."
@@ -175,8 +188,8 @@ Write the task's files into its task folder on the lead's machine
   3. `repo`, `task` and the task folder, as `clone.py` and `status.py` take
      them.
   4. "Follow `<bundle>/loop.md`." (absolute path)
-  5. The loop: `loop.py render --project <repo> --task <task> --difficulty
-     <d> --machine <machine> [--trivial]`, as printed.
+  5. The loop: `loop.py render` with the same arguments, without `--json`,
+     as printed.
   6. The gate: "In finalize, run `<bundle>/scripts/gate.py run <task
      folder>/gate.json --pr <N> --cwd <your clone> --task-dir <task folder>
      --before-ready`."
@@ -223,8 +236,8 @@ the machine to the person. Never ask for, read, print or store a token value.
 | Event | How it shows | What the foreman does |
 | --- | --- | --- |
 | started | the first wait after launch returns idle | Records the row, sends the brief |
-| stage | a new stage line in the status file | Updates the row's stage and step |
-| report | a wait returns idle and the last lines hold `REPORT:` | `ready`: the verification session. `decision`: add it to "Waiting on the person". `blocked`: fix what it needs or ask the person. A cut report is read from the transcript |
+| stage | a new stage line in the status file | Updates the row's stage and step; an `end` line also shows the outcome and the step it leads to |
+| report | `status.py read` shows the task `stopped`, or a wait returns idle and the last lines hold `REPORT:` | The stop line's `done` holds the report. `ready`: the verification session. `decision`: add it to "Waiting on the person". `blocked`: fix what it needs or ask the person. A cut report is read from the transcript |
 | question | the agent asks inside the task's scope | Answer with the recommended option; only a choice that changes behavior, an interface, a schema or a core module goes to the person |
 | blocked | a dialog on screen | A permission prompt goes to the person with the agent and the command; never answer it. A trust question: the adapter page. A question dialog is closed only when the person already answered it |
 | stalled | `status.py read` marks the task `stalled` | Read the screen; move it on when it waits for a yes the brief already gave; otherwise ask what blocks it |
@@ -256,26 +269,38 @@ the machine to the person. Never ask for, read, print or store a token value.
 
 On `REPORT: ready`, check the claim first: run the gate with `--before-ready`
 as the lead did (the command in "Merge gate", plus `--before-ready`). When it
-blocks, send the lead what it lists. When it passes:
+blocks, send the lead what it lists. When it passes, for each step of the
+check loop in `loop.json` (`redteam-review` by the red team, `test` by QA),
+both at once:
 
-1. `loop.py render --project <repo> --task <task> --difficulty <d> --machine
-   <machine> --loop check [--trivial]` gives the red team's and QA's
-   profiles (never the lead's) and their prompts.
-2. For each agent: a clone at the lead's head, `clone.py make --project
-   <repo> --task <task> --agent <role>-<n> --from <lead's clone> --ref <head
-   SHA> --fresh --no-push --machine <machine>`; its prompt, filled in, at
-   `<task folder>/reviews/<role>-<n>-r<round>.prompt.md`; then start it in
-   prompt mode from its clone (`terminals/prompt.md`, with `--role <role>`
-   and `--task-dir <task folder>`), both agents at once, in the background.
-3. Read each verdict, the last `Verdict:` line of its answer. Both pass: the
-   merge gate. Otherwise send the lead the findings and the step the check
-   loop names (`changes` or `fail` → build; only script mismatches → verify),
-   with the next round number. An environment mismatch, a test QA could not
-   run, or a failure that also fails on the base goes to the person instead;
-   when the person says to merge anyway, run the merge gate with `--skip
-   verdict` and log the person's words.
-4. After 3 rounds that still find something, stop and ask the person, with
-   the open findings.
+1. A clone at the lead's head: `clone.py make --project <repo> --task <task>
+   --agent <role>-1 --from <lead's clone> --ref <head SHA> --fresh --no-push
+   --machine <machine>`.
+2. In that clone (`remote.py <machine> --cwd <clone> --` for a remote):
+   `python3 <bundle>/scripts/loop.py prompt --step <step> --task-dir <task
+   folder>`. It writes the filled prompt into `reviews/` and prints the launch
+   commands, never on the lead's profile.
+3. `status.py note --file <task folder>/status.jsonl --stage <step> --event
+   start` on the task's machine, then run the first command in the clone in
+   the background (`terminals/prompt.md`). Exit 5: the next command.
+4. The summary's `verdict` is the outcome, except when QA's `fail` comes
+   only from `mismatch (script)` lines: then the outcome is `script`. Write
+   `status.py note --file <task folder>/status.jsonl --stage <step> --event
+   end --outcome <outcome>`; it prints the step the task goes to next.
+
+When both print `stop`: the merge gate. When one names a work step: copy the
+findings (the `must-fix`, `should-fix` and `mismatch` lines with their
+evidence) to `<task folder>/reviews/findings-r<round>.md` and send the lead
+one line: "Read <that file> and go back to <step> with --round <next round>."
+When the two name different steps, send the earlier one in the build
+session. After the lead is ready again, start only the roles whose verdict
+check the merge gate lists as blocked.
+
+These go to the person instead, with the answer's lines: no verdict, an
+`environment` mismatch, a `not run` test, or a failure that also fails on the
+base. When the person says to merge anyway, run the merge gate with `--skip
+verdict:<role>` for that role only and log the person's words. After 3 rounds
+that still find something, stop and ask the person, with the open findings.
 
 ### Merge gate
 
@@ -285,12 +310,14 @@ machine:
 ```bash
 python3 <skill>/scripts/remote.py <machine> --cwd <lead's clone> -- \
   python3 <bundle>/scripts/gate.py run <task folder>/gate.json --pr <N> --cwd <lead's clone> \
-  --task-dir <task folder>
+  --task-dir <task folder> --sha <the gate hash in the ledger>
 ```
 
 (`local`: run it there directly.) Exit 6 lists what blocks; send it to the
-lead. A clean rebase after approval keeps its verdicts when the change is the
-same: the gate compares patches with `--cwd`.
+lead. `gate-file` or `loop-file` blocked means the lead changed a file it must
+not: tell the person, and merge nothing. A clean rebase after approval keeps
+its verdicts when the change is the same: the gate compares patches with
+`--cwd`.
 
 ### Merge
 
@@ -316,6 +343,8 @@ person says to close them. Log it and remove the ledger row.
 
 ## Report to the person
 
+- Write every message to the person in `report.language`, not only the
+  reports. Its default is the language the person writes in.
 - Query live state (`status.py read`, `H agent list`, `gh pr view`) in the
   same turn before any status claim.
 - On every check, print one report per project in the settings'
@@ -341,9 +370,9 @@ settings and bundle they started with.
 
 The ledger is the project's whole operating state: a new foreman that reads
 only it can take over. It holds state and links, never decisions, specs,
-findings or briefs; those live in the task folder. Write it with
-the Edit tool in the same turn as every event; update the row, then add one
-event line; keep the last 30.
+findings or briefs; those live in the task folder. Write it with the Edit
+tool in the same turn as every event. Events go to the log (`log.py add`),
+not to the ledger.
 
 ```markdown
 # Ledger: <owner/repo>
@@ -358,12 +387,8 @@ event line; keep the last 30.
 
 ## Tasks
 
-| Task | Difficulty | PR | Machine | Tab | Pane | Profile | Model shown | Session | Clone | Task folder | Stage · step | Round | State | Waits on | Next action |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-
-## Event log
-
-- <YYYY-MM-DD HH:MM UTC> — <event>
+| Task | Difficulty | PR | Machine | Tab | Pane | Profile | Model shown | Session | Clone | Task folder | Gate hash | Stage · step | Round | State | Waits on | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 ```
 
 ## Rules

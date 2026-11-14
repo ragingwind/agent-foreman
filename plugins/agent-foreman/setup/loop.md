@@ -18,7 +18,7 @@ stage; tab labels, status lines and reports follow the stages.
 ## 1. Detect
 
 - `python3 <skill>/scripts/loop.py show [--project <repo>] --loop work` (and
-  `manage`, `epic`): each step with its stage, actor, skills and next step,
+  `check`): each step with its stage, actor, skills and next step,
   and what runs at low, mid and high.
 - Skill candidates:
   - the project's own skills on one of its machines, and where each current
@@ -66,7 +66,7 @@ Go into the chosen parts only.
 - **Steps**: a new step needs an `id`, its `stage`, an `actor` (`lead`,
   `foreman`, `person`, or a role), what it `does`, its `skills`, and `next`
   (each outcome to a step id or `stop`; the last outcome is the success
-  path). It goes after an existing step (`"after": "<id>"`). A step is
+  path, which must reach `stop`). It goes after an existing step (`"after": "<id>"`). A step is
   removed with `{"id": "<id>", "remove": true}`. The order of existing steps
   stays.
 - **Difficulty**: per step, `run` at low, mid and high (`always`, `never`,
@@ -74,9 +74,12 @@ Go into the chosen parts only.
   `extra` (an added instruction). A stage whose steps all do not run is
   skipped.
 - **Roles**: `mode` (`prompt` or `pane`), `step` (tiers above the lead's), and
-  the fixed prompt. A judging prompt must keep its `Verdict:` line: the gate
-  reads the last one in the answer that `launch.py --role` saves in the task
-  folder.
+  the fixed prompt. `loop.py prompt` fills in `<task>`, `<repo>`, `<base>`,
+  `<head>`, `<diff>`, `<task folder>`, `<skill>`, `<skills>`, `<full test
+  command>` and `<trivial>`; write no other `<...>` in a prompt. A judging
+  prompt must keep its `Verdict:` line, and each verdict word must be an
+  outcome of the role's steps: the gate reads the last one in the answer that
+  `launch.py --role` saves in the task folder.
 
 ## 4. Save
 

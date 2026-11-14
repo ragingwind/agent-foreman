@@ -619,11 +619,13 @@ def lead_profile(cfg, difficulty):
     return profiles[0] if profiles else None
 
 
-def role_candidates(cfg, difficulty, role, skip=()):
+def role_candidates(cfg, difficulty, role, skip=(), lead=None):
     """The profiles a role may run on, in order: its tier and then each higher
-    one, never a lower one, and never the lead's profile, so the agents that
-    check the work always run on another model than the one that built it."""
-    lead = lead_profile(cfg, difficulty)
+    one, never a lower one, and never the lead's profile (`lead`: the one the
+    lead really runs on; by default the first of the difficulty's tier), so
+    the agents that check the work always run on another model than the one
+    that built it."""
+    lead = lead or lead_profile(cfg, difficulty)
     top = TIERS.index(role_tier(difficulty, role, cfg))
     out = []
     for tier in TIERS[top:]:
@@ -704,6 +706,7 @@ def _cli(argv):
     ap.add_argument("--project", metavar="OWNER/REPO")
     ap.add_argument("--difficulty", choices=TIERS)
     ap.add_argument("--role", default="lead")
+    ap.add_argument("--lead", metavar="PROFILE", help="tier: the profile the task's lead runs on")
     ap.add_argument("--skip", default="", metavar="PROFILE,...")
     ap.add_argument("--task", default="<task>")
     ap.add_argument("--agent", default=adapters.DEFAULT, choices=adapters.KINDS)
@@ -780,7 +783,7 @@ def _cli(argv):
         tier = role_tier(args.difficulty, args.role, cfg)
         skip = [x for x in args.skip.split(",") if x]
         profiles = (tier_profiles(cfg, tier, skip) if args.role == "lead"
-                    else role_candidates(cfg, args.difficulty, args.role, skip))
+                    else role_candidates(cfg, args.difficulty, args.role, skip, lead=args.lead))
         print(json.dumps({"tier": tier, "profiles": profiles, "pick": profiles[0] if profiles else None}))
         if not profiles:
             return EXIT_SETUP_NEEDED

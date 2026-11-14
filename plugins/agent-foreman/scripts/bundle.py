@@ -132,7 +132,7 @@ def ssh(target, command):
 def push_remote(target, bundle_hash, files):
     """Put the bundle on a remote machine once. Returns (absolute path, status)."""
     h = shlex.quote(bundle_hash)
-    probe = (f"mkdir -p {REMOTE_CACHE}/bundles {REMOTE_CACHE}/briefs && cd {REMOTE_CACHE}/bundles && pwd && "
+    probe = (f"mkdir -p {REMOTE_CACHE}/bundles && cd {REMOTE_CACHE}/bundles && pwd && "
              f"if test -f {h}/bundle.json; then echo cached; else echo missing; fi")
     lines = ssh(target, probe).split()
     if len(lines) != 2:

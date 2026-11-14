@@ -3,23 +3,49 @@
 This is the design the code follows. Where the code and this page differ, the
 page is the target and the code is behind it.
 
+`tests/test_architecture.py` checks the pictures in sections 1 and 6 against
+`defaults.json` and `status.py`: change a loop or `status.py note` and its
+picture together.
+
 ## 1. Who does what
 
 | Agent | Role | Started by | Runs as |
 | --- | --- | --- | --- |
-| Foreman | The project's manager: registers issues, judges each task's difficulty, writes briefs and gate files, watches, evaluates and instructs, merges, cleans up, talks with the person | The person | The person's harness session (Claude Code) |
-| Lead | Owns one task: does the main work, starts and steers the task's sub-agents, runs the gate, reports | Foreman | The first pane of the task's tab |
-| Sub-agent | One role for one round: code reviewer, retracer, tester, scenario agent, helper, audit roles | Lead (helpers and audit leads: Foreman) | A new pane in the task's tab, or a prompt-mode run (`claude -p`) |
-| Person | Decisions that need approval, merges that need approval, blocked removals, permission prompts | — | — |
+| Foreman | The project's manager: registers tasks, judges each task's difficulty, writes each task's brief, `loop.json` and gate file, watches, runs the verification session, merges (low and mid difficulty), archives and cleans up, talks with the person | The person | The person's harness session (Claude Code) |
+| Lead | Owns one task: runs its build session in its own clone, starts its pair, runs the gate before it marks the pull request ready, reports | Foreman | The first pane of the task's tab |
+| Pair | Reviews the lead's diff (step `review`) and the fixes (step `recheck`) | Lead | A prompt-mode run (`launch.py --print --role pair`) in its own clone at the lead's head |
+| Red team | Tries to break the change (step `redteam-review`) | Foreman | A prompt-mode run in its own clone at the lead's head |
+| QA | Runs the full tests and the user scenario test (step `test`) | Foreman | A prompt-mode run in its own clone at the lead's head |
+| Helper, audit lead, scenario agent | The epic loop's roles | Foreman | A pane |
+| Person | Decisions that need approval, high-difficulty merges, blocked removals, permission prompts, findings no script can settle | — | — |
 
-The foreman manages leads, not sub-agents. A lead never needs the foreman to
-move a task from one stage to the next; the foreman steps in at stop points,
+```text
+ PERSON           FOREMAN                            LEAD                 ROLE AGENTS
+   │                │                                 │
+   │ task           │                                 │
+   ├───────────────▶│ register   task.md              │
+   │                │ brief      loop.json            │
+   │                │            gate.json + sha256   │
+   │                │ launch ────────────────────────▶│ work loop, round 1
+   │                │ watch, coordinate               │ review, recheck ─▶ PAIR
+   │                │◀────────────────── REPORT ready │
+   │                │ verify-session ─────────────────────────────────────▶ RED TEAM ∥ QA
+   │                │◀──────────────────────────────────────────── verdicts
+   │                │ sent back? ── findings-r<N>.md ▶│ round N+1
+   │                │ merge-gate  gate.py run --sha   │
+   │                │ merge                           │
+   │                │ cleanup    archive, remove      │
+   │◀─────── report │ ■ STOP                          │
+```
+
+The foreman manages leads, not the pair. A lead never needs the foreman to
+move a task from one step to the next; the foreman steps in at stop points,
 on a missed report, and on events the lead cannot handle.
 
 Every agent gets its own profile, so one task can mix gateways: a lead on a
-token-factory model and a reviewer on Anthropic opus are two processes with
+token-factory model and a red team on Anthropic opus are two processes with
 two environments (`launch.py` clears the gateway variables before it sets a
-profile's).
+profile's). The pair, the red team and QA never run on the lead's profile.
 
 ## 2. Layers
 
@@ -29,8 +55,8 @@ foreman (loop control)
 terminal layer: herdr | prompt mode   (later: tmux, ghostty)
 --------------------------------------------------------------
 tab = one task's session          ||  tab 2  ||  ...
-pane 1: lead | pane 2: reviewer   ||  ...    ||
-prompt runs: retracer, tester     ||         ||
+pane 1: lead                      ||  ...    ||
+prompt runs: pair, red team, QA   ||         ||
 --------------------------------------------------------------
 agent adapter: claude             (later: other kinds)
 ```
@@ -41,10 +67,10 @@ are first-class; tmux and ghostty come later behind the same interface.
 | Operation | herdr | Prompt mode |
 | --- | --- | --- |
 | machines | saved herdr machines (SSH targets) | SSH targets |
-| open a session | tab in the project's workspace | a run directory |
-| start an agent | `pane run` of `launch.py` | `launch.py --print`, on another machine through `remote.py` (its login shell), output to a JSON file |
+| open a session | tab in the project's workspace | the agent's own clone; its prompt and answer go in the task folder's `reviews/` |
+| start an agent | `pane run` of `launch.py` | a `launch.py --print --role` command that `loop.py prompt` prints, on another machine through `remote.py` (its login shell) |
 | send | `agent prompt`, `send-text`, `send-keys` | not possible: one prompt per run |
-| read | `pane read`, transcript | the JSON result, transcript |
+| read | `pane read`, transcript | the JSON result in `reviews/`, transcript |
 | wait | `agent wait` | the process exits |
 | close | exit, `tab close` | nothing to close |
 
@@ -67,13 +93,22 @@ standard values.
 
 - **Tiers.** `high`, `mid`, `low` (상·중·하). Each tier is an ordered list of
   profiles.
-- **Standard tiers** are the harness's own models: for Claude Code, high =
-  `opus`, mid = `sonnet`, low = `haiku`. `fable` is never in a standard tier.
+- **Standard tiers** are the harness's own models: for Claude Code, low =
+  `haiku`, mid = `sonnet`, high = `opus` then `sonnet`. `fable` is never in a
+  standard tier.
 - **Other models** (`fable`, token-factory models, any other gateway) enter a
   tier only when the person puts them there in setup (models).
-- **Picking.** The task's difficulty gives the lead's tier. Reviewers and the
-  retracer take one tier higher, capped at high. Within a tier, the first
-  profile is used; on a usage limit or a gateway error the next one is.
+- **The lead.** The task's difficulty gives the lead's tier; the lead runs on
+  its first profile, and on a usage limit on the next one.
+- **A role** takes the difficulty's tier raised by the role's `step` in the
+  settings, capped at high: standard, the pair 0, the red team and QA 1. It
+  may run on that tier's profiles and then each higher tier's, never a lower
+  tier's, and never on the profile the lead runs on, which `loop.json`
+  records (`loop.py render --lead`). `loop.py prompt` prints the launch
+  commands in that order; on exit 5 (a usage limit, a gateway error) the
+  next one runs.
+- `config.py check` reports a difficulty whose lead has no profile, or whose
+  role has no profile but the lead's.
 - **No settings** means the standard tiers above: the harness's own models.
 
 ## 5. Difficulty
@@ -109,66 +144,173 @@ task's level and outcome (reverts, follow-up fixes) to tune them.
 
 ## 6. Loops
 
-A loop is a list of steps grouped into stages. Each step has an actor, the
-skills and tools it uses, and where each outcome goes; the rules per
-difficulty (run, count, extra) are on the steps. A stage is a run of steps;
-tab labels, status lines and reports follow the stages. Setup (loop) designs
-both and maps the tools; each project can change them.
+A loop is a list of steps. Each step has an actor, what it does, the skills
+it uses, and `next`: where each outcome goes, a step id or `stop`. The last
+outcome in `next` is the success path; `config.py check` reports a loop whose
+success path does not reach `stop` from the work loop's first step and from
+each check step. The rules per difficulty (`run`, `count`, `extra`) are on
+the steps. A stage is a run of steps with the same `stage`; tab labels,
+status lines and reports follow the stages. Setup (loop) designs the loops;
+each project can change them.
 
-**Work loop: one issue, one pull request** (standard)
+**The task's loop.** With the brief, the foreman writes the task's loop into
+its task folder as `loop.json` (`loop.py render --json`): the work and check
+steps that run for this task, its base, the lead's profile, and each role's
+prompt and profiles. `status.py note`, `loop.py prompt` and the gate read
+it, so a task keeps the settings it started with; the gate file holds its
+hash.
 
-| Stage | # | Step | Actor | Does | Next |
-| --- | --- | --- | --- | --- | --- |
-| `plan` | 1 | `start` | Lead | Labels, branch, handoff comment with the completion criteria restated; unless the change is trivial, the scenario drafted as the target | 2 |
-| `build` | 2 | `implement` | Lead | The failing check first, then the change; in a fix round, the findings | 3 |
-| | 3 | `test` | Lead | New tests fail without the change and pass with it; related tests | 4 |
-| | 4 | `refactor` | Lead | Restructure this round's diff without changing behavior | 5 |
-| `verify` | 5 | `regression` | Lead | Rebase onto the current base (preparation), then the full suite on the result | 6 |
-| | 6 | `scenario` | Lead | The manual scenario end to end through the surface the change reaches (API, CLI, UI, job), with raw output and screens for a UI; every change that is not trivial | 7 |
-| `review` | 7 | `pull-request` | Lead | Draft pull request: purpose, decisions with the alternatives ruled out, tests | 8 |
-| | 8 | `code-review` | Code reviewer | Verdict on the diff, the test changes first, the rules, CI, the scenario or its skip reason | changes → 2 (build), approved → 9 |
-| | 9 | `scenario-retrace` | Retracer | Without the diff: the issue's criteria against the scenario, then the scenario in a fresh clone | code → 2 (build), scenario → 6 (verify), pass → 10 |
-| `handoff` | 10 | `ready` | Lead | Run the gate, `gh pr ready`, handoff comment, report | stop |
+### Work loop: the build session (lead)
 
-A stage whose steps all do not run for a task is skipped. The management and
-epic loops have no stages: each of their steps is its own.
+```mermaid
+flowchart TD
+  %% loop: work
+  plan["plan<br/>lead"]
+  build["build<br/>lead"]
+  verify["verify<br/>lead"]
+  review["review<br/>pair"]
+  simplify["simplify<br/>lead"]
+  fix["fix<br/>lead"]
+  recheck["recheck<br/>pair"]
+  finalize["finalize<br/>lead"]
+  stop(["stop: ready"])
+  plan -->|done| build
+  build -->|done| verify
+  verify -->|fail| build
+  verify -->|done| review
+  review -->|done| simplify
+  simplify -->|done| fix
+  fix -->|large| build
+  fix -->|done| recheck
+  recheck -->|changes| fix
+  recheck -->|approved| finalize
+  finalize -->|conflict| build
+  finalize -->|done| stop
+  class review,simplify,fix,recheck trivial
+  classDef trivial stroke-dasharray: 5 5
+```
 
-A **scenario** drives the change end to end through whatever surface it
-reaches, as a user or caller would: an API, a CLI, a UI, a job. Only a
-trivial change skips it (docs or text only, a typo, a rename that changes no
-behavior), with a one-line reason under `## Tests`; the foreman marks a task
-trivial in its brief.
+- The stages are plan, build, verify, review (review, simplify, fix,
+  recheck) and finalize.
+- The pair's `review` always ends with `done`: its findings go to simplify
+  and fix. In `recheck` the pair's verdict is the outcome. The lead starts
+  the pair: a clone at its head (`clone.py make --no-push`), then `loop.py
+  prompt --step <step>` there, which writes the filled prompt into `reviews/`
+  and prints the launch commands.
+- finalize: rebase, `handoff.md`, a draft pull request whose body is
+  `handoff.md`, `gate.py run --before-ready`, then `gh pr ready`.
+- A **trivial** task (docs or text only, a typo, a rename that changes no
+  behavior; the foreman marks it in the brief) skips the dashed steps: its
+  loop is plan → build → verify → finalize, with no scenario and no pair.
+- A **round** is one pass of the build session: 1 at first; the foreman gives
+  the next number when the verification session sends the task back
+  (`status.py note --round`).
 
-Verdict comments have fixed titles with the SHA they judged:
-`## Code review of #<PR> at <sha>` and `## Scenario retrace of #<PR> at <sha>`.
+A **scenario** (`scenario.md`) drives the change end to end through whatever
+surface it reaches, as a user or caller would: an API, a CLI, a UI, a job.
+The lead writes it in plan and runs it in verify in a fresh clone; QA runs it
+again without reading the diff.
 
-**Variants by difficulty** (standard; setup changes them)
+### Check loop: the verification session (foreman)
 
-| Difficulty | Lead tier | Review | Scenario and retrace | Extra | Merge |
-| --- | --- | --- | --- | --- | --- |
-| low | low | one reviewer | scenario unless trivial; no retrace | — | foreman |
-| mid | mid | one reviewer | both unless trivial | — | foreman |
-| high | high | two reviewers on different models | both unless trivial | main-only checks at the `regression` step when the change reaches them | the person |
+```mermaid
+flowchart TD
+  %% loop: check
+  ready(["lead: REPORT ready"])
+  redteam_review["redteam-review<br/>redteam"]
+  test["test<br/>qa"]
+  build["build<br/>work loop, next round"]
+  verify["verify<br/>work loop, next round"]
+  stop_redteam(["stop"])
+  stop_qa(["stop"])
+  ready --> redteam_review
+  ready --> test
+  redteam_review -->|approved| stop_redteam
+  redteam_review -->|changes| build
+  test -->|fail| build
+  test -->|script| verify
+  test -->|pass| stop_qa
+```
 
-- Reviewers on different models: the second takes the next profile of the
-  tier, or of a lower tier, so their blind spots differ (Addy Osmani, "Agentic
-  Code Review": of 617 flagged locations, 93.4% were caught by exactly one of
-  four tools).
-- Reviewers and retracers start without edit tools (`--disallow
-  Edit,Write,NotebookEdit`). That narrows them; it is not a sandbox. Their own
+- On `REPORT: ready` the foreman runs the gate with `--before-ready` on the
+  lead's claim, then starts both steps at once, each in its own clone at the
+  lead's head, through `loop.py prompt` (models other than the lead's).
+- The answer's verdict is the outcome, except when QA's `fail` comes only
+  from `mismatch (script)` lines: then it is `script`.
+- When both steps end in `stop`: the merge gate. When one names a work step:
+  the foreman copies the findings to `reviews/findings-r<round>.md` and sends
+  the lead back to that step with the next round (two different steps: the
+  earlier one). After the lead is ready again, only the roles whose verdict
+  check still blocks run again.
+- To the person instead: no verdict, an `environment` mismatch, a `not run`
+  test, a failure that also fails on the base, or 3 rounds that still find
+  something. When the person says to merge anyway, the merge gate runs with
+  `--skip verdict:<role>` for that role only.
+
+**Variants by difficulty** (standard; setup changes them). Every difficulty
+runs the same steps; only a trivial task skips the pair's steps.
+
+| Difficulty | Lead | Pair | Red team, QA | Merge |
+| --- | --- | --- | --- | --- |
+| low | low tier | low tier and up | mid tier and up | foreman |
+| mid | mid tier | mid tier and up | high tier | foreman |
+| high | high tier | high tier | high tier | the person |
+
+None of them runs on the lead's profile (section 4).
+
+- Role agents start without edit tools (the role's `deny_tools`: `Edit`,
+  `Write`, `NotebookEdit`). That narrows them; it is not a sandbox. Their own
   clone, whose push to origin fails (`clone.py make --no-push`), and the
-  gate's check that each verdict is at the head SHA, keep their writes from
+  gate's check that each verdict is at the head commit keep their writes from
   reaching the pull request. A role agent never starts other agents.
-- How many rounds a loop may take is the foreman's call, from the round
-  count in the status file.
 
-**Management loop** (foreman): register issues at the smallest unit → brief
-(the removal rule first) → start → watch → coordinate (same-file tasks in
-sequence; relay the person's words as said) → merge gate → merge (high
-difficulty: the person) → clean up → project steps from memory (tag, docs).
-A review finding that recurs goes into the project's memory, with a proposed
-rule, test or hook. Each report sorts the open pull requests for the person:
-safe to merge, needs a real review, hold, close.
+### How a step moves
+
+```text
+ the agent                              status.py note                 status.jsonl
+ --event start --step S ──────────────▶ append ──────────────────────▶ S start, round N
+ --event end --step S --outcome X ────▶ X is one of S's next keys?
+                                        ├─ no  ─▶ exit 2, nothing written
+                                        └─ yes ─▶ append ────────────▶ S end, X, to Y
+                                                  prints "next: Y"
+                                                  (Y = stop: a stop point)
+ starts Y ◀──────────────────────────── loop.md: follow the printed next step
+```
+
+- A script holds the outcome: an `end` line must name one of the step's
+  `next` keys, and it records where the outcome leads (`to`). Going there is
+  the agent's part, which `loop.md` asks.
+- The gate's `steps` check needs an `end` line for every work step before
+  finalize, from any round, so a step skipped in a later round passes it.
+  The verdict checks still need answers at the head commit.
+
+### Where it stops
+
+| Stop | Who | When | Held by |
+| --- | --- | --- | --- |
+| Ready | Lead | finalize passed `gate.py run --before-ready`, the pull request is marked ready, and finalize ends with `done` | A script: `status.py note` prints `next: stop` and `status.py read` counts the task stopped. The foreman runs the gate on the claim before the verification session |
+| A decision for the person | Lead | A choice the task does not settle that changes what a user or caller sees, an interface, a schema or file format, or a core module | A prompt (`loop.md`); the lead writes the stop line with `status.py note --event stop` |
+| Blocked | Lead | Something it cannot get or do, after trying once more | A prompt; the stop line with `--blocked` |
+| The third recheck still says `changes` | Lead | fix and recheck repeat | A prompt only (`loop.md`); no script counts rechecks |
+| Ask the person | Foreman | No verdict, an `environment` mismatch, a `not run` test, a failure that also fails on the base, 3 rounds that still find something | A prompt (`SKILL.md`). Merging anyway takes `gate.py run --skip verdict:<role>`; the gate refuses a bare `verdict` |
+| Merge blocked | Foreman | The merge gate exits 6 | A script (`gate.py`). A `gate-file` or `loop-file` block: tell the person and merge nothing |
+| High difficulty | Person | The merge gate passed | A prompt (`SKILL.md`) |
+| Done | Foreman | cleanup ended | — |
+
+A script holds that every loop can reach `stop` (`config.py check`). Only
+prompts hold that a cycle ends: fix and recheck, and the rounds of the
+verification session.
+
+### Management and epic loops
+
+**Management loop** (foreman; the picture in section 1): register (task.md)
+→ brief (`loop.json`, `gate.json` and its hash, `brief.md`) → launch → watch
+→ coordinate (same-file tasks in sequence; relay the person's words as said)
+→ verify-session → merge-gate → merge (high difficulty: the person) →
+cleanup (archive, then remove) → the project's steps from memory (tag,
+docs). A review finding that recurs goes into the project's memory, with a
+proposed rule, test or hook. Each report sorts the open pull requests for
+the person: safe to merge, needs a real review, hold, close.
 
 **Epic batch loop** (optional, for projects that use epics): sync the epic
 onto main, then tell every branch cut from the epic to rebase → persona audit
@@ -177,73 +319,104 @@ the person approves.
 
 ## 7. Skills
 
-A step names its skills. For each, the lead's machine is checked:
+A step names its skills (`loop.py show`).
 
-1. A project skill (`<clone>/.claude/skills/<name>`) is used first.
-2. Otherwise a user skill from the person's machine. When the agent's machine
-   lacks it, the foreman warns and offers to install it with the bundle
-   (cached by content hash on that machine).
+1. A **default skill** (`kit/skills/<name>`, one per loop action) ships in
+   every bundle as `foreman-kit:<name>`. The settings' `skills` map may
+   replace one with a project or local skill; the replacement changes how the
+   action is done, never the flow or the record.
+2. Any other skill, and a replacement, is looked up for the lead's machine:
+   a project skill (`<checkout>/.claude/skills/<name>`) first, otherwise a
+   user skill from the person's machine, which goes into the bundle (cached
+   by content hash on that machine). `loop.py skills --project <repo>
+   --machine <machine>` prints where each comes from; a missing one is named
+   to the person with its fix (setup, loop).
 
 ## 8. Gates
 
 Pass conditions are code, not prose (`scripts/gate.py`).
 
-- **Checks**, each reading git and GitHub: `pr-open`, `sections` (`## Purpose`,
-  `## Decisions`, `## Tests`), `ci` (every check finished and passed),
-  `base-fresh` (the head contains the base's head), `verdict` (enough comments
-  under a role's fixed title at the head SHA, or at an earlier SHA whose
-  change is the same after a clean rebase, by `git patch-id`), `scenario` (the
-  `## Manual scenario` comment with raw output, or a skip reason under
-  `## Tests` for a trivial change), `tests-weakened` (a removed test file, an
-  added skip or focus marker, an edited CI file, a changed coverage
-  threshold), `size`, `ready`, and `command` (a command that must pass, such as
-  a main-only check). A check can be a warning instead of a block.
-- `gate.py template` writes a task's gate file from its loop: one verdict
-  check per judging step that runs, with that step's count. The foreman
-  adds commands or allowances (`tests-weakened` may allow what the issue asks
-  for) and puts the file in the brief.
-- The lead runs `gate.py run <file> --cwd <clone> --before-ready` before it
-  marks the pull request ready, and posts the result. The foreman runs the
-  same gate, `ready` included, before it merges. Exit 6 lists what blocks.
+- **Checks**, each reading the task folder, git or GitHub:
+  - `pr-open`: the pull request exists and is open.
+  - `loop-file`: `loop.json` still has the hash the template wrote.
+  - `steps`: `status.jsonl` has an `end` line for each work step before
+    finalize.
+  - `docs`: every row of `plan.md`'s work breakdown is done, `handoff.md` has
+    its sections, and `scenario.md`'s closing verdict is pass with every
+    Agent block filled (not for a trivial task).
+  - `ci`: every status check finished and passed.
+  - `base-fresh`: the head contains the base branch's head.
+  - `verdict`: enough agents of a role whose latest answer in `reviews/`
+    (`launch.py --role`) ran to the end with a `Verdict:` the role accepts,
+    at the head commit (with `--cwd`, also at an earlier commit whose change
+    is the same, by `git patch-id`), on a profile other than the lead's.
+  - `tests-weakened`: no removed test file, added skip or focus marker,
+    edited CI file or changed coverage threshold, except what `allow` names.
+  - `size`, `ready`, and `command` (a command that must pass in the clone).
+  - A check can be a warning instead of a block.
+- `gate.py template --loop <loop.json>` writes a task's gate file: `pr-open`,
+  `loop-file`, `steps`, `docs`, `ci`, `base-fresh`, a verdict check per role
+  (the pair's before ready and at merge, the red team's and QA's at merge),
+  the full test command when the project has one, `tests-weakened`, `size`
+  (a warning) and `ready`. The foreman adds commands, or an `allow` for what
+  the task asks.
+- The foreman records `gate.py hash <gate.json>` in the ledger and passes it
+  to every gate run of its own with `--sha`; a changed gate file blocks as
+  `gate-file`.
+- The lead runs `gate.py run --before-ready` in finalize before it marks the
+  pull request ready; that skips `ready` and every check marked `at: merge`.
+  The foreman runs the same on the lead's report, and every check before it
+  merges. Exit 6 lists what blocks.
+- Known limit: the lead can write in its own task folder, so no script stops
+  it from writing a fake answer file into `reviews/`.
 
 ## 9. Reporting
 
-- **Status file**, on the agent's machine:
-  `~/.cache/agent-foreman/runs/<project>/<task>/status.jsonl`
-  (`status.py path`). `launch.py --status` hands it to an agent as
-  `AF_STATUS_FILE`; without `--status` the variable is cleared, so an agent
-  never writes into its starter's file.
+- **Status file**: `status.jsonl` in the task folder, on the task's machine
+  (`status.py path`). `launch.py --task-dir` hands the folder to an agent as
+  `AF_TASK_DIR` and the file as `AF_STATUS_FILE`; without `--task-dir` or
+  `--status` both are cleared, so an agent never writes into its starter's
+  file.
   - The bundle's hooks (claude: `PostToolUse` and `Stop`) run
     `heartbeat.py`: a `heartbeat` line at most once a minute while tools run,
-    and a `turn-end` line at every turn's end (time, agent, tool). The lead
-    starts its role agents with its own status file, so a long review shows
-    as heartbeats too. Checked 2026-11-13: plugin hooks fire in `claude -p`,
+    and a `turn-end` line at every turn's end (time, agent, tool). Role agents
+    start with the task folder too, so a long review shows as heartbeats.
+    Checked 2026-11-13: plugin hooks fire in `claude -p`,
     `${CLAUDE_PLUGIN_ROOT}` resolves, and the variable reaches the hook.
-  - The lead appends a stage line (`status.py note`) at the start and end of
-    every stage, at least every `ops.report_minutes` (15) during a long
-    one, and a `stop` line at a stop point: what was done, what is next,
-    what blocks it, each sub-agent run with its verdict and cost.
+  - The lead writes a `start` line and an `end` line with its outcome for
+    every step (`status.py note`, section 6), `progress` lines during a long
+    one, and a `stop` line at a decision or when blocked. The foreman writes
+    the verification session's lines with `--file`.
 - **The foreman** runs `status.py read` on every check (one SSH call per
-  machine). No line for `ops.stall_minutes` (30) is a stall, unless the last
-  stage line is a `stop`.
+  machine). No line for `ops.stall_minutes` (30) is a stall, unless the task
+  is stopped: its last stage line is a `stop` line or an `end` line that
+  leads to `stop`.
 - **`REPORT:`** at the end of a turn only at stop points: ready, a decision
   for the person, blocked.
-- **Prompt-mode runs** leave their JSON result (`result`, `session_id`,
-  `total_cost_usd`, `permission_denials`) in the task's run directory.
+- **Prompt-mode runs** of a role leave three files in `reviews/`:
+  `<agent>-<n>.prompt.md` (from `loop.py prompt`), `<agent>-<n>.json` (the
+  JSON result: `result`, `session_id`, `total_cost_usd`,
+  `permission_denials`) and `<agent>-<n>.meta.json` (role, agent, profile,
+  model, the commit it ran at, verdict, start and end).
 
 ## 10. Isolation and trust
 
 - Every agent that touches files works in its own clone (`clone.py make`):
   `~/.cache/agent-foreman/work/<project>/<task>/<agent>`. It starts inside
   that clone, never in a shared checkout, so `launch.worktree` is off.
-  - The lead's clone comes from the project's checkout on that machine, a
-    role agent's from the lead's clone. Either way `origin` is then set to
-    the source's GitHub URL and fetched: without it `gh` fails ("none of the
-    git remotes … point to a known GitHub host", checked 2026-11-13).
+  - The lead's clone comes from the project's checkout on that machine. The
+    pair's, the red team's, QA's and the lead's scenario clone come from the
+    lead's clone at its head, with `--fresh --no-push`. Either way `origin`
+    is then set to the source's GitHub URL and fetched: without it `gh` fails
+    ("none of the git remotes … point to a known GitHub host", checked
+    2026-11-13).
   - A clone starts detached at the task's base or the head SHA, with no
     local branch, and holds a marker in `.git` that the foreman made it.
   - A judging agent's clone gets `--no-push`: origin's push URL points
     nowhere, so `gh` still works and `git push` to origin fails.
+- `launch.py --role` runs only with `--task-dir`, `--name`, an `--out` inside
+  the task folder's `reviews/`, and a git checkout to run in; the commit
+  checked out goes into the meta file the gate reads.
 - A new clone is an untrusted folder, and a trusted parent does not count
   (checked 2026-11-13: `/` was trusted, a folder under it still asked).
   - Prompt mode needs no trust step and still loads the clone's project
@@ -253,19 +426,40 @@ Pass conditions are code, not prose (`scripts/gate.py`).
     clone the foreman made, the foreman (or the lead, for its own panes)
     answers Yes with herdr keys: `Down`, `Enter`. Any other folder's trust
     question goes to the person. (The person allowed this on 2026-11-13.)
-- Cleanup (`clone.py remove`) removes the task's clones and run directory.
+- Cleanup (`clone.py remove`) removes the task's clones and task folder.
   It refuses a folder without the marker, one holding the caller's working
-  directory, and, unless forced, a clone with changes to tracked files or
-  commits that are on no remote.
+  directory, and, unless forced, a clone with changes to tracked files or,
+  for a clone that can push, commits that are on no remote.
 
 ## 11. Records
 
+- **Task folder**, on the task's machine:
+  `~/.local/state/agent-foreman/tasks/<owner>-<repo>/<task>/` (`status.py
+  dir`). Every record of the task is there; nothing goes in issue or pull
+  request comments except the pull request body.
+
+  | File | Written by | Holds |
+  | --- | --- | --- |
+  | `task.md` | foreman | The goal, the done-when, what is out of scope |
+  | `brief.md` | foreman | What the lead reads first |
+  | `loop.json` | foreman | The task's loop (section 6) |
+  | `gate.json` | foreman | The task's gate (section 8) |
+  | `plan.md` | lead | The work breakdown, the decisions, the checks |
+  | `scenario.md` | lead | The user scenario: steps, Agent blocks, a closing verdict |
+  | `handoff.md` | lead | The pull request body |
+  | `status.jsonl` | lead, foreman, hooks | Section 9 |
+  | `reviews/` | `launch.py`, foreman | Each role run's prompt, answer and meta; the foreman's `findings-r<round>.md` |
+
+- After the merge, `clone.py archive` copies the task folder to the
+  foreman's project folder (`projects/<owner>-<repo>/tasks/<task>`) and checks
+  that every file arrived; `clone.py remove` then removes it with the clones.
 - **Log**: `~/.local/state/agent-foreman/projects/<owner>-<repo>/log.jsonl`,
   append only (`log.py add`, `log.py tail`): every event, instruction sent,
   report received, decision of the person, sub-agent run, difficulty and
   outcome. No secret values.
-- **Ledger**: `ledger.md` in the same folder, the summary a new foreman reads
-  to take over.
+- **Ledger**: `ledger.md` in the same folder: state and links only, one row
+  per task with its gate hash. A new foreman reads it to take over;
+  decisions, findings and briefs live in the task folder.
 
 ## 12. Layout
 
@@ -278,5 +472,6 @@ into `~/.claude/skills/agent-foreman` as a user skill.
 | `SKILL.md` | The foreman, and the entry to setup |
 | `setup/` | Setup: `setup.md` picks the parts; `project.md`, `models.md`, `loop.md`, `other.md` |
 | `loop.md` | The lead's guide to its loop; every bundle carries it |
+| `kit/skills/` | The default skills, one per loop action; every bundle carries them as `foreman-kit:<name>` |
 | `scripts/`, `terminals/`, `adapters/`, `defaults.json` | The scripts, the terminal layer, the agent kinds, the standard settings |
 | `agents/agent-foreman.md` | `claude --agent agent-foreman`; only with the plugin installed |

@@ -4,8 +4,8 @@ description: >-
   Show that the built product is alive: build it, start it the way the project
   documents, make one real call that uses the change, check the answer, and
   stop it. Records each command and its raw output in plan.md. Use in the
-  build session's verify stage (action V2), after the tests near the change
-  pass and before the scenario script runs.
+  build session's verify step, after the tests near the change pass and
+  before the scenario script runs.
 ---
 
 # Smoke
@@ -24,17 +24,16 @@ description: >-
 
 ## Flow
 
-- V2, verify stage, lead: after V1 passes.
-- Pass → V3, run the scenario script.
-- Fail → back to build, with the fix as a new row in plan.md. Then verify runs again from V1.
-- A failure outside the product, such as a port in use or a missing tool: try once more. If it still fails, stop and report it for the person.
+- Step `verify`: after `unit` passes. Pass → `cross-check` runs the scenario script; a trivial task has none, so the verify step ends with outcome `done`.
+- Fail → the verify step ends with outcome `fail` (back to build, with the fix as a new row in plan.md); verify then runs again from the start.
+- A failure outside the product, such as a port in use or a missing tool: try once more. If it still fails, stop as blocked.
 
 ## Record
 
 Add one entry under `## Checks` in `$AF_TASK_DIR/plan.md` (the task folder) for each command, in exactly this shape:
 
 ````markdown
-### V2 smoke: <what must appear>
+### Smoke: <what must appear>
 ```
 <command>
 ```
@@ -43,9 +42,9 @@ Add one entry under `## Checks` in `$AF_TASK_DIR/plan.md` (the task folder) for 
 ```
 ````
 
-- The name says what must appear, for example `V2 smoke: GET /health answers 200 "ok"`.
+- The name says what must appear, for example `Smoke: GET /health answers 200 "ok"`.
 - Paste the output as it came, with secrets masked. Keep the ready line and the answer.
-- When verify runs again, replace the old V2 entries with the new ones.
+- When verify runs again, replace the old smoke entries with the new ones.
 
 ## Rules
 

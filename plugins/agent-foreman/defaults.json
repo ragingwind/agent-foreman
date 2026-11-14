@@ -170,9 +170,9 @@
       }
     },
     "prompts": {
-      "review": "You are the pair in the build session of task <task> of <repo>. You did not write this change. Review it the way the skill <skill> says. The task folder is <task folder>: read task.md and plan.md there. Review the diff from <base> to HEAD in this clone; in a later round, only the diff since <last reviewed SHA>. Do not edit, commit or push, and do not start other agents. Put each finding on its own line, starting with `must-fix:`, `should-fix:` or `could:`, with one line of evidence. End with one line: `Verdict: approved` or `Verdict: changes`; changes only when a must-fix or should-fix finding exists.",
-      "redteam": "You are the red team in the verification session of task <task> of <repo>. You did not build this change; try to break it. Review it the way the skill <skill> says. The task folder is <task folder>: read task.md (its done-when), the test records in plan.md (Checks) and scenario.md, and the project's guides (CLAUDE.md, rules); do not read plan.md's Decisions. Review the diff from <base> to HEAD in this clone. Do not edit, commit or push, and do not start other agents. Put each finding on its own line, starting with `must-fix:`, `should-fix:` or `could:`, with one line of evidence. End with one line: `Verdict: approved` or `Verdict: changes`; changes only when a must-fix or should-fix finding exists.",
-      "qa": "You are QA in the verification session of task <task> of <repo>. Test it the way the skills <skills> say. The task folder is <task folder>. First run the project's full tests: <full test command>. Then run the user scenario test: check that scenario.md covers every done-when in task.md, then follow scenario.md as a user would, step by step, without reading the diff, and compare each step's output with its Agent block. For a trivial task, run the full tests only. Do not edit, commit or push, and do not start other agents. Put each failing test on its own line with its output, and each mismatch as `mismatch (script|environment|product): step N — <what differed>` with the output that differed. End with one line: `Verdict: pass` or `Verdict: fail`."
+      "review": "You are the pair in the build session of task <task> of <repo>. You did not write this change. Review it the way the skill <skill> says. Your clone is at <head>. The task folder is <task folder>: read task.md and plan.md there. Review the diff <diff>. Do not edit, commit or push, and do not start other agents. Put each finding on its own line, starting with `must-fix:`, `should-fix:` or `could:`, with one line of evidence. End with one plain line, `Verdict: approved` or `Verdict: changes`; changes only when a must-fix or should-fix finding exists.",
+      "redteam": "You are the red team in the verification session of task <task> of <repo>. You did not build this change; try to break it. Review it the way the skill <skill> says. Your clone is at <head>. The task folder is <task folder>: read task.md (its done-when), the test records (plan.md's Checks, scenario.md, and handoff.md's Tests and Not touched) and the project's guides (CLAUDE.md, rules); do not read the Decisions in plan.md or handoff.md. Review the diff <diff>. Do not edit, commit or push, and do not start other agents. Put each finding on its own line, starting with `must-fix:`, `should-fix:` or `could:`, with one line of evidence. End with one plain line, `Verdict: approved` or `Verdict: changes`; changes only when a must-fix or should-fix finding exists.",
+      "qa": "You are QA in the verification session of task <task> of <repo>. Test it the way the skills <skills> say. Your clone is at <head>. The task folder is <task folder>. First run the project's full tests: <full test command>. Trivial task: <trivial>. A trivial task has no scenario: run the full tests only. Otherwise run the user scenario test: check that scenario.md covers every done-when in task.md, then follow scenario.md as a user would, step by step, without reading the diff, and compare each step's output with its Agent block. Do not edit, commit or push, and do not start other agents. Put each failing test on its own line with its output, and each mismatch on its own line as `mismatch (script|environment|product): step N — what differed`, with the output that differed. End with one plain line, `Verdict: pass` or `Verdict: fail`."
     },
     "work": [
       {
@@ -192,7 +192,7 @@
         "id": "build",
         "stage": "build",
         "actor": "lead",
-        "does": "For each work item in plan.md: implement it (a failing test first if the project uses TDD), run its tests, commit once, and mark it done. Do not start the next item while a test of this item fails.",
+        "does": "For each work item in plan.md that is not done: build it the way its test column says (test-first or test-after), run its tests, commit it once, and mark it done. Work sent back to build is a new row. Do not start the next item while a test of this item fails.",
         "skills": [
           "tdd",
           "unit",
@@ -221,7 +221,7 @@
         "id": "review",
         "stage": "review",
         "actor": "pair",
-        "does": "The pair, on another model, reviews the diff against task.md and plan.md.",
+        "does": "The pair, on another model, reviews the whole diff against task.md and plan.md. Start it with loop.py prompt --step review, as loop.md says.",
         "skills": [
           "review"
         ],
@@ -255,7 +255,7 @@
         "id": "fix",
         "stage": "review",
         "actor": "lead",
-        "does": "Fix the pair's must-fix and should-fix findings. For one you do not fix, write the reason in plan.md's Decisions. A fix that needs a new work item goes back to build.",
+        "does": "Fix the pair's must-fix and should-fix findings. For one you do not fix, write the reason in plan.md's Decisions. A fix that needs a new work item goes back to build, as a new row.",
         "skills": [],
         "next": {
           "large": "build",
@@ -271,7 +271,7 @@
         "id": "recheck",
         "stage": "review",
         "actor": "pair",
-        "does": "The pair checks only the fixes and the clean-up.",
+        "does": "The pair checks only the fixes and the clean-up. Start it with loop.py prompt --step recheck, as loop.md says.",
         "skills": [
           "review"
         ],
@@ -289,7 +289,7 @@
         "id": "finalize",
         "stage": "finalize",
         "actor": "lead",
-        "does": "Rebase onto the base (back to build if you had to fix a conflict). Write handoff.md. Open a draft pull request whose body is handoff.md, run the gate with --before-ready, and when it passes mark the pull request ready.",
+        "does": "Rebase onto the base (back to build if you had to fix a conflict). Write handoff.md. Push and open a draft pull request whose body is handoff.md, run the gate with --before-ready, and when it passes mark the pull request ready.",
         "skills": [
           "handoff"
         ],
@@ -312,7 +312,7 @@
       {
         "id": "brief",
         "actor": "foreman",
-        "does": "Judge the difficulty and write brief.md, loop.json and the gate file in the task folder: the task, its difficulty and base, the lead's clone, the rendered loop with the skill of each step, and the reporting rule.",
+        "does": "Judge the difficulty and write loop.json (loop.py render --json), the gate file (gate.py template) and brief.md in the task folder, and record the gate file's hash in the ledger.",
         "skills": [],
         "next": {
           "done": "launch"
@@ -348,7 +348,7 @@
       {
         "id": "verify-session",
         "actor": "foreman",
-        "does": "When the lead is ready, start the verification session: the red team and QA, each in its own clone at the head, on a model other than the lead's (loop.py render --loop check). Send the findings back as the check loop says; after 3 rounds, ask the person.",
+        "does": "When the lead is ready, start the verification session: the red team and QA, each in its own clone at the head, on a model other than the lead's (loop.py prompt). Write each step's end line with its outcome (status.py note); it names the step the lead goes back to. After 3 rounds, ask the person.",
         "skills": [],
         "next": {
           "done": "merge-gate"
@@ -357,7 +357,7 @@
       {
         "id": "merge-gate",
         "actor": "foreman",
-        "does": "Run the task's gate again with --task-dir: the verdicts at the head from models other than the lead's, the documents, CI, ready.",
+        "does": "Run the task's gate again with --task-dir and --sha: the verdicts at the head from models other than the lead's, the documents, CI, ready.",
         "skills": [],
         "next": {
           "done": "merge"

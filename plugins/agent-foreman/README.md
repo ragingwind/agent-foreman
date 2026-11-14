@@ -68,6 +68,22 @@ verification session (started by the foreman; both run together)
 - **One rule off the path.** An agent tries once more; if it still fails, it
   stops and the foreman asks you.
 
+## What scripts hold, what prompts ask
+
+A rule whose break could merge the wrong change is held by a script. How the
+work is done is asked by the skills and guides.
+
+| Held by a script | Asked by a prompt |
+| --- | --- |
+| Each step's end line names one of its outcomes, and the script prints the next step (`status.py note`) | How to split the work, which tests to write, one commit per work item |
+| The gate blocks until every step before finalize has ended and every record is filled in | What to look for in a review, what to clean up |
+| Verdicts count only from `reviews/`, from a model other than the lead's, at the head commit | QA follows the scenario without reading the diff |
+| Role prompts and launch commands come from the task's `loop.json` (`loop.py prompt`) | The three-round limit and the report line |
+| The gate blocks when the gate file or `loop.json` changed after the brief | The lead never merges; high difficulty is yours to merge |
+
+Known limit: the lead can write in its own task folder, so no script stops
+it from writing a fake answer file into `reviews/`.
+
 ## Requirements
 
 | Need | Why |

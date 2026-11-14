@@ -30,10 +30,14 @@ agent, so it runs the same in any shell.
 
 --print runs the agent once in prompt mode, where it is started (no
 worktree): the prompt comes from --prompt-file, the agent's JSON result goes
-to --out, and one line of JSON is printed: ok, session_id, cost, denials, out.
-Next to --out it writes `<out without .json>.meta.json`: the role (--role),
-the agent's name, the profile and its model, the commit checked out where the
-agent ran, and when it started and ended. The gate reads verdicts from there.
+to --out, and one line of JSON is printed: ok, session_id, cost, denials,
+out, and verdict (the word on the answer's last `Verdict:` line). Next to
+--out it writes `<out without .json>.meta.json`: the role (--role), the
+agent's name, the profile and its model, the commit checked out where the
+agent ran, its verdict, and when it started and ended. The gate reads
+verdicts from there, so --role needs --task-dir and --name, an --out inside
+the task folder's reviews/, and a git checkout to run in (`loop.py prompt`
+prints this command whole).
 
 --dry-run prints the command and the names of the variables it sets or
 clears, never their values.
@@ -53,6 +57,7 @@ import tempfile
 import adapters
 from config import (EXIT_AGENT_ERROR, EXIT_SETUP_NEEDED, EXIT_TOKEN_MISSING, REPO, load, read_json, user_path,
                     validate_launch)
+from gate import last_verdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATUS_VARS = ("AF_STATUS_FILE", "AF_AGENT", "AF_TASK_DIR")
@@ -90,10 +95,22 @@ def main():
     args = parser.parse_args()
     if args.print_mode and not (args.prompt_file and args.out):
         fail(2, "--print needs --prompt-file and --out")
+    if args.print_mode:
+        args.prompt_file, args.out = os.path.expanduser(args.prompt_file), os.path.expanduser(args.out)
     if args.print_mode and not os.path.isfile(args.prompt_file):
         fail(2, f"no prompt file at {args.prompt_file}")
     if args.project and not REPO.match(args.project):
         fail(2, f"--project must look like owner/name, not {args.project!r}")
+    task_dir = os.path.abspath(os.path.expanduser(args.task_dir)) if args.task_dir else None
+    if args.role:
+        if not (args.print_mode and task_dir and args.name):
+            fail(2, "--role needs --print, --task-dir and --name: a verdict counts only when it is saved in the "
+                    "task folder")
+        reviews = os.path.join(task_dir, "reviews")
+        if os.path.dirname(os.path.abspath(args.out)) != reviews:
+            fail(2, f"with --role, --out goes in {reviews}/")
+        if head_commit() is None:
+            fail(2, "with --role, run it in the agent's own clone; this directory is not a git checkout")
 
     bundle, bundle_kind = bundle_root()
     if bundle:
@@ -121,7 +138,6 @@ def main():
                                            disallowed=[t.strip() for t in args.disallow.split(",") if t.strip()])
     except adapters.TokenMissing as e:
         fail(EXIT_TOKEN_MISSING, f"token variable {e.variable} is not set in this environment")
-    task_dir = os.path.abspath(os.path.expanduser(args.task_dir)) if args.task_dir else None
     status = args.status or (os.path.join(task_dir, "status.jsonl") if task_dir else None)
     clear = set(clear) | set(STATUS_VARS)
     if status:
@@ -157,8 +173,9 @@ def head_commit():
 
 
 def now_iso():
-    import time
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    """UTC time to the microsecond, so two runs in one second still sort."""
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def meta_path(out):
@@ -183,10 +200,12 @@ def run_once(adapter, argv, env, prompt_file, out, meta=None):
     write_atomic(out, text)
     summary = adapter.parse_print(text)
     ok = summary["ok"] and proc.returncode == 0
+    verdict = last_verdict(summary["result"]) if ok else ""
     write_atomic(meta_path(out), json.dumps({**(meta or {}), "started": started, "ended": now_iso(), "ok": ok,
-                                             "session_id": summary["session_id"]}, indent=2) + "\n")
+                                             "verdict": verdict, "session_id": summary["session_id"]},
+                                            indent=2) + "\n")
     print(json.dumps({"ok": ok, "session_id": summary["session_id"], "cost": summary["cost"],
-                      "denials": len(summary["denials"]), "out": os.path.abspath(out),
+                      "denials": len(summary["denials"]), "out": os.path.abspath(out), "verdict": verdict,
                       "error": None if ok else (summary["result"] or proc.stderr.decode("utf-8", "replace"))[-300:]}))
     return 0 if ok else EXIT_AGENT_ERROR
 

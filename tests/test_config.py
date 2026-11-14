@@ -175,10 +175,13 @@ class Tiers(unittest.TestCase):
         self.assertEqual(config.role_candidates(cfg, "low", "pair"), ["sonnet", "opus"])
         self.assertEqual(config.role_candidates(cfg, "mid", "redteam"), ["opus"])
         self.assertEqual(config.role_candidates(cfg, "high", "qa"), ["sonnet"])
+        self.assertEqual(config.role_candidates(cfg, "high", "qa", lead="sonnet"), ["opus"])  # the lead fell back
         lone = config.merge(cfg, {"tiers": {"high": ["opus"]}})
         self.assertEqual(config.role_candidates(lone, "high", "pair"), [])
-        self.assertTrue(any("at high difficulty, role pair has no profile other than the lead's (opus)" in p
-                            for p in config.validate(lone)))
+        problems = config.validate(lone)
+        for role in ("pair", "redteam", "qa"):  # the verification session's roles too
+            self.assertTrue(any(f"at high difficulty, role {role} has no profile other than the lead's (opus)" in p
+                                for p in problems), role)
 
     def test_order_and_fallback(self):
         cfg = config.merge(config.load(), {"tiers": {"mid": ["sonnet", "haiku"]}})
@@ -199,6 +202,8 @@ class Tiers(unittest.TestCase):
         self.assertEqual(r.returncode, 3)
         r = run("config.py", "tier", "--difficulty", "high")
         self.assertEqual(json.loads(r.stdout)["pick"], "opus")
+        r = run("config.py", "tier", "--difficulty", "high", "--role", "pair", "--lead", "sonnet")
+        self.assertEqual(json.loads(r.stdout)["profiles"], ["opus"])
         self.assertEqual(run("config.py", "tier").returncode, 2)
 
 

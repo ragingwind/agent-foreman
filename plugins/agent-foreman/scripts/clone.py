@@ -31,7 +31,8 @@ remove: one agent's clone, or with no --agent every clone of the task and
 its task folder (`~/.local/state/agent-foreman/tasks/<owner>-<repo>/<task>`, the
 task's records: archive it first). It refuses a folder without the marker, a
 folder holding the caller's working directory, and, unless --force, a clone
-with changes to tracked files or commits that are on no remote.
+with changes to tracked files or, for a clone that can push, commits that are
+on no remote.
 
 archive: copies the task folder from MACHINE to the foreman's project folder
 (`config.py paths --project` state, `projects/<owner>-<repo>/tasks/<task>`) and
@@ -85,11 +86,15 @@ def check(path):
         return {"ours": True, "path": real, **json.load(f)}
 
 
-def _unsafe(path):
-    """Why removing a clone would lose work, or ""."""
+def _unsafe(path, push=True):
+    """Why removing a clone would lose work, or "". A clone that cannot push
+    (--no-push) holds a judging agent's checkout of commits that live in the
+    lead's clone, so only its tracked-file changes count."""
     changed = _git("diff", "--name-only", "HEAD", cwd=path)
     if changed:
         return "changes to tracked files: " + ", ".join(changed.splitlines()[:5])
+    if not push:
+        return ""
     local = _git("rev-list", "--max-count=5", "HEAD", "--branches", "--not", "--remotes", cwd=path)
     if local:
         return "commits on no remote: " + ", ".join(sha[:9] for sha in local.splitlines())
@@ -104,7 +109,7 @@ def _remove_one(path, force):
     if here == found["path"] or here.startswith(found["path"] + os.sep):
         return "the working directory is inside it; run from outside"
     if not force:
-        reason = _unsafe(found["path"])
+        reason = _unsafe(found["path"], found.get("push", True))
         if reason:
             return reason + " (--force removes it anyway)"
     shutil.rmtree(found["path"])

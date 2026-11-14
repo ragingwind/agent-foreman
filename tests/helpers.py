@@ -39,8 +39,23 @@ class TempHome:
         return path
 
 
-def run(script, *args, env=None, stdin=None, cwd=None):
+def task_loop(cfg=None, difficulty="mid", trivial=False, lead=None, repo="o/r", task="7", base="main"):
+    """A task's loop.json data, as `loop.py render --json` makes it, with every
+    default skill from the kit."""
+    import config
+    import loop
+    cfg = cfg or config.load()
+    lead = lead or config.lead_profile(cfg, difficulty)
+    resolved = {n: ("kit", n) for n in loop.KIT}
+    profiles = {r: config.role_candidates(cfg, difficulty, r, lead=lead) for r in cfg["loop"]["roles"]}
+    return loop.as_data(cfg, task, difficulty, trivial, resolved, lambda src, v: "foreman-kit:" + v, repo, base,
+                        lead, profiles)
+
+
+def run(script, *args, env=None, stdin=None, cwd=None, workdir=None):
+    """Run a script from `cwd` (default: the plugin's scripts) in the
+    directory `workdir` (default: this one)."""
     full = dict(os.environ)
     full.update(env or {})
     return subprocess.run([sys.executable, os.path.join(cwd or SCRIPTS, script), *args],
-                          capture_output=True, text=True, env=full, input=stdin)
+                          capture_output=True, text=True, env=full, input=stdin, cwd=workdir)

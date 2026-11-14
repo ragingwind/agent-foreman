@@ -3,9 +3,9 @@ name: commit
 description: >-
   Commit one finished work item as exactly one commit, with a message in the
   project's own style, then mark the item done in plan.md with the commit's
-  short SHA. Use in the build session's build stage (action B3), after the
-  item's tests pass and before the next item starts. The same steps commit the
-  review stage's fixes.
+  short SHA. Use in the build session's build step, after the item's tests
+  pass and before the next item starts. The same steps commit the fixes of the
+  review stage's fix step.
 ---
 
 # Commit
@@ -22,10 +22,9 @@ description: >-
 
 ## Flow
 
-- B3, build stage, lead: after B2 passes for the item.
-- Next: B1 for the next row whose status is `todo`. After the last row, the verify stage starts with V1.
-- A fix in review (R3), or for a finding sent back from the verification session, is committed with the same steps, as its own commit. It changes no row of plan.md, unless the fix is a new row.
-- The commit fails (a hook, a lock) and your fix does not help: try once more. If it still fails, stop and report it for the person.
+- Step `build`: after `unit` passes for the row. Next: `tdd` for the next row that is not done. After the last row, the build step ends with outcome `done`.
+- Step `fix` (review stage): each fix of a pair finding is committed with the same steps, as its own commit. It changes no row of plan.md. Work that goes back to build is a new row, committed like any other row.
+- The commit fails (a hook, a lock) and your fix does not help: try once more. If it still fails, stop as blocked.
 
 ## Record
 
@@ -33,7 +32,7 @@ description: >-
 - In `$AF_TASK_DIR/plan.md` (the task folder), set the item's row: `status` to `done`, and `commit` to the short SHA. For example:
 
 ```
-| W2 | Print the list as JSON | `pytest tests/test_list.py` passes | src/list.py, tests/test_list.py | tdd | done | 3f2a9c1 |
+| W2 | Print the list as JSON | `pytest tests/test_list.py` passes | src/list.py, tests/test_list.py | test-first | done | 3f2a9c1 |
 ```
 
 - plan.md is outside the clone. Do not commit it.

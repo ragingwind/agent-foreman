@@ -5,8 +5,8 @@ description: >-
   changing what it does: one change at a time, the item's tests after each,
   a revert when they fail, and each kept change committed apart from the
   feature commits with a subject that starts with "Simplify". Use in the build
-  session's review stage (action R2), after the pair review asks for changes
-  and before the findings are fixed.
+  session's review stage (step simplify), after the pair's first review,
+  whatever its verdict, and before its findings are fixed.
 ---
 
 # Simplify
@@ -22,20 +22,18 @@ description: >-
    - They pass: commit this change alone. The subject starts with `Simplify`, for example `Simplify the retry loop in fetch_page`.
    - They fail: revert this one change with `git checkout -- <files>`, and go on to the next one.
 7. A clean-up too large for this task is not done here. It is too large when it reaches code outside the diff or needs a design change. Write it as a follow-up (see Record).
-8. Stop when the list is done. Fewer lines is not the goal; easier reading is.
+8. Stop when the list is done. The goal is code that is easier to read, not fewer lines.
 
 ## Flow
 
-- R2, review stage, lead: after R1, whatever its verdict. It runs once per review stage; a later R4 `changes` goes back to R3 only.
-- Next: R3, fix the must-fix and should-fix findings. Then R4: the pair re-checks the fixes and this clean-up.
-- Nothing to simplify: make no commit, and go to R3.
-- A change that fails in a way you cannot explain: revert it and leave it. Anything else off the path, such as tests that do not run at all: try once more. If it still fails, stop and report it for the person.
+- Step `simplify`, lead: after `review`, once per review stage. It ends with outcome `done` (next: fix), also when there was nothing to simplify.
+- A change that fails in a way you cannot explain: revert it and leave it. Any other problem, such as tests that do not run at all: try once more. If it still fails, stop as blocked.
 
 ## Record
 
 - Each kept change is its own commit, apart from the feature commits. Its subject starts with `Simplify`. It holds no test file and no feature code.
 - No row of plan.md changes.
-- A large clean-up goes in `$AF_TASK_DIR/handoff.md` under `## Follow-ups`, as one line: `- <where> — <what to clean up> — <why it is not done here>`. Create the file with that heading if it does not exist yet. The handoff action keeps the line.
+- A large clean-up goes in `$AF_TASK_DIR/handoff.md` under `## Follow-ups`, as one line: `- <where> — <what to clean up> — <why it is not done here>`. Create the file with that heading if it does not exist yet. The handoff skill keeps the line.
 
 ## Rules
 

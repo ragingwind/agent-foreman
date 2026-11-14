@@ -1,9 +1,11 @@
 import copy
 import json
 import os
+import re
+import subprocess
 import unittest
 
-from helpers import TempHome, run
+from helpers import SCRIPTS, TempHome, run, task_loop
 
 import config
 import loop
@@ -54,6 +56,32 @@ class Validate(unittest.TestCase):
         self.assertEqual(loop.validate_loop(own), [])
         bad = dict(base, work=[stage("a", stage="no spaces")])
         self.assertTrue(any("stage must be a name" in p for p in loop.validate_loop(bad)))
+
+    def test_success_path_must_reach_stop(self):
+        base = {"roles": {"r": {"mode": "prompt"}}, "prompts": {}}
+        loops = dict(base, work=[stage("a", nxt={"done": "b"}), stage("b", nxt={"fail": "a", "done": "a"})])
+        self.assertIn("loop: work: the success path from a (each step's last outcome) does not reach stop",
+                      loop.validate_loop(loops))
+        back = dict(base, work=[stage("a")], check=[stage("x", actor="r", nxt={"pass": "a"})])
+        self.assertIn("loop: check: the success path from x (each step's last outcome) does not reach stop",
+                      loop.validate_loop(back))
+        self.assertEqual(loop.success_problems(config.standard()["loop"]), [])
+
+    def test_verdict_words_are_outcomes(self):
+        """What a judging role may answer is an outcome of each step it runs,
+        and its passing verdict is the step's success path."""
+        std = config.standard()["loop"]
+        for which in ("work", "check"):
+            for s in std[which]:
+                role = std["roles"].get(s["actor"])
+                if not role:
+                    continue
+                words = set(re.findall(r"`Verdict: (\w+)`", std["prompts"][role["prompt"]]))
+                if s["id"] == "review":  # the first pair review goes on to simplify whatever it says
+                    self.assertEqual(list(s["next"]), ["done"])
+                    continue
+                self.assertEqual(set(s["next"]) & words, words, s["id"])
+                self.assertEqual(list(s["next"])[-1], role["accept"][0], s["id"])
 
     def test_problems(self):
         bad = {"roles": {"lead": {"mode": "tab"}, "r": {"mode": "prompt", "prompt": "none", "deny_tools": "Edit"}},
@@ -168,8 +196,8 @@ class Render(unittest.TestCase):
         self.assertIn("| 4 | review | `634 review <N>` | review | pair |", out)
         self.assertIn("| foreman-kit:tidy | done → fix |", out)  # a replaced default skill
         self.assertIn("changes → fix; approved → finalize (finalize)", out)
-        self.assertIn("| pair | prompt | agent 1: sonnet | opus | `--role pair` `--disallow Edit,Write,NotebookEdit` |", out)
-        self.assertIn("## Prompt for pair", out)
+        self.assertIn("| pair | prompt | agent 1: sonnet | opus |", out)
+        self.assertIn("`loop.py prompt --step <step>`", out)
         self.assertNotIn("Missing skills", out)
 
     def test_trivial_task(self):
@@ -177,7 +205,7 @@ class Render(unittest.TestCase):
         self.assertIn("(difficulty mid, trivial)", out)
         self.assertNotIn("| recheck |", out)
         self.assertIn("done → finalize (finalize)", out)
-        self.assertNotIn("## Prompt for pair", out)
+        self.assertNotIn("| pair |", out)
 
     def test_check_loop_for_the_foreman(self):
         out = self.render("high", which="check")
@@ -185,15 +213,27 @@ class Render(unittest.TestCase):
         self.assertIn("| 1 | redteam-review | `634 redteam-review` | redteam-review | redteam |", out)
         self.assertIn("changes → build (build session); approved → stop", out)
         self.assertIn("script → verify (build session)", out)
-        self.assertIn("## Prompt for qa", out)
+        self.assertIn("| qa | prompt | agent 1: opus |", out)
 
     def test_as_data(self):
-        data = loop.as_data(self.cfg, "634", "mid", False, self.resolved, kit_name)
+        data = loop.as_data(self.cfg, "634", "mid", False, self.resolved, kit_name, "o/r", "main", "sonnet",
+                            self.profiles)
         self.assertEqual([s["id"] for s in data["work"]], WORK)
         self.assertEqual([s["id"] for s in data["check"]], CHECK)
+        self.assertEqual((data["repo"], data["base"], data["lead_profile"], data["max_lines"]), ("o/r", "main", "sonnet", 400))
         recheck = next(s for s in data["work"] if s["id"] == "recheck")
-        self.assertEqual((recheck["stage"], recheck["label"], recheck["skills"]),
-                         ("review", "634 review <N>", ["foreman-kit:review"]))
+        self.assertEqual((recheck["stage"], recheck["label"], recheck["actor"], recheck["skills"], recheck["next"]),
+                         ("review", "634 review <N>", "pair", ["foreman-kit:review"],
+                          {"changes": "fix", "approved": "finalize"}))
+        self.assertTrue(all(s["does"] for s in data["work"] + data["check"]))
+        self.assertEqual(set(data["roles"]), {"pair", "redteam", "qa"})
+        self.assertEqual((data["roles"]["qa"]["accept"], data["roles"]["qa"]["profiles"]), (["pass"], ["opus"]))
+        self.assertIn("<full test command>", data["roles"]["qa"]["prompt"])
+        trivial = loop.as_data(self.cfg, "634", "mid", True, self.resolved, kit_name, "o/r", "main", "sonnet",
+                               self.profiles)
+        self.assertEqual([s["id"] for s in trivial["work"]], ["plan", "build", "verify", "finalize"])
+        self.assertEqual(next(s for s in trivial["work"] if s["id"] == "verify")["next"]["done"], "finalize")
+        self.assertEqual(set(trivial["roles"]), {"redteam", "qa"})
 
     def test_assign(self):
         self.assertEqual(loop.assign(["a", "b", "c"], 2), (["a", "b"], ""))
@@ -227,13 +267,100 @@ class Cli(unittest.TestCase):
         r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "high", "--machine", "local")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("| foreman-kit:work-breakdown, scenario |", r.stdout)  # the project's skill replaces cross-check
-        self.assertIn("| pair | prompt | agent 1: sonnet |", r.stdout)  # high: never the lead's opus
-        r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "low", "--machine", "local",
-                "--json")
-        data = json.loads(r.stdout)
-        self.assertEqual([s["id"] for s in data["check"]], CHECK)
+        self.assertIn("| pair | prompt | agent 1: sonnet | - |", r.stdout)  # high: never the lead's opus
+        self.assertNotIn("opus |", r.stdout.split("| Role |")[1])
+        r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "high", "--machine", "local",
+                "--lead", "sonnet")  # the lead fell back to sonnet
+        self.assertIn("| pair | prompt | agent 1: opus | - |", r.stdout)
+        args = ["loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "low", "--machine", "local",
+                "--json"]
+        self.assertEqual(run(*args).returncode, 2)  # needs --base
+        data = json.loads(run(*args, "--base", "main", "--trivial").stdout)
+        self.assertEqual(([s["id"] for s in data["check"]], data["trivial"], data["base"], data["lead_profile"]),
+                         (CHECK, True, "main", "haiku"))
+        self.assertEqual(run(*args, "--base", "main", "--lead", "ghost").returncode, 2)
         r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "low", "--machine", "ghost")
         self.assertEqual(r.returncode, 3)
+
+
+def git_clone(home, name="clone"):
+    path = os.path.join(home.root, name)
+    subprocess.run(["git", "init", "-q", path], check=True)
+    subprocess.run(["git", "-C", path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q",
+                    "--allow-empty", "-m", "x"], check=True)
+    return path, subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+
+class Prompt(unittest.TestCase):
+    def setUp(self):
+        self.home = TempHome()
+        self.task = os.path.join(self.home.root, "task")
+        self.home.write("task/loop.json", task_loop(difficulty="mid", lead="sonnet"))
+        self.clone, self.head = git_clone(self.home)
+
+    def tearDown(self):
+        self.home.close()
+
+    def prompt(self, *args, env=None, workdir=None):
+        return run("loop.py", "prompt", *args, env=env, workdir=workdir or self.clone)
+
+    def test_writes_the_filled_prompt_and_prints_the_commands(self):
+        r = self.prompt("--step", "review", env={"AF_TASK_DIR": self.task})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual((out["agent"], out["prompt"], out["out"]),
+                         ("pair-1", os.path.join(self.task, "reviews", "pair-1-1.prompt.md"),
+                          os.path.join(self.task, "reviews", "pair-1-1.json")))
+        with open(out["prompt"]) as f:
+            text = f.read()
+        self.assertNotRegex(text, r"<[a-z ]+>")  # every placeholder is filled in
+        for words in ("task 7 of o/r", "skill foreman-kit:review", f"Your clone is at {self.head}",
+                      f"The task folder is {self.task}", "Review the diff from origin/main to HEAD"):
+            self.assertIn(words, text)
+        launch = os.path.join(SCRIPTS, "launch.py")
+        self.assertEqual(out["commands"][0].split(), [
+            "python3", launch, "opus", "--print", "--role", "pair", "--name", "pair-1", "--task-dir", self.task,
+            "--prompt-file", out["prompt"], "--out", out["out"], "--disallow", "Edit,Write,NotebookEdit"])
+        self.assertEqual(len(out["commands"]), 1)  # the mid and high tiers hold sonnet and opus; sonnet is the lead
+        again = json.loads(self.prompt("--step", "review", "--task-dir", self.task).stdout)
+        self.assertEqual(os.path.basename(again["prompt"]), "pair-1-2.prompt.md")  # never over an earlier run
+
+    def test_recheck_reviews_only_what_changed_since_the_last_answer(self):
+        r = self.prompt("--step", "recheck", "--task-dir", self.task)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("pair-1 has no earlier answer to check against; run step review first", r.stderr)
+        self.home.write("task/reviews/pair-1-1.json", {"result": "Verdict: changes"})
+        self.home.write("task/reviews/pair-1-1.meta.json", {"role": "pair", "agent": "pair-1", "head": "abc1234",
+                                                           "ok": True, "ended": "2026-11-14T01:00:00.000000Z"})
+        out = json.loads(self.prompt("--step", "recheck", "--task-dir", self.task).stdout)
+        with open(out["prompt"]) as f:
+            text = f.read()
+        self.assertIn("Review the diff from abc1234 to HEAD: only the fixes and the clean-up since your last review, "
+                      f"whose answer is {os.path.join(self.task, 'reviews', 'pair-1-1.json')}", text)
+
+    def test_check_roles_and_a_second_agent(self):
+        out = json.loads(self.prompt("--step", "test", "--task-dir", self.task).stdout)
+        with open(out["prompt"]) as f:
+            text = f.read()
+        self.assertIn("full tests: none is set; write `not run: no full test command`", text)
+        self.assertIn("Trivial task: no.", text)
+        self.assertIn("skills foreman-kit:full, foreman-kit:cross-check say", text)
+        self.home.write("task/loop.json", task_loop(difficulty="low"))  # redteam and qa: sonnet, then opus
+        out = json.loads(self.prompt("--step", "redteam-review", "--task-dir", self.task, "--agent", "redteam-2").stdout)
+        self.assertEqual([c.split()[2] for c in out["commands"]], ["opus", "sonnet"])  # agent 2 starts on the next
+
+    def test_refusals(self):
+        for args, words in ((["--step", "build"], "done by the lead, not by a role agent"),
+                            (["--step", "nope"], "step 'nope' is not in this task's loop"),
+                            (["--step", "review", "--agent", "../x"], "--agent may hold"),
+                            (["--step", "review", "--task-dir", os.path.join(self.home.root, "none")], "no readable loop.json"),
+                            (["--step", "review", "--task-dir", ""], "needs --step and a task folder")):
+            r = self.prompt(*args, **({} if "--task-dir" in args else {"env": {"AF_TASK_DIR": self.task}}))
+            self.assertEqual(r.returncode, 2, args)
+            self.assertIn(words, r.stderr)
+        r = self.prompt("--step", "review", "--task-dir", self.task, workdir=self.home.root)
+        self.assertIn("not a git checkout", r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.task, "reviews")))
 
 
 if __name__ == "__main__":

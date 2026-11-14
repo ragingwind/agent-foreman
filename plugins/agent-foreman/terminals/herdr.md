@@ -51,12 +51,15 @@ The new pane id is `.result.pane.pane_id`.
 ## Start an agent
 
 ```bash
-H pane run <pane> 'python3 <bundle>/scripts/launch.py <profile> --name <name> --session-id <id>'
+H pane run <pane> 'python3 <bundle>/scripts/launch.py <profile> --name <name> --session-id <id> --task-dir <task folder>'
 H agent wait <pane> --until idle --until blocked --timeout 20000
 H agent rename <pane> <name>
 ```
 
 - `<bundle>` is the `path` that `bundle.py push` printed for that machine.
+- `--task-dir` gives the agent its task folder (`AF_TASK_DIR`) and its status
+  file; without it the agent's skills find no records and `status.py note`
+  refuses.
 - `pane run` types into whatever runs in the pane. Run it only on a pane at
   a shell prompt: when `H agent list` shows an agent in that pane, the
   command would go to the agent as a prompt.
@@ -137,4 +140,3 @@ prompt.
 2. `H agent list`: the agent is gone.
 3. `H pane close <pane>` for a helper pane, `H tab close <tab>` for the task
    tab.
-4. Remove the task's brief file.

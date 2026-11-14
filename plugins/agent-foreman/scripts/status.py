@@ -5,20 +5,24 @@ A task's records live in one task folder on its machine,
 `~/.local/state/agent-foreman/tasks/<owner>-<repo>/<task>/`; its status file is
 `status.jsonl` there. launch.py --task-dir hands the folder to an agent as
 AF_TASK_DIR and the status file as AF_STATUS_FILE. The bundle's hooks append
-`heartbeat` and `turn-end` lines; the lead appends a `start`, `end` or
-`progress` line for its stages (naming the step) and a `stop` line at a stop
-point.
+`heartbeat` and `turn-end` lines; the lead appends a `start` and an `end` line
+for each step it runs, `progress` lines during a long one, and a `stop` line
+at a stop point that no step leads to (a decision, blocked). The foreman
+writes the verification session's lines with --file.
 
 When the task folder holds `loop.json` (loop.py render --json), `note` refuses
-a stage or step that is not in the task's loop, renames the herdr tab to the
-stage's label at a `start` line (when HERDR_TAB_ID is set), and prints what to
-do next: at `start`, the step itself; at `end`, the step each outcome leads to.
+a stage or step that is not in the task's loop, and an `end` line without an
+--outcome that the step has. It prints what to do next: at `start`, the step
+itself; at `end`, the step the outcome leads to, which it also records as
+`to`. An `end` line whose outcome leads to `stop` is a stop point. At a
+`start` line written to AF_STATUS_FILE, it renames the agent's herdr tab to
+the stage's label (when HERDR_TAB_ID is set).
 
 Usage:
   status.py dir --project OWNER/REPO --task TASK
   status.py path --project OWNER/REPO --task TASK
-  status.py note --stage ID [--step ID] --event start|end|progress|stop [--round N]
-                 [--done TEXT] [--next TEXT] [--blocked TEXT] [--runs JSON] [--file FILE]
+  status.py note --stage ID [--step ID] --event start|end|progress|stop [--outcome NAME] [--round N]
+                 [--done TEXT] [--blocked TEXT] [--file FILE]
   status.py read --project OWNER/REPO [--machine MACHINE] [--stall MINUTES]
 
 `dir` prints the task folder and `path` its status file, with `~`, for the
@@ -46,6 +50,7 @@ from config import LOCAL, NAME, REPO
 
 TASKS = "~/.local/state/agent-foreman/tasks"
 EVENTS = ["start", "end", "progress", "stop"]
+STOP = "stop"
 BEATS = ["heartbeat", "turn-end"]
 TAIL = 200
 
@@ -144,10 +149,10 @@ def summarize(lines, stall_minutes, now=None):
     beat = next((r for r in reversed(rows) if r.get("event") in BEATS), {})
     last = parse_time(rows[-1].get("time")) if rows else None
     since = None if last is None else round((now - last) / 60, 1)
-    stopped = stage.get("event") == "stop"
+    stopped = stage.get("event") == "stop" or (stage.get("event") == "end" and stage.get("to") == STOP)
     return {"stage": stage.get("stage"), "step": stage.get("step"), "stage_event": stage.get("event"),
-            "round": stage.get("round"),
-            "done": stage.get("done"), "next": stage.get("next"), "blocked": stage.get("blocked") or "",
+            "round": stage.get("round"), "outcome": stage.get("outcome"), "to": stage.get("to"),
+            "done": stage.get("done"), "blocked": stage.get("blocked") or "",
             "last_beat": beat.get("event"), "last_beat_agent": beat.get("agent"), "minutes_since": since,
             "stopped": stopped, "stalled": not stopped and (since is None or since > stall_minutes)}
 
@@ -180,11 +185,10 @@ def main(argv):
     ap.add_argument("--stage")
     ap.add_argument("--step", default="")
     ap.add_argument("--event", choices=EVENTS)
+    ap.add_argument("--outcome", help="with --event end: the outcome of the step, one of its next keys")
     ap.add_argument("--round", type=int)
     ap.add_argument("--done", default="")
-    ap.add_argument("--next", default="")
     ap.add_argument("--blocked", default="")
-    ap.add_argument("--runs", default="[]", help="JSON list of sub-agent runs")
     args = ap.parse_args(argv)
     if args.project and not REPO.match(args.project):
         print(f"status.py: --project must look like owner/name, not {args.project!r}", file=sys.stderr)
@@ -207,35 +211,39 @@ def main(argv):
             print("status.py: note needs --stage, --event and a status file (--file or AF_STATUS_FILE)",
                   file=sys.stderr)
             return 2
-        try:
-            runs = json.loads(args.runs)
-        except ValueError:
-            runs = None
-        if not isinstance(runs, list):
-            print("status.py: --runs must be a JSON list", file=sys.stderr)
+        if args.outcome and args.event != "end":
+            print("status.py: --outcome goes with --event end", file=sys.stderr)
             return 2
         path = os.path.expanduser(path)
         task_loop = load_loop(path)
-        entry = None
+        entry, target = None, None
         if task_loop is not None:
             entry, problem = check_note(task_loop, args.stage, args.step)
+            if not problem and args.event == "end":
+                outcomes = list(entry["next"])
+                if args.outcome not in outcomes:
+                    problem = (f"--event end needs --outcome, one of {', '.join(outcomes)} "
+                               f"(step {entry['id']}), not {args.outcome!r}")
+                else:
+                    target = entry["next"][args.outcome]
             if problem:
                 print(f"status.py: {problem}", file=sys.stderr)
                 return 2
         row = {"time": now_iso(), "stage": args.stage, "step": args.step or (entry or {}).get("id", ""),
-               "event": args.event, "round": args.round, "done": args.done, "next": args.next,
-               "blocked": args.blocked, "runs": runs}
+               "event": args.event, "round": args.round, "done": args.done, "blocked": args.blocked}
+        if args.outcome:
+            row.update(outcome=args.outcome, to=target)
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
         if entry is not None:
             if args.event == "start":
-                rename_tab(entry.get("label", "").replace("<N>", str(args.round or 1)))
+                if not args.file:
+                    rename_tab(entry.get("label", "").replace("<N>", str(args.round or 1)))
                 print("now: " + describe(task_loop, entry["id"]))
             elif args.event == "end":
-                for outcome, target in entry["next"].items():
-                    print(f"next, if {outcome}: " + ("stop and report" if target == "stop"
-                                                     else describe(task_loop, target)))
+                print("next: " + ("stop: no step follows; this is a stop point." if target == STOP
+                                  else describe(task_loop, target)))
         return 0
 
     if not args.project:
