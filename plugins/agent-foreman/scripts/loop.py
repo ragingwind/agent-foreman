@@ -240,6 +240,14 @@ def plan(loop, difficulty, trivial=False, which="work"):
     return out
 
 
+def shell_path(path):
+    """`path` quoted for a remote shell. A leading `~` stays outside the quotes
+    so the remote shell expands it: saved machine paths are written with `~`."""
+    if path == "~" or path.startswith("~/"):
+        return '"$HOME"' + shlex.quote(path[1:])
+    return shlex.quote(path)
+
+
 def project_skill_names(label, path, saved=None):
     """Skills the project's own checkout has on a machine (`.claude/skills/*`)."""
     if label == "local":
@@ -252,7 +260,7 @@ def project_skill_names(label, path, saved=None):
         saved = herdr_machines()
     if label not in saved:
         raise ValueError(f"{label} is not a saved herdr machine")
-    probe = f"cd {shlex.quote(path)}/.claude/skills 2>/dev/null && for d in */; do test -f \"$d/SKILL.md\" && echo \"${{d%/}}\"; done; true"
+    probe = f"cd {shell_path(path)}/.claude/skills 2>/dev/null && for d in */; do test -f \"$d/SKILL.md\" && echo \"${{d%/}}\"; done; true"
     out = subprocess.run(["ssh", "-o", "BatchMode=yes", saved[label]["target"], probe],
                          capture_output=True, text=True)
     if out.returncode != 0:

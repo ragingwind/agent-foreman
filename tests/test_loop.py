@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import unittest
+from unittest import mock
 
 from helpers import SCRIPTS, TempHome, run, task_loop
 
@@ -166,6 +167,24 @@ class Skills(unittest.TestCase):
             home.write("repo/.claude/skills/notes/README.md", "x")
             self.assertEqual(loop.project_skill_names("local", os.path.join(home.root, "repo")), ["scenario"])
             self.assertEqual(loop.project_skill_names("local", os.path.join(home.root, "none")), [])
+        finally:
+            home.close()
+
+    def test_project_skill_names_remote_expands_home(self):
+        home = TempHome()
+        try:
+            home.write("repo/.claude/skills/scenario/SKILL.md", "x")
+            home.write("a b/.claude/skills/notes/SKILL.md", "x")
+            real = subprocess.run
+
+            def over_ssh(argv, **kw):  # the remote shell, played by sh with HOME at the temporary folder
+                return real(["sh", "-c", argv[-1]], env={**os.environ, "HOME": home.root}, **kw)
+
+            saved = {"m": {"target": "host"}}
+            with mock.patch.object(loop.subprocess, "run", over_ssh):
+                for path, want in [("~/repo", ["scenario"]), ("~/a b", ["notes"]),
+                                   (os.path.join(home.root, "repo"), ["scenario"]), ("~/none", [])]:
+                    self.assertEqual(loop.project_skill_names("m", path, saved), want, path)
         finally:
             home.close()
 
