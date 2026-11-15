@@ -11,8 +11,6 @@ EXECUTABLE = "claude"
 PLUGIN = "foreman-kit"
 ROLES = ["opus", "sonnet", "haiku"]
 HEARTBEAT = 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/heartbeat.py"'
-# Tools no agent gets, whatever else it may do: the foreman merges, after the
-# gate. A guard against a skill that merges on its own, not a sandbox.
 NEVER = ["Bash(gh pr merge:*)"]
 
 # Variables a gateway may set. They are cleared first, so a value inherited
@@ -57,8 +55,8 @@ def command(cfg, profile_name, name=None, session_id=None, bundle=None, environ=
     the agent answers one prompt read from stdin and prints JSON (`claude -p`).
     Either way it runs in the folder it is started in, its own clone. `resume`
     continues an earlier session with its conversation, in the folder it ran in.
-    `plugin_dirs` are loaded whole after the bundle, so a plugin's skills keep
-    their agents and scripts. The tools in NEVER are always denied."""
+    `plugin_dirs` are loaded whole after the bundle. The tools in NEVER are
+    always denied."""
     profile = cfg["profiles"][profile_name]
     gateway = cfg["gateways"][profile["gateway"]]
     env, clear = gateway_env(gateway, profile, os.environ if environ is None else environ)

@@ -28,40 +28,49 @@ reviews no diff.
 
 ## Evidence at every step
 
-**The foreman takes no agent's word that a step is done. It takes evidence,
-from every agent, at every step, and checks it before the task goes on.**
+**The foreman does not take an agent's word that a step is done. It takes
+evidence from every agent at every step. It checks the evidence before the
+task goes on.**
 
 | Who | Evidence | How the foreman checks it |
 | --- | --- | --- |
-| The lead, at each step's end | Its `end` line's `--done`: the skills the step ran and where their record is (`work-breakdown: plan.md 4 rows; cross-check: scenario.md 6 steps`, `commit: W1 3f2a9c1, W2 8b1d0e4`). `status.py` refuses an `end` line without it | `gate.py record --step <step> --task-dir <task folder> --cwd <lead's clone>` checks each default skill's record behind the line |
-| The pair, the red team, QA | Their answer, saved by `launch.py --role` at the commit they judged: each finding with its evidence, and a `Verdict:` | The gate's verdict checks; `gate.py record` for their step |
-| A project's own skill in a step | The record of the default skill it stands in for, and its own result (commits, a pull request) in the lead's line | As the lead's |
-| The lead, before ready; the foreman, before merge | The gate | `gate.py run` |
+| The lead, at each step's end | The `--done` of its `end` line: the skills the step ran and where each record is (`work-breakdown: plan.md 4 rows; cross-check: scenario.md 6 steps`, `commit: W1 3f2a9c1, W2 8b1d0e4`). `status.py` refuses an `end` line without it | `gate.py record --step <step> --task-dir <task folder> --cwd <lead's clone>` checks each default skill's record behind the line |
+| The pair, the red team, QA | Their answer, saved by `launch.py --role` at the commit they judged: each finding with its evidence, and a `Verdict:` | The gate's verdict checks, and `gate.py record` for their step |
+| A project's own skill in a step | The record of the default skill it replaces, and its own result (commits, a pull request) in the lead's line | The same as the lead's |
+| The lead before ready, and the foreman before merge | The gate | `gate.py run` |
 
 When a step ends ("stage" under "Watch"):
 
 1. Read the `end` line's evidence (`status.py read`, or the task folder's
    `status.jsonl`).
-2. Run `gate.py record` for that step on the task's machine (`remote.py
-   <machine> --cwd <lead's clone> -- python3 <bundle>/scripts/gate.py record
-   ...` for a remote).
-3. Exit 0 and the evidence matches the records: log it (`log.py add --event
-   evidence --task <task> --text "<step>: <the evidence>"`) and let the task
-   go on. Exit 6, or evidence the records do not bear out: ask the lead one
-   question that names what is missing; when it cannot show it, send it
-   back: "Go back to <step>: <what is missing>." Log either.
-4. After `build`: measure the change in the lead's clone (`score.py diff`,
-   "Difficulty"); when the difficulty rises, write the loop and gate again.
+2. On the task's machine, run `gate.py record` for that step. For a remote
+   machine, run it through `remote.py <machine> --cwd <lead's clone> --
+   python3 <bundle>/scripts/gate.py record ...`.
+3. When the exit is 0 and the evidence matches the records, log it
+   (`log.py add --event evidence --task <task> --text "<step>: <the
+   evidence>"`) and let the task go on. When the exit is 6, or the records
+   do not match the evidence, ask the lead one question that names what is
+   missing. When the lead cannot show it, send the lead back: "Go back to
+   <step>: <what is missing>." Log the question or the send-back.
+4. After `build`, measure the change in the lead's clone (`score.py diff`,
+   "Difficulty"). When the difficulty rises, write the loop and the gate
+   again.
 
-**At high difficulty the lead waits after plan** (`plan-check`, the
-foreman's step; its stop report says `waiting`). Read `task.md`, `plan.md`
-and `scenario.md`, and the plan step's evidence. Judge whether every
-done-when of `task.md` has a work item and a scenario step that would show
-it, and whether the plan stays inside the task's scope. Then write the step's
-`end` line yourself, `status.py note --file <task folder>/status.jsonl
---stage plan --step plan-check --event end --outcome go|back --done "<what
-you checked, and what is missing for back>"`, and send the lead one line:
-"Go on to build." or "Go back to plan: <what is missing>."
+**At high difficulty, the lead waits after plan.** This wait is
+`plan-check`, the foreman's step, and the lead's stop report says `waiting`.
+Read `task.md`, `plan.md`, `scenario.md` and the plan step's evidence. Check
+two things. First, every done-when of `task.md` has a work item and a
+scenario step that would show it. Second, the plan stays inside the task's
+scope. Then write the step's `end` line yourself:
+
+```bash
+python3 <skill>/scripts/status.py note --file <task folder>/status.jsonl --stage plan \
+  --step plan-check --event end --outcome <go or back> \
+  --done "<what you checked, and what is missing for back>"
+```
+
+Send the lead one line: "Go on to build." or "Go back to plan: <what is
+missing>."
 
 `<skill>` is the directory of this file. Run every script with `python3`.
 
@@ -106,10 +115,10 @@ you checked, and what is missing for back>"`, and send the lead one line:
   `scenario.md`, `handoff.md`, `reviews/`, `status.jsonl`, `gates.jsonl`. The
   foreman makes it, reads it and archives it.
 - **Default skill**: what each step's action is (`kit/skills/<name>`). The
-  settings' `skills` map may replace one with a project or local skill; the
-  replacement changes how the action is done, never the flow or the record,
-  and the brief shows both. A project's skill may also run a whole step, or
-  add to one (`setup/loop.md`); none takes over a loop, a merge or a clone.
+  settings' `skills` map may replace one with a project or local skill. The
+  replacement changes how the action is done, never the flow or the record.
+  The brief shows both. A project's skill may also run a whole step, or add
+  to one (`setup/loop.md`). No skill takes over a loop, a merge or a clone.
 - **Difficulty**: low, mid or high. It picks the loop's variant, the lead's
   model tier and who merges. **Tier**: low, mid or high, an ordered list of
   profiles. The pair takes the lead's tier, the red team and QA one above;
@@ -204,11 +213,11 @@ gets a short id (an issue's number when the person names an issue) and a
 `task.md` in its own words: `## Goal`, `## Done when` (observable
 conditions), `## Out of scope`, and the files it is expected to touch.
 
-When the project plans many issues itself (an epic's sub-issue list and its
-dependency order, from the issue or from the project's planning skill), use
-that plan: each unit is a task, and its order is the start order ("Place").
-Start nothing through the project's own wave or batch runner: the foreman
-starts every lead, and merges.
+The project may plan many issues itself: an epic's sub-issue list and its
+dependency order, from the issue or from the project's planning skill. When
+it does, use that plan. Each unit is a task, and its order is the start
+order ("Place"). Start nothing through the project's own wave or batch
+runner. The foreman starts every lead, and the foreman merges.
 
 ### Difficulty
 
@@ -304,13 +313,13 @@ Write the task's files into its task folder on the lead's machine
    as a background command that also waits.
 6. Record the row in the ledger and `log.py add --event launch`.
 
-Every agent `launch.py` starts is denied `gh pr merge`: the foreman merges,
-after the gate. The rule matches that command, also inside a longer line; a
-merge through `gh api`, `gh -R <repo> pr merge` or a script gets past it, so
-the foreman also checks each merge ("merged" under "Watch"). `launch.py` exit
-3: the settings are wrong (`config.py check`), or the bundle lacks a plugin
-it names (push it again). Exit 4:
-the gateway's token variable is not set on that machine; name the variable
+Every agent that `launch.py` starts is denied `gh pr merge`. The foreman
+merges, after the gate. The rule also matches that command inside a longer
+line. A merge through `gh api`, `gh -R <repo> pr merge` or a script gets past
+the rule, so the foreman also checks each merge ("merged" under "Watch").
+`launch.py` exit 3 means the settings are wrong (`config.py check`), or the
+bundle lacks a plugin it names (push the bundle again). Exit 4 means that
+the gateway's token variable is not set on that machine. Name the variable
 and the machine to the person. Never ask for, read, print or store a token
 value.
 
@@ -335,13 +344,13 @@ value.
 | Event | How it shows | What the foreman does |
 | --- | --- | --- |
 | started | the first wait after launch returns idle | Records the row, sends the brief |
-| stage | a new stage line in the status file | Updates the row's stage and step. An `end` line: check its evidence ("Evidence at every step") before anything else |
+| stage | a new stage line in the status file | Updates the row's stage and step. For an `end` line, first check its evidence ("Evidence at every step") |
 | report | `status.py read` shows the task `stopped`, or a wait returns idle and the last lines hold `REPORT:` | The stop line's `done` holds the report. `ready`: check finalize's evidence, then the verification session. `waiting`: `plan-check` ("Evidence at every step"). `decision`: add it to "Waiting on the person". `blocked`: fix what it needs or ask the person. A cut report is read from the transcript |
 | question | the agent asks inside the task's scope | Answer with the recommended option; only a choice that changes behavior, an interface, a schema or a core module goes to the person |
 | blocked | a dialog on screen | A permission prompt goes to the person with the agent and the command; never answer it. A trust question: the adapter page. A question dialog is closed only when the person already answered it |
 | stalled | `status.py read` marks the task `stalled` | Read the screen; move it on when it waits for a yes the brief already gave; otherwise ask what blocks it |
 | exited | the agent is gone from `H agent list` while its row is active | Renames the tab with the `exited` label and tells the person; with their yes, starts it again as "Resume" says |
-| merged | `gh` shows the pull request merged | Cleanup. When your log holds no `merge-gate` event that passed at the merged head (`log.py tail --project <repo> --event merge-gate --task <task>`), nor the person's merge of a high task, the merge did not pass the gate: tell the person first |
+| merged | `gh` shows the pull request merged | First check your log: `log.py tail --project <repo> --event merge-gate --task <task>`. When it holds no passing `merge-gate` event at the merged head, and the person did not merge a high task, the merge did not pass the gate. In that case, tell the person first. Then do the cleanup, in every case |
 | all-ready | every task is at a stop point and no agent works | Print the work overview once, then check less often: one-shot checks, the first after `ops.backoff.first_hours`, each next `ops.backoff.factor` times as far; back to the timer when work moves |
 
 ### Talk with the agents
@@ -372,13 +381,13 @@ blocks, send the lead what it lists. When it passes, for each step of the
 check loop in `loop.json` (`redteam-review` by the red team, `test` by QA),
 both at once:
 
-1. A clone at the lead's head, with the agent-instruction files as the base
-   has them: `clone.py make --project <repo> --task <task> --agent <role>-1
+1. A clone at the lead's head, whose agent-instruction files come from the
+   base: `clone.py make --project <repo> --task <task> --agent <role>-1
    --from <lead's clone> --ref <head SHA> --fresh --no-push --machine
-   <machine> --instructions-from <base SHA>`, where the base SHA is GitHub's
-   (`gh pr view <N> --repo <repo> --json baseRefOid -q .baseRefOid`). A change
-   the lead made to `.claude/`, `CLAUDE.md` or `AGENTS.md` cannot steer its
-   red team and QA; the gate's `tests-weakened` names such a change.
+   <machine> --instructions-from <base SHA>`. The base SHA is GitHub's: `gh
+   pr view <N> --repo <repo> --json baseRefOid -q .baseRefOid`. So a change
+   the lead made to `.claude/`, `CLAUDE.md` or `AGENTS.md` cannot steer the
+   red team and QA. The gate's `tests-weakened` check names such a change.
 2. In that clone (`remote.py <machine> --cwd <clone> --` for a remote):
    `python3 <bundle>/scripts/loop.py prompt --step <step> --task-dir <task
    folder>`. It writes the filled prompt into `reviews/` and prints the launch
@@ -392,8 +401,9 @@ both at once:
    only from `mismatch (script)` lines: then the outcome is `script`. Write
    `status.py note --file <task folder>/status.jsonl --stage <step> --event
    end --outcome <outcome> --done "<agent>: Verdict <verdict>, <its answer
-   file>"`, the step's evidence; it prints the step the task goes to next.
-   Then `gate.py record --step <step>` ("Evidence at every step").
+   file>"`. The `--done` text is the step's evidence. The command prints the
+   step the task goes to next. Then run `gate.py record --step <step>`
+   ("Evidence at every step").
 
 When both print `stop`: the merge gate. When one names a work step: copy the
 findings (the `must-fix`, `should-fix` and `mismatch` lines with their
@@ -422,11 +432,11 @@ python3 <skill>/scripts/remote.py <machine> --cwd <lead's clone> -- \
 
 (`local`: run it there directly.) Exit 6 lists what blocks; send it to the
 lead. `gate-file` or `loop-file` blocked means the lead changed a file it must
-not: tell the person, and merge nothing. Exit 0: log it before you merge,
-`log.py add --project <repo> --event merge-gate --task <task> --data
-'{"head": "<head SHA>", "pass": true, "gate_hash": "<the ledger's hash>"}'`;
-this log is yours, unlike the task folder's `gates.jsonl`, which the lead can
-write. A clean rebase after approval keeps
+not: tell the person, and merge nothing. Exit 0: before you merge, log the
+pass: `log.py add --project <repo> --event merge-gate --task <task> --data
+'{"head": "<head SHA>", "pass": true, "gate_hash": "<the ledger's hash>"}'`.
+This log is yours, and the lead cannot write it. The lead can write the task
+folder's `gates.jsonl`. A clean rebase after approval keeps
 its verdicts when the change is the same: the gate compares patches with
 `--cwd`.
 
@@ -443,10 +453,10 @@ Run `ops.after_merge` in order (`terminals/herdr.md` "Close" for agents and
 tabs; `clone.py archive`, then `clone.py remove`, for the task folder and the
 clones). The branch is deleted last: the lead's clone holds the branch's
 commits, and `clone.py remove` refuses a clone whose commits are on no
-remote. Then the project's own steps from its memory (tags, docs). Then the
-task's facts: `retro.py facts --project <repo> --task <task>`. Tell the
-person in one line what was out of the ordinary (a step it went back to, a
-stall, a gate block, a stop); the retro reads it again.
+remote. Then the project's own steps from its memory (tags, docs). Then read
+the task's facts: `retro.py facts --project <repo> --task <task>`. Tell the
+person, in one line, what was out of the ordinary: a step the task went back
+to, a stall, a gate block, a stop. The retro reads these facts again.
 
 ### Stop a task
 
@@ -459,34 +469,35 @@ person says to close them. Log it and remove the ledger row.
 ## Retro
 
 The foreman improves the loop a little at a time, from what the finished
-tasks show. Offer a retro when an epic or a batch of tasks has merged; run
-one when the person asks.
+tasks show. When an epic or a batch of tasks has merged, offer a retro. When
+the person asks, run one.
 
 1. **Facts**: `retro.py facts --project <repo> [--since <the last retro's
-   time>]`. It reads the archived task folders and the log, and holds the
-   open items the setup left and what the last retro changed.
+   time>]`. It reads the archived task folders and the log. Its output also
+   holds the open items the setup left and what the last retro changed.
 2. **Judge them against the loop** (`loop.py show --project <repo>`, and
    `--loop check`):
    - **A missing step, check or skill**: the same kind of finding, QA
-     mismatch or gate block in several tasks. Something before it should
-     have caught it: a step, a skill added to a step, a project gate check,
+     mismatch or gate block in several tasks. The fix is something earlier
+     that catches it: a step, a skill added to a step, a project gate check,
      or a rule in `memory.md`.
-   - **A skill that does not do its step**: its step is gone back to, or
-     stalls, in many tasks. Another skill, or the setup's fit for that step
-     again (`setup/loop.md`).
+   - **A skill that does not do its step**: in many tasks, the task goes back
+     to its step, or the step stalls. The fix is another skill, or the setup's
+     fit for that step again (`setup/loop.md`).
    - **A step that finds nothing**: its role approves at once in every task
      of a difficulty. Run it less there (`run`). A step whose verdict the
      gate reads always stays.
    - **Time and stops**: the slowest steps, the stalls, the decision stops
      a brief could have settled.
-   - **The setup's open items**, and the last retro's changes: did each
-     change the facts it was expected to change? If not, keep it or undo
-     it.
-3. **Propose**: each change with its evidence (task ids and counts), the
-   settings it writes (`config.py save project --dry-run`), a line for
-   `memory.md`, or a note for a skill's owner; and the fact it should change
-   in the next retro. Change no skill file: the project's, the person's and
-   the default skills are not the foreman's to edit.
+   - **The setup's open items**, and the last retro's changes: check
+     whether each change moved the fact it was expected to move. If it did
+     not, propose to keep it or to undo it.
+3. **Propose** each change with its evidence (task ids and counts). A
+   change is the settings it writes (`config.py save project --dry-run`), a
+   line for `memory.md`, or a note for a skill's owner. Name the fact each
+   change should move by the next retro. Change no skill file. The
+   project's skills, the person's skills and the default skills are not the
+   foreman's to edit.
 4. **Ask** with AskUserQuestion, one question per change, up to four per
    call, the recommended option first. Save the ones the person picks
    ("Setup" saves).

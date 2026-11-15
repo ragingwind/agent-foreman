@@ -80,6 +80,7 @@ PEOPLE = ["lead", "foreman", "person"]
 MODES = ["prompt", "pane"]
 RUNS = ["always", "never", "if-not-trivial"]
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+REPLACED_NOTE = re.compile(r" \(flow and record: [^)]*\)$")
 STOP = "stop"
 
 
@@ -247,15 +248,14 @@ def shell_path(path):
 
 def project_skill_names(label, path, saved=None):
     """Skills and commands the project's own checkout has on a machine
-    (`.claude/skills/*` and `.claude/commands/*.md`): an agent calls either
-    by its name."""
+    (`.claude/skills/*` and `.claude/commands/*.md`)."""
     if label == "local":
-        claude = os.path.join(os.path.expanduser(path), ".claude")
-        skills, commands = os.path.join(claude, "skills"), os.path.join(claude, "commands")
-        names = {e for e in (os.listdir(skills) if os.path.isdir(skills) else [])
-                 if os.path.isfile(os.path.join(skills, e, "SKILL.md"))}
-        names |= {e[:-3] for e in (os.listdir(commands) if os.path.isdir(commands) else [])
-                  if e.endswith(".md") and os.path.isfile(os.path.join(commands, e))}
+        claude_dir = os.path.join(os.path.expanduser(path), ".claude")
+        skills_dir, commands_dir = os.path.join(claude_dir, "skills"), os.path.join(claude_dir, "commands")
+        names = {e for e in (os.listdir(skills_dir) if os.path.isdir(skills_dir) else [])
+                 if os.path.isfile(os.path.join(skills_dir, e, "SKILL.md"))}
+        names |= {e[:-3] for e in (os.listdir(commands_dir) if os.path.isdir(commands_dir) else [])
+                  if e.endswith(".md") and os.path.isfile(os.path.join(commands_dir, e))}
         return sorted(names)
     if saved is None:
         from config import herdr_machines
@@ -321,6 +321,23 @@ def shown(name, resolved, call_name, overrides=None):
     return text
 
 
+def shown_skills(step, resolved, call_name, overrides):
+    return [shown(n, resolved, call_name, overrides) for n in step.get("skills", [])
+            if resolved[n][0] != "missing" or n in KIT]
+
+
+def recorded_defaults(skills):
+    import adapters
+    kit_plugin = re.escape(adapters.get(adapters.DEFAULT).PLUGIN)
+    defaults = []
+    for skill in skills:
+        m = (re.search(rf"\(flow and record: {kit_plugin}:([a-z-]+)\)", skill)
+             or re.fullmatch(rf"{kit_plugin}:([a-z-]+)", skill))
+        if m and m.group(1) in KIT and m.group(1) not in defaults:
+            defaults.append(m.group(1))
+    return defaults
+
+
 def has_rounds(steps, stage):
     """Whether a stage repeats: one of its steps sends the task back to an
     earlier step."""
@@ -357,8 +374,7 @@ def as_data(cfg, task, difficulty, trivial, resolved, call_name, repo, base, lea
         labels = stage_labels(cfg, task, steps)
         out[which] = [{"id": s["id"], "stage": s["stage"], "label": labels[s["stage"]], "actor": s["actor"],
                        "does": s["does"],
-                       "skills": [shown(n, resolved, call_name, overrides) for n in s.get("skills", [])
-                                  if resolved[n][0] != "missing" or n in KIT],
+                       "skills": shown_skills(s, resolved, call_name, overrides),
                        "next": s["next"]} for s in steps]
         for s in steps:
             r = s["actor"]
@@ -417,7 +433,7 @@ def role_run(task_loop, task_dir, step_id, agent, head, launch):
             raise ValueError(f"{agent} has no earlier answer to check against; run step {earlier[-1]} first")
         diff = (f"from {found[0].get('head')} to HEAD: only the fixes and the clean-up since your last review, "
                 f"whose answer is {found[1]}")
-    skills = ", ".join(re.sub(r" \(flow and record: [^)]*\)$", "", s) for s in step["skills"])  # lead's notation
+    skills = ", ".join(REPLACED_NOTE.sub("", s) for s in step["skills"])
     values = {"task": task_loop["task"], "repo": task_loop["repo"], "base": base, "head": head, "diff": diff,
               "task folder": task_dir, "skill": skills, "skills": skills,
               "full test command": task_loop.get("tests_full") or "none is set; write `not run: no full test command`",
@@ -468,8 +484,7 @@ def render(cfg, task, difficulty, trivial, resolved, profiles, call_name, which=
         st = s["stage"]
         first = i == 1 or steps[i - 2]["stage"] != st
         tab = f"`{labels[st]}`" if first else ""
-        skills = ", ".join(shown(n, resolved, call_name, cfg.get("skills", {})) for n in s.get("skills", [])
-                           if resolved[n][0] != "missing" or n in KIT) or "-"
+        skills = ", ".join(shown_skills(s, resolved, call_name, cfg.get("skills", {}))) or "-"
         nxt = "; ".join(f"{k} → {v}" + (f" ({stage[v]})" if v in stage and stage[v] != st else "")
                         + (" (build session)" if v != STOP and v not in stage else "")
                         for k, v in s["next"].items())

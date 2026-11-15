@@ -106,7 +106,6 @@ TEST_PATHS = ["**/tests/**", "**/test/**", "**/__tests__/**", "**/*_test.*", "**
               "**/*.spec.*", "**/spec/**"]
 CI_PATHS = ["**/.github/workflows/**", "**/.gitlab-ci.yml", "**/Jenkinsfile", "**/.circleci/**",
             "**/azure-pipelines.yml"]
-# What an agent reads as instructions in a clone. A lead that edits them could steer its reviewers.
 AGENT_PATHS = ["**/.claude/**", "**/CLAUDE.md", "**/CLAUDE.local.md", "**/AGENTS.md"]
 SKIP_MARKERS = re.compile(r"@pytest\.mark\.(skip|xfail)|\b(it|test|describe)\.skip\(|\bx(it|describe)\(|"
                           r"\bt\.Skip(Now|f)?\(|@Ignore\b|@Disabled\b|#\[ignore\]|unittest\.skip|\.only\(")
@@ -408,21 +407,15 @@ def record_checks(task_loop, step_id, task_dir, cwd=None):
     """What one step left behind: its `end` line's evidence and the record of
     each of its default skills. Returns the report; "ok" is False when a
     record is missing or wrong."""
-    import adapters
     import loop as loops
-    kit = re.escape(adapters.get(adapters.DEFAULT).PLUGIN)  # a default skill's call name: foreman-kit:<name>
     steps = [s for w in ("work", "check") for s in task_loop.get(w, [])]
     step = next((s for s in steps if s["id"] == step_id), None)
     if step is None:
         raise ValueError(f"step {step_id!r} is not in this task's loop; its steps are "
                          f"{', '.join(s['id'] for s in steps)}")
-    defaults = []
-    for shown in step.get("skills", []):
-        m = re.search(rf"\(flow and record: {kit}:([a-z-]+)\)", shown) or re.fullmatch(rf"{kit}:([a-z-]+)", shown)
-        if m and m.group(1) in loops.KIT and m.group(1) not in defaults:
-            defaults.append(m.group(1))
+    defaults = loops.recorded_defaults(step.get("skills", []))
     ctx = {"task_dir": task_dir, "cwd": cwd}
-    ended = [r for r in _rows(os.path.join(task_dir, "status.jsonl"))
+    ended = [r for r in _jsonl_rows(os.path.join(task_dir, "status.jsonl"))
              if r.get("event") == "end" and r.get("step") == step_id]
     evidence = str(ended[-1].get("done") or "") if ended else ""
     checks = [{"check": "evidence", "ok": bool(evidence.strip()),
@@ -431,49 +424,32 @@ def record_checks(task_loop, step_id, task_dir, cwd=None):
     unchecked = []
     if step["actor"] in roles:
         answers = latest_answers(task_dir, step["actor"])
-        good = [(a, m) for a, m, text in answers if m.get("ok") is True and last_verdict(text)]
+        good = [(agent, meta) for agent, meta, text in answers if meta.get("ok") is True and last_verdict(text)]
         checks.append({"check": f"answer:{step['actor']}", "ok": bool(good),
-                       "evidence": ", ".join(f"{a} {str(m.get('head') or '?')[:7]} {m.get('verdict') or ''}".strip()
-                                             for a, m in good) or f"no finished answer of {step['actor']} with a verdict"})
+                       "evidence": ", ".join(
+                           f"{agent} {str(meta.get('head') or '?')[:7]} {meta.get('verdict') or ''}".strip()
+                           for agent, meta in good) or f"no finished answer of {step['actor']} with a verdict"})
         return {"step": step_id, "skills": defaults, "checks": checks, "unchecked": [],
                 "ok": all(c["ok"] for c in checks)}
     plan_text = read_task_file(ctx, "plan.md")
+    in_build = bool({"tdd", "commit"} & set(defaults))
     for skill in defaults:
         problems = None
         if skill == "work-breakdown":
-            found = table(plan_text or "", "Work breakdown")
-            header = [h.lower() for h in found[0]] if found else []
-            problems = (["no plan.md"] if plan_text is None else ["plan.md has no work breakdown"] if found is None
-                        else [f"the work breakdown has no {c} column" for c in ("test", "status", "commit")
-                              if c not in header] + (["the work breakdown has no rows"] if not found[1] else []))
+            problems = _breakdown_problems(plan_text)
         elif skill == "cross-check" and "work-breakdown" in defaults:
             scenario = read_task_file(ctx, "scenario.md")
-            problems = [] if task_loop.get("trivial") else (
-                ["no scenario.md"] if scenario is None else
-                (["scenario.md has no numbered step (### 1 · ...)"] if not re.search(r"^###\s+\d+", scenario, re.M)
-                 else []) + (["scenario.md has no Expect line"] if "**Expect**" not in scenario else []))
+            problems = [] if task_loop.get("trivial") else _scenario_plan_problems(scenario)
         elif skill == "cross-check":
-            if task_loop.get("trivial"):
-                problems = []
-            else:
-                scenario = read_task_file(ctx, "scenario.md")
-                closing = (section(scenario or "", "Closing") or "").strip()
-                problems = (["no scenario.md"] if scenario is None else
-                            (["scenario.md has no closing verdict"] if not re.match(r"Verdict:\s*\w+", closing, re.I)
-                             else []) + ([f"scenario.md has {empty_agent_blocks(scenario)} Agent block(s) with no output"]
-                                         if empty_agent_blocks(scenario) else []))
+            problems = [] if task_loop.get("trivial") else _scenario_run_problems(read_task_file(ctx, "scenario.md"))
         elif skill in ("tdd", "commit"):
             problems = _commit_problems(plan_text, cwd)
-        elif skill == "unit" and not {"tdd", "commit"} & set(defaults):
-            problems = [] if re.search(r"^###\s+Tests near the change", section(plan_text or "", "Checks") or "",
-                                       re.M | re.I) else ["plan.md's Checks has no \"Tests near the change\" entry"]
+        elif skill == "unit" and not in_build:
+            problems = _checks_entry_problems(plan_text, "Tests near the change")
         elif skill == "smoke":
-            problems = [] if re.search(r"^###\s+Smoke", section(plan_text or "", "Checks") or "", re.M | re.I) \
-                else ["plan.md's Checks has no \"Smoke\" entry"]
+            problems = _checks_entry_problems(plan_text, "Smoke")
         elif skill == "handoff":
-            handoff = read_task_file(ctx, "handoff.md")
-            problems = ["no handoff.md"] if handoff is None else [
-                f"handoff.md lacks {n}" for n in HANDOFF_SECTIONS if section(handoff, n) is None]
+            problems = _handoff_problems(read_task_file(ctx, "handoff.md"))
         if problems is None:
             if skill != "unit":
                 unchecked.append(skill)
@@ -484,7 +460,7 @@ def record_checks(task_loop, step_id, task_dir, cwd=None):
             "ok": all(c["ok"] for c in checks)}
 
 
-def _rows(path):
+def _jsonl_rows(path):
     rows = []
     try:
         with open(path, encoding="utf-8") as f:
@@ -501,17 +477,16 @@ def _rows(path):
 
 
 def _commit_problems(plan_text, cwd):
-    """Every row done, each with a commit in the clone and in HEAD's history."""
-    found = table(plan_text or "", "Work breakdown")
-    if not found or not found[1]:
+    header, rows = table(plan_text or "", "Work breakdown") or ([], [])
+    if not rows:
         return ["plan.md has no work breakdown rows"]
-    header = [h.lower() for h in found[0]]
+    header = [h.lower() for h in header]
     if "status" not in header or "commit" not in header:
         return ["the work breakdown has no status or commit column"]
     if not cwd:
         return ["needs --cwd, the lead's clone, to find the commits"]
     problems = []
-    for row in found[1]:
+    for row in rows:
         if len(row) != len(header):
             problems.append(f"{row[0] or '?'}: {len(row)} cells, not {len(header)}")
             continue
@@ -524,6 +499,55 @@ def _commit_problems(plan_text, cwd):
                             capture_output=True).returncode != 0:
             problems.append(f"{row[0]}'s commit {sha} is not in the clone's history")
     return problems
+
+
+def _breakdown_problems(plan_text):
+    if plan_text is None:
+        return ["no plan.md"]
+    found = table(plan_text, "Work breakdown")
+    if found is None:
+        return ["plan.md has no work breakdown"]
+    header, rows = found
+    header = [h.lower() for h in header]
+    problems = [f"the work breakdown has no {c} column" for c in ("test", "status", "commit") if c not in header]
+    if not rows:
+        problems.append("the work breakdown has no rows")
+    return problems
+
+
+def _scenario_plan_problems(scenario):
+    if scenario is None:
+        return ["no scenario.md"]
+    problems = []
+    if not re.search(r"^###\s+\d+", scenario, re.M):
+        problems.append("scenario.md has no numbered step (### 1 · ...)")
+    if "**Expect**" not in scenario:
+        problems.append("scenario.md has no Expect line")
+    return problems
+
+
+def _scenario_run_problems(scenario):
+    if scenario is None:
+        return ["no scenario.md"]
+    problems = []
+    if not re.match(r"Verdict:\s*\w+", (section(scenario, "Closing") or "").strip(), re.I):
+        problems.append("scenario.md has no closing verdict")
+    empty = empty_agent_blocks(scenario)
+    if empty:
+        problems.append(f"scenario.md has {empty} Agent block(s) with no output")
+    return problems
+
+
+def _checks_entry_problems(plan_text, entry):
+    if re.search(rf"^###\s+{entry}", section(plan_text or "", "Checks") or "", re.M | re.I):
+        return []
+    return [f"plan.md's Checks has no \"{entry}\" entry"]
+
+
+def _handoff_problems(handoff):
+    if handoff is None:
+        return ["no handoff.md"]
+    return [f"handoff.md lacks {n}" for n in HANDOFF_SECTIONS if section(handoff, n) is None]
 
 
 def check_command(pr, spec, ctx):
@@ -558,9 +582,7 @@ CHECKS = {"pr-open": check_pr_open, "loop-file": check_loop_file, "steps": check
 
 
 def check_name(spec):
-    """How a check is named in --skip and in the report: `verdict:<role>` for
-    a verdict, a command check's "name" when it has one, its check name
-    otherwise."""
+    """How a check is named in --skip and in the report."""
     if spec["check"] == "verdict":
         return f"verdict:{spec['role']}"
     return spec.get("name") or spec["check"]
@@ -596,41 +618,47 @@ def validate_gate(gate):
             problems.append(f"gate: command check {i + 1} needs run or from_base, not both")
         elif name == "loop-file" and not spec.get("sha256"):
             problems.append(f"gate: loop-file check {i + 1} needs sha256")
-        if isinstance(spec, dict) and spec.get("severity", "block") not in ("block", "warn"):
-            problems.append(f"gate: check {i + 1} severity must be block or warn")
-        if isinstance(spec, dict) and spec.get("at", "merge") != "merge":
-            problems.append(f"gate: check {i + 1} at must be merge, or left out")
-    problems += _name_problems([s for s in gate.get("checks", []) if isinstance(s, dict) and "name" in s], "gate")
+        if isinstance(spec, dict):
+            problems += _severity_at_problems(spec, i)
+    problems += _name_problems([s for s in gate.get("checks", []) if isinstance(s, dict) and "name" in s])
     if not gate.get("checks"):
         problems.append("gate: no checks")
     return problems
 
 
-def _name_problems(specs, where):
-    """Named checks: command checks only, each name a word of lower-case
-    letters, digits and '-', used once, and not the name of a standard check."""
+def _severity_at_problems(spec, i):
+    problems = []
+    if spec.get("severity", "block") not in ("block", "warn"):
+        problems.append(f"gate: check {i + 1} severity must be block or warn")
+    if spec.get("at", "merge") != "merge":
+        problems.append(f"gate: check {i + 1} at must be merge, or left out")
+    return problems
+
+
+def _name_problems(specs):
     problems, seen = [], set()
     for spec in specs:
         name = spec.get("name")
         if not isinstance(name, str):
-            problems.append(f"{where}: check name {name!r} must be lower-case letters, digits and '-'")
+            problems.append(f"gate: check name {name!r} must be lower-case letters, digits and '-'")
             continue
         if spec.get("check") != "command":
-            problems.append(f"{where}: only a command check takes a name, not {spec.get('check')!r}")
+            problems.append(f"gate: only a command check takes a name, not {spec.get('check')!r}")
         elif not CHECK_NAME.match(name):
-            problems.append(f"{where}: check name {name!r} must be lower-case letters, digits and '-'")
+            problems.append(f"gate: check name {name!r} must be lower-case letters, digits and '-'")
         elif name in CHECKS or name == "gate-file" or name.startswith("verdict"):
-            problems.append(f"{where}: check name {name!r} is taken by a standard check")
+            problems.append(f"gate: check name {name!r} is taken by a standard check")
         elif name in seen:
-            problems.append(f"{where}: check name {name!r} is used twice")
+            problems.append(f"gate: check name {name!r} is used twice")
         seen.add(name)
     return problems
 
 
 def project_check_problems(checks):
     """Problems in a project's own gate checks (`gate` in project.json): a
-    list of command checks, each with a name and a command, and optionally a
-    severity and "at": "merge"."""
+    list of command checks, each with a name and either `run` (a command) or
+    `from_base` (a script path in the repository), and optionally a severity
+    and "at": "merge"."""
     if not isinstance(checks, list):
         return ["gate: must be a list of checks"]
     problems = []
@@ -646,19 +674,17 @@ def project_check_problems(checks):
         if "name" not in spec:
             problems.append(f"gate: check {i + 1} needs a name")
         has_run = isinstance(spec.get("run"), str) and bool(spec["run"].strip())
-        base = spec.get("from_base")
-        if base is not None and not (isinstance(base, str) and base.strip() and not base.startswith("/")
-                                     and ".." not in base.split("/")):
+        from_base = spec.get("from_base")
+        inside_repo = (isinstance(from_base, str) and bool(from_base.strip()) and not from_base.startswith("/")
+                       and ".." not in from_base.split("/"))
+        if from_base is not None and not inside_repo:
             problems.append(f"gate: check {i + 1} from_base must be a path inside the repository")
-        elif has_run == (base is not None):
+        elif has_run == (from_base is not None):
             problems.append(f"gate: check {i + 1} needs run (a command) or from_base (a script on the base), "
                             f"one of them")
-        if spec.get("severity", "block") not in ("block", "warn"):
-            problems.append(f"gate: check {i + 1} severity must be block or warn")
-        if spec.get("at", "merge") != "merge":
-            problems.append(f"gate: check {i + 1} at must be merge, or left out")
+        problems += _severity_at_problems(spec, i)
     named = [s for s in checks if isinstance(s, dict) and s.get("check") == "command" and "name" in s]
-    return problems + _name_problems(named, "gate")
+    return problems + _name_problems(named)
 
 
 def template(task_loop, loop_sha=None, pr=None):
@@ -692,6 +718,20 @@ def template(task_loop, loop_sha=None, pr=None):
                {"check": "ready"}]
     return {"repo": task_loop["repo"], "pr": pr, "task": task_loop["task"], "difficulty": task_loop["difficulty"],
             "trivial": task_loop["trivial"], "checks": checks}
+
+
+def append_gate_run(task_dir, report, before_ready, skip=(), sha_checked=False):
+    import datetime
+    row = {"time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "head": report["head"], "before_ready": before_ready, "pass": report["pass"],
+           "blocked": report["blocked"],
+           "warned": [r["check"] for r in report["checks"] if not r["ok"] and r["severity"] == "warn"],
+           "skipped": sorted(skip), "sha_checked": sha_checked}
+    try:
+        with open(os.path.join(task_dir, "gates.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError as e:
+        print(f"gate.py: could not record the run in {task_dir}/gates.jsonl: {e}", file=sys.stderr)
 
 
 def main(argv):
@@ -769,30 +809,14 @@ def main(argv):
                               "evidence": "the gate file changed after the brief"}]}
         print(json.dumps(report, indent=2))
         if task_dir:
-            record(task_dir, report, args.before_ready, skip, True)
+            append_gate_run(task_dir, report, args.before_ready, skip, sha_checked=True)
         return EXIT_GATE_FAILED
     cwd = os.path.expanduser(args.cwd) if args.cwd else None
     report = evaluate(fetch(gate["repo"], gate["pr"]), gate, cwd, skip, task_dir, args.before_ready)
     print(json.dumps(report, indent=2, ensure_ascii=False))
     if task_dir:
-        record(task_dir, report, args.before_ready, skip, bool(args.sha))
+        append_gate_run(task_dir, report, args.before_ready, skip, sha_checked=bool(args.sha))
     return 0 if report["pass"] else EXIT_GATE_FAILED
-
-
-def record(task_dir, report, before_ready, skip=(), sha_checked=False):
-    """Append one run's summary to the task folder's gates.jsonl. A failed
-    write is said on stderr and changes nothing about the result."""
-    import datetime
-    row = {"time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-           "head": report["head"], "before_ready": before_ready, "pass": report["pass"],
-           "blocked": report["blocked"],
-           "warned": [r["check"] for r in report["checks"] if not r["ok"] and r["severity"] == "warn"],
-           "skipped": sorted(skip), "sha_checked": sha_checked}
-    try:
-        with open(os.path.join(task_dir, "gates.jsonl"), "a", encoding="utf-8") as f:
-            f.write(json.dumps(row) + "\n")
-    except OSError as e:
-        print(f"gate.py: could not record the run in {task_dir}/gates.jsonl: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

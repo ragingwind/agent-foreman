@@ -40,9 +40,9 @@ part.
 Every question about a setting that already has a value offers that value
 first, as `Keep: <value>`, marked recommended. A person who wants nothing
 changed answers each part with its first options. A part whose answers keep
-every value saves nothing. One exception: in the loop part, a project's or
-the person's skill that fits a step is recommended over a default skill
-nobody chose for it (`loop.md` "2. Fit each step").
+every value saves nothing. There is one exception, in the loop part. When a
+project's skill or the person's skill fits a step, recommend it over a default
+skill that nobody chose for that step (`loop.md` "2. Fit each step").
 
 ## 3. Do each part
 

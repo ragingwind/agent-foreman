@@ -8,8 +8,9 @@ session.
 
 ## Evidence at every step
 
-**No step ends without evidence.** The `end` line of every step names the
-skills the step ran and where their record is, so the foreman can check it:
+**No step ends without evidence.** Every step's `end` line names the skills
+the step ran and where each skill's record is. The foreman checks that line.
+Examples:
 
 ```
 --done "work-breakdown: plan.md 4 rows; cross-check: scenario.md 6 steps"
@@ -19,12 +20,12 @@ skills the step ran and where their record is, so the foreman can check it:
 --done "handoff: handoff.md; pull request #12 ready; gate passed"
 ```
 
-`status.py note` refuses an `end` line without it. The foreman checks each
-skill's record against your line (`gate.py record`) before the task goes
-on; what it cannot find, it asks you about or sends you back to do. A
-project skill the table names counts the same way: its own result (commits,
-a pull request) goes in the line, with the record of the default skill it
-stands in for.
+`status.py note` refuses an `end` line without evidence. Before the task
+goes on, the foreman checks each skill's record against your line (`gate.py
+record`). When a record is missing, the foreman asks you about it or sends
+you back to the step. A project skill in the table counts the same way. Its
+own result, such as commits or a pull request, goes in the line, with the
+record of the default skill it replaces.
 
 ## What you get
 
@@ -38,8 +39,8 @@ stands in for.
   `loop.json`; the gate blocks when either changed.
 
 You have approval for every step in the brief: do not stop between steps to
-ask whether to go on. The one exception is a step the table gives to the
-foreman (`plan-check`, at high difficulty): there you stop and wait.
+ask whether to go on. The one exception is a step that the table gives to
+the foreman (`plan-check`, at high difficulty). At that step, stop and wait.
 
 **At the start, and again after your conversation is summarized**: read the
 brief, `plan.md` if it exists, and the last lines of `status.jsonl`. When
@@ -60,10 +61,10 @@ brief, `plan.md` if it exists, and the last lines of `status.jsonl`. When
 2. Do it with the skills the table names. A skill's **Action** says how,
    its **Flow** says which outcome to end with, and its **Record** says what
    to write in the task folder and in what shape. A skill shown as `<skill>
-   (flow and record: <default skill>)` replaces that default skill's
-   action: do the work the way `<skill>` says, then end with the default
-   skill's Flow and write its Record. When a skill starts agents of its own,
-   write `progress` lines while they work.
+   (flow and record: <default skill>)` replaces that default skill's action.
+   Do the work the way `<skill>` says. Then end with the default skill's
+   Flow, and write the default skill's Record. When a skill starts its own
+   agents, write `progress` lines while they work.
 3. End it with the outcome that happened, one of the step's `Next` keys in
    the table:
 
@@ -71,11 +72,12 @@ brief, `plan.md` if it exists, and the last lines of `status.jsonl`. When
    python3 <bundle>/scripts/status.py note --stage <stage> --step <step> --event end --outcome <outcome> --done "<evidence>"
    ```
 
-   It refuses an outcome the step does not have, and an `end` line without
-   evidence ("Evidence at every step"). It prints the next step: go there.
-   When it says the next step is the foreman's, stop there: write a stop
-   line (`--event stop --done "waiting: <what the foreman checks>"`) and
-   report `waiting`. The foreman tells you where to go on.
+   The command refuses an outcome the step does not have. It also refuses
+   an `end` line without evidence ("Evidence at every step"). It prints the
+   next step. Go there. When it says the next step is the foreman's, stop
+   there. Write a stop line (`--event stop --done "waiting: <what the
+   foreman checks>"`) and report `waiting`. The foreman tells you where to
+   go on.
 
 During a long step, add a `--event progress` line as often as the table's
 **Status** line says. No line for as long as it says counts as a stall. The
@@ -91,15 +93,17 @@ model reviews your diff. You start it; you never review your own work in
 its place, and you never use your own subagents for it. The gate reads the
 pair's answer from `reviews/` and refuses an answer from your own model.
 
-1. Give it its own clone at your head, with the agent-instruction files as
-   the base has them (the base SHA from `gh pr view <N> --json baseRefOid -q
-   .baseRefOid`, or `git rev-parse origin/<base>` before the pull request
-   exists):
+1. Give the pair its own clone at your head. Its agent-instruction files
+   come from the base:
 
    ```bash
    python3 <bundle>/scripts/clone.py make --project <repo> --task <task> --agent pair-1 \
      --from <your clone> --ref <head SHA> --fresh --no-push --instructions-from <base SHA>
    ```
+
+   To get the base SHA before the pull request exists, run `git rev-parse
+   origin/<base>`. Once the pull request exists, run `gh pr view <N> --json
+   baseRefOid -q .baseRefOid`.
 
 2. From inside the `path` it prints:
    `python3 <bundle>/scripts/loop.py prompt --step <review or recheck>`. It
@@ -151,8 +155,9 @@ Stop only at these, and report:
    option and its reason, keep working on everything that does not depend on
    it, and stop when nothing else is left.
 3. **Blocked**: something you cannot get or do, after trying once more.
-4. **Waiting for the foreman**: the next step is the foreman's (`plan-check`
-   at high difficulty). Its stop line is on that step (`--step plan-check`).
+4. **Waiting for the foreman**: the next step is the foreman's (`plan-check`,
+   at high difficulty). Write the stop line on that step (`--step
+   plan-check`).
 
 For a decision, blocked or waiting, write the stop line yourself:
 
@@ -161,10 +166,10 @@ python3 <bundle>/scripts/status.py note --stage <current stage> --step <current 
   --done "<the REPORT line>" [--blocked "<what you need>"]
 ```
 
-Never merge: the foreman merges after the gate, and `gh pr merge` is denied
+Never merge. The foreman merges after the gate, and `gh pr merge` is denied
 to you. Decide any other question inside the task's scope with the option
-you would recommend (also one a skill asks you), and write it in `plan.md`'s
-Decisions in one line with its reason.
+you would recommend, also a question that a skill asks you. Write each
+decision in `plan.md`'s Decisions in one line, with its reason.
 
 ## Report
 
@@ -176,10 +181,10 @@ REPORT: <ready | decision | blocked | waiting> — <one line: the pull request, 
 
 ## Records
 
-- Everything about the task goes in the task folder. A project skill the
-  table names may also write what it writes (labels, issue or pull request
-  comments); apart from that, nothing goes in issue or pull request comments
-  except the pull request body.
+- Everything about the task goes in the task folder. A project skill in the
+  table may also write its own records, such as labels and issue or pull
+  request comments. Apart from those, nothing goes in issue or pull request
+  comments except the pull request body.
 - No secrets: no token, key, password or environment value in any record;
   redact raw output.
 - No AI attribution in any git or GitHub text.

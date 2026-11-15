@@ -69,12 +69,13 @@ Where a task goes back, and who decides:
 | verification | redteam-review | Try to break it: done-when, correctness, tests, structure, security | `redteam-review` |
 | | test | The full tests, then the user scenario test without reading the diff | `full`, `cross-check` |
 
-- **Evidence at every step.** No agent's word is taken that a step is done.
-  The lead ends every step with its evidence: the skills it ran and where
-  their record is. The foreman checks that record before the task goes on
-  and sends the step back when it falls short. The pair, the red team and QA
-  hand in answers with the evidence of each finding. At high difficulty the
-  foreman checks the plan against the task before any code is built.
+- **Evidence at every step.** The foreman does not accept an agent's claim
+  that a step is done. The lead ends every step with its evidence: the skills
+  it ran and where their record is. The foreman checks that record before the
+  task goes on. When the record is incomplete, the foreman sends the step
+  back. The pair, the red team and QA hand in answers with the evidence of
+  each finding. At high difficulty, the foreman checks the plan against the
+  task before any code is built.
 - **Other models check the work.** The pair, the red team and QA never run
   on the lead's profile. The gate refuses a verdict from the lead's model.
 - **One place for records.** Everything about a task is in its task folder.
@@ -96,7 +97,7 @@ work is done is asked by the skills and guides.
 | Verdicts count only from `reviews/`, from a model other than the lead's, at the head commit | QA follows the scenario without reading the diff |
 | Role prompts and launch commands come from the task's `loop.json` (`loop.py prompt`) | The three-round limit and the report line |
 | The gate blocks when the gate file or `loop.json` changed after the brief | High difficulty is yours to merge |
-| Every agent the foreman starts is denied `gh pr merge`, and a merge that did not pass the foreman's gate is reported to you; the project's own gate checks run with the standard ones | What a retro proposes; you decide each change |
+| Every agent that the foreman starts is denied `gh pr merge`. A merge that did not pass the foreman's gate is reported to you. The project's own gate checks run with the standard ones | What a retro proposes. You decide each change |
 
 Known limit: the lead can write in its own task folder, so no script stops
 it from writing a fake answer file into `reviews/`.
@@ -132,11 +133,12 @@ it from writing a fake answer file into `reviews/`.
    - **Project**: the repository, the machines and their checkout paths, and
      the full test command (it proposes the one in `CLAUDE.md` or your CI
      files).
-   - **Loop**: fits the project's skills and commands to each step, and
-     yours where the project has none; shows where they overlap and asks
-     which one does the work; adds the project's own gate checks; then asks
-     what else to change, such as what each difficulty runs. A step it
-     cannot fit yet keeps the default skill, and the retro comes back to it.
+   - **Loop**: fits the project's skills and commands to each step. Where
+     the project has none, it fits yours. It shows where skills overlap and
+     asks which one does the work. It adds the project's own gate checks.
+     Then it asks what else to change, such as what each difficulty runs. A
+     step that it cannot fit yet keeps the default skill, and the retro
+     comes back to that step.
    - **Other**: launch, tab labels, the report, check times, disk, merge
      steps.
 
@@ -155,11 +157,11 @@ it from writing a fake answer file into `reviews/`.
    Start it again the same way, and it opens with the last exchanges of the
    project's earlier foreman and picks up from there.
 
-   After a batch of tasks merges, the foreman offers a retro: it reads what
-   the finished tasks show (the steps they went back to, the findings, the
-   gate blocks, the stalls) and proposes changes to the loop, each with its
-   evidence. You pick which ones to keep; the next retro checks whether they
-   helped.
+   After a batch of tasks merges, the foreman offers a retro. It reads what
+   the finished tasks show: the steps they went back to, the findings, the
+   gate blocks and the stalls. Then it proposes changes to the loop, each
+   with its evidence. You pick which changes to keep. The next retro checks
+   whether those changes helped.
 
 Agents start with `--dangerously-skip-permissions`, so they do not stop for
 permission prompts. To have them ask, set `launch.permission` to `default`

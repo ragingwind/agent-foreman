@@ -75,7 +75,7 @@ def _tree(src):
 def contents(cfg, skill_dirs, kind=adapters.DEFAULT, plugins=None):
     """Every file of the bundle: relative path -> bytes. `plugins` (name ->
     directory) are carried whole under plugins/<name>/ and named in
-    config.json's `plugins`, for launch.py to load."""
+    config.json's `plugins`."""
     adapter = adapters.get(kind)
     plugins = plugins or {}
     settings = {k: cfg[k] for k in ("gateways", "profiles", "launch", "difficulty")}
@@ -204,10 +204,10 @@ def build(repo, extra, kind=adapters.DEFAULT, project_names=()):
             continue
         if source == "plugin" and value not in plugin_refs:
             plugin_refs.append(value)
-            name = value.split(":")[0]
-            if name == adapters.get(kind).PLUGIN:
-                fail(EXIT_SETUP_NEEDED, f"plugin {name} has the name of the bundle's own plugin; it cannot go along")
-            carried[name] = os.path.expanduser(whole[name])
+            plugin = value.split(":")[0]
+            if plugin == adapters.get(kind).PLUGIN:
+                fail(EXIT_SETUP_NEEDED, f"plugin {plugin} has the name of the bundle's own plugin; it cannot go along")
+            carried[plugin] = os.path.expanduser(whole[plugin])
         elif source == "bundle" and value not in refs:
             refs.append(value)
         elif source == "missing":

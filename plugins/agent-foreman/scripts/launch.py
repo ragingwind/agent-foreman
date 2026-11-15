@@ -142,15 +142,15 @@ def main():
     if bundle and kind != bundle_kind:
         fail(EXIT_SETUP_NEEDED, f"profile {profile_name} runs {kind}, but this bundle is for {bundle_kind}")
     adapter = adapters.get(kind)
-    dirs = [os.path.join(bundle, "plugins", n) for n in cfg.get("plugins", [])] if bundle else []
-    gone = [d for d in dirs if not os.path.isfile(os.path.join(d, ".claude-plugin", "plugin.json"))]
+    plugin_dirs = [os.path.join(bundle, "plugins", n) for n in cfg.get("plugins", [])] if bundle else []
+    gone = [d for d in plugin_dirs if not os.path.isfile(os.path.join(d, ".claude-plugin", "plugin.json"))]
     if gone:
         fail(EXIT_SETUP_NEEDED, f"the bundle lacks the plugin at {gone[0]}; push the bundle again (bundle.py push)")
     try:
         argv, env, clear = adapter.command(cfg, profile_name, name=args.name, session_id=args.session_id,
                                            bundle=bundle, print_mode=args.print_mode,
                                            disallowed=[t.strip() for t in args.disallow.split(",") if t.strip()],
-                                           resume=args.resume, plugin_dirs=dirs)
+                                           resume=args.resume, plugin_dirs=plugin_dirs)
     except adapters.TokenMissing as e:
         fail(EXIT_TOKEN_MISSING, f"token variable {e.variable} is not set in this environment")
     status = args.status or (os.path.join(task_dir, "status.jsonl") if task_dir else None)

@@ -806,7 +806,7 @@ def local_skills(plugins=None, user_skills_dir=None):
 
 def whole_plugins(cfg, plugins=None):
     """Plugin name -> its entry in the settings' plugin_dirs, for each plugin
-    loaded from there: its skills go to the agents with the plugin whole."""
+    loaded from there."""
     entries = {os.path.realpath(os.path.expanduser(d)): d for d in plugin_dirs(cfg)}
     plugins = plugin_list(plugin_dirs(cfg)) if plugins is None else plugins
     out = {}
@@ -821,9 +821,9 @@ def installed_elsewhere(plugins=None):
     """(plugin id, directory) of each plugin installed on this machine but not
     enabled for this folder, such as one installed for another project."""
     plugins = plugin_list() if plugins is None else plugins
-    enabled = {p["id"].split("@", 1)[0] for p in plugins if p.get("enabled")}
+    enabled_names = {p["id"].split("@", 1)[0] for p in plugins if p.get("enabled")}
     return [(p["id"], p["installPath"]) for p in plugins
-            if not p.get("enabled") and p.get("installPath") and p["id"].split("@", 1)[0] not in enabled
+            if not p.get("enabled") and p.get("installPath") and p["id"].split("@", 1)[0] not in enabled_names
             and not is_self(p["installPath"])]
 
 

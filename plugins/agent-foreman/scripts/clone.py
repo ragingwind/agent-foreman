@@ -95,11 +95,10 @@ def check(path):
         return {"ours": True, "path": real, **json.load(f)}
 
 
-def _unsafe(path, push=True):
+def _unsafe(path, push=True, restored=()):
     """Why removing a clone would lose work, or "". A clone that cannot push
     (--no-push) holds a judging agent's checkout of commits that live in the
     lead's clone, so only its tracked-file changes count."""
-    restored = set(check(path).get("restored", []))
     changed = [f for f in _git("diff", "--name-only", "HEAD", cwd=path).splitlines() if f not in restored]
     if changed:
         return "changes to tracked files: " + ", ".join(changed[:5])
@@ -119,7 +118,7 @@ def _remove_one(path, force):
     if here == found["path"] or here.startswith(found["path"] + os.sep):
         return "the working directory is inside it; run from outside"
     if not force:
-        reason = _unsafe(found["path"], found.get("push", True))
+        reason = _unsafe(found["path"], found.get("push", True), set(found.get("restored", [])))
         if reason:
             return reason + " (--force removes it anyway)"
     shutil.rmtree(found["path"])
@@ -150,7 +149,9 @@ def remove(key, task, agent=None, force=False):
 def restore_instructions(dest, sha):
     """Put the agent-instruction files back as commit `sha` has them. Returns
     the paths it changed."""
-    if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=dest, capture_output=True).returncode:
+    has_commit = subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=dest,
+                                capture_output=True).returncode == 0
+    if not has_commit:
         _git("fetch", "--quiet", "origin", sha, cwd=dest)
     restored = []
     for line in _git("diff", "--name-status", "--no-renames", sha, "HEAD", "--", *INSTRUCTIONS, cwd=dest).splitlines():

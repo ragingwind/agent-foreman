@@ -3,19 +3,19 @@
 The build session's loop (`work`) and the verification session's loop
 (`check`): their stages and steps, who acts in each step, the skill each step
 uses, and how the loops change with a task's difficulty. Also the foreman's
-management loop and the epic loop, and the project's own gate checks. Saved
-at the person's level (every project) or a project's.
+management loop, the epic loop, and the project's own gate checks. They are
+saved at the person's level (every project) or at a project's level.
 
-Each step's action is a default skill (`kit/skills/<name>`). A project's or
-the person's skill takes a step at one of three levels:
+Each step's action is a default skill (`kit/skills/<name>`). A project's skill
+or the person's skill can take a step at one of three levels:
 
 | Level | What it does | Saved as |
 | --- | --- | --- |
-| Replace the action | Does the default skill's work its own way. The default skill's flow (the outcome to end with) and record (what to write in the task folder) still apply; the brief shows both, as `cross-e2e (flow and record: foreman-kit:cross-check)` | `skills`: `{"cross-check": "cross-e2e"}` |
+| Replace the action | Does the default skill's work its own way. The default skill's flow (the outcome to end with) and record (what to write in the task folder) still apply. The brief shows both, as `cross-e2e (flow and record: foreman-kit:cross-check)` | `skills`: `{"cross-check": "cross-e2e"}` |
 | Add to the step | Runs beside the default skill, such as the project's review criteria for the pair | the step's `skills` |
-| Run the step | An orchestrator that does several things itself, such as a project skill that implements an issue up to a pull request, in `build` | the step's `does` and `skills`: run it up to its stop before merge, with its non-interactive options, then do what it does not (each `plan.md` row marked done with its commit, `progress` lines while its own agents work) |
+| Run the step | An orchestrator that does several things itself, such as a project skill that implements an issue up to a pull request, in `build` | the step's `does` and `skills`. The `does` says: run the skill up to its stop before merge, with its non-interactive options. Then do what the skill does not: mark each `plan.md` row done with its commit, and write `progress` lines while the skill's own agents work |
 
-No skill takes over a whole loop or stage: the gate needs every step's `end`
+No skill takes over a whole loop or stage. The gate needs every step's `end`
 line and the task folder's records, and the verdicts before ready come from
 other models.
 
@@ -34,16 +34,17 @@ stage; tab labels, status lines and reports follow the stages.
     step's skill would come from:
     `python3 <skill>/scripts/loop.py skills --project <repo> --machine <label>`;
   - the person's skills: `python3 <skill>/scripts/config.py skills`;
-  - plugin directories this session loads that the settings do not have
-    yet, and plugins installed on this machine but not enabled here (such as
-    one installed for another project):
-    `python3 <skill>/scripts/config.py plugin-dir-candidates`, then their
-    skills, before anything is saved: `python3 <skill>/scripts/config.py skills
-    --plugin-dir <dir>` (repeat the option for each). Scripts start a bare
-    `claude`, so they find those skills only through `plugin_dirs`.
-- What each candidate does: read its `SKILL.md` (a command's file) whole, not
-  only its description: a project's at `<checkout>/.claude/...` on that
-  machine, a person's at the path `config.py skills` prints.
+  - plugin directories that this session loads and the settings do not have
+    yet, and plugins installed on this machine but not enabled here, such as
+    one installed for another project:
+    `python3 <skill>/scripts/config.py plugin-dir-candidates`. Before anything
+    is saved, list their skills: `python3 <skill>/scripts/config.py skills
+    --plugin-dir <dir>` (repeat the option for each directory). Scripts start
+    a bare `claude`, so they find those skills only through `plugin_dirs`.
+- What each candidate does: read its `SKILL.md`, or a command's file, in full,
+  not only its description. A project's skill is at `<checkout>/.claude/...`
+  on that machine. A person's skill is at the path that `config.py skills`
+  prints.
 - The project's guides: `CLAUDE.md`, `AGENTS.md`, its rules folder, its
   contributing file, its CI files, and its `Makefile` or `package.json`
   scripts. Note each rule they state for a step: branch names, commit format,
@@ -52,62 +53,74 @@ stage; tab labels, status lines and reports follow the stages.
 
 ## 2. Fit each step
 
-Always, also when no one asked for it. For each step of `work` and `check`,
-and for the foreman's register and merge steps, in this order:
+Do this always, also when no one asked for it. For each step of `work` and
+`check`, and for the foreman's register and merge steps, go through this list
+in order:
 
 1. **The project has a skill or command for it** (the same name, or the same
    work): a candidate, at the level that fits.
 2. **The project has none**: ask with AskUserQuestion whether to look in the
-   person's own skills (`Search my skills`, recommended; `Keep the
-   default`). On search, ask which skills they mostly use for this kind of
-   work (multi-select: the person's skills found in "1. Detect" that come
-   closest, closest first), read the chosen ones, and fit them the same way.
-3. **No skill, but the guides state a rule for the step**: a line in the
-   step's `does`, a project gate check ("4. Project gate"), or a line in the
-   project's `memory.md` (the merge method; the person-approval classes as
-   `difficulty` patterns, so those tasks are high and the person merges).
+   person's own skills. The options are `Search my skills` (recommended) and
+   `Keep the default`. On search, ask which skills the person mostly uses for
+   this kind of work. Offer a multi-select of the person's skills found in
+   "1. Detect" that come closest, closest first. Read the chosen skills, and
+   fit them the same way.
+3. **No skill, but the guides state a rule for the step**: the rule becomes
+   a line in the step's `does`, a project gate check ("4. Project gate"), or
+   a line in the project's `memory.md`. The merge method goes in
+   `memory.md`. The classes of change the person approves become
+   `difficulty` patterns, so those tasks are high and the person merges
+   them.
 4. **Nothing**: the default skill.
 
-Check each candidate against this list, and show what it found:
+Check each candidate against this list, and show the person what you found:
 
 | The candidate | The rule |
 | --- | --- |
-| merges a pull request | Bound to no step: the foreman merges after the gate, and every agent is denied `gh pr merge`. Its merge method goes in `memory.md` |
-| makes worktrees, or needs the primary checkout on the default branch | Bound to no step: each agent works in its own clone |
+| merges a pull request | Bound to no step. The foreman merges after the gate, and every agent is denied `gh pr merge`. The candidate's merge method goes in `memory.md` |
+| makes worktrees, or needs the primary checkout on the default branch | Bound to no step. Each agent works in its own clone |
 | starts its own reviewers or testers | An overlap ("3. Overlaps") |
-| pushes after the pair's review | Only in a step before `review`: a later push moves the head, and the verdicts must be at the head |
-| asks the person midway | Bound with its non-interactive options in `does`; a question it still asks is a decision stop |
-| writes labels or pull request comments | Allowed, as the project's own records; a label is never a verdict |
-| calls a script by a path under `~` | Test that path on each machine; a missing one is the person's to fix |
+| pushes after the pair's review | Only in a step before `review`. A later push moves the head, and the verdicts must be at the head |
+| asks the person midway | Bound with its non-interactive options in `does`. A question it still asks is a decision stop |
+| writes labels or pull request comments | Allowed, as the project's own records. A label is never a verdict |
+| calls a script by a path under `~` | Test that path on each machine. A missing script is the person's to fix |
 
-Then ask with AskUserQuestion, one question per step with a candidate, up to
-four per call: `Keep: <what it uses now>` first, then each candidate with its
-level and where it comes from. Recommend the candidate that fits with no
-conflict when the step still has the default nobody chose; else `Keep`.
+Then ask with AskUserQuestion: one question per step that has a candidate, up
+to four per call. Offer `Keep: <what it uses now>` first, then each candidate
+with its level and where it comes from. When the step still has a default that
+nobody chose, recommend the candidate that fits with no conflict. Otherwise,
+recommend `Keep`.
 
 ## 3. Overlaps
 
-A bound skill may do work another step also does: its own reviewers and the
-pair's review, its own brief and `plan`, its own finalizer and `finalize`, its
-own test run and `verify`. Show every overlap in one table: the two, what
-each does, and the cost of each choice (time, tokens, what is lost). Then ask
-with AskUserQuestion, one question per overlap: keep one (recommended: the
-one that does the work better, so it is done once), or keep both.
+A bound skill may do work that another step also does. Examples are its own
+reviewers and the pair's review, its own brief and `plan`, its own finalizer
+and `finalize`, and its own test run and `verify`. Show every overlap in one
+table: the two, what each does, and the cost of each choice (time, tokens,
+what is lost). Then ask with AskUserQuestion, one question per overlap. The
+options are to keep one or to keep both. Recommend keeping the one that does
+the work better, so the work is done once.
 
-The verdicts other models give (the pair, the red team, QA) stay in every
+The verdicts from other models (the pair, the red team, QA) stay in every
 option. When the project's review is the better one, it becomes the role's
-skill (the `skills` of `review` and `recheck`), so the review runs once, on
+skill (the `skills` of `review` and `recheck`). Then the review runs once, on
 another model. A project's QA procedure becomes the QA role's skill the same
 way. A role agent reads such a skill as the base branch has it (`clone.py
-make --instructions-from`), so the change under review cannot rewrite it.
+make --instructions-from`), so the change under review cannot rewrite the
+skill.
 
 ## 4. Project gate
 
-The standard gate always runs (`ARCHITECTURE.md` "8. Gates"). The project adds
-checks of its own: scripts it has for a pull request (a closing-keyword or a
-body-format check), checks its guides require that CI does not run (a lint or
-format check that writes nothing), a label its skills set. Each is a named
-command check in the project's `gate`:
+The standard gate always runs (`ARCHITECTURE.md` "8. Gates"). The project can
+add its own checks:
+
+- A script it has for a pull request, such as a closing-keyword check or a
+  body-format check.
+- A check its guides require that CI does not run, such as a lint or format
+  check that changes no file.
+- A label that its skills set.
+
+Each one is a named command check in the project's `gate`:
 
 ```json
 "gate": [
@@ -120,19 +133,21 @@ command check in the project's `gate`:
 - A command runs in the lead's clone with `AF_REPO`, `AF_PR`, `AF_TASK`,
   `AF_TASK_DIR`, `AF_BASE`, `AF_BASE_SHA` (the base branch's head on GitHub)
   and `AF_HEAD` set.
-- A script from the repository is a `from_base` check: the gate takes it
-  from `AF_BASE_SHA` itself and runs it, and a script it cannot get blocks.
-  Never `run` a repository script, nor one that reads `origin/...`: the lead
-  can change its own clone and its refs. In the script, name commits by
-  `AF_BASE_SHA` and `AF_HEAD`, and fail on an empty or unreadable range.
+- A script from the repository is a `from_base` check. The gate takes the
+  script from `AF_BASE_SHA` itself and runs it. A script that the gate cannot
+  get blocks. Never `run` a repository script, or a script that reads
+  `origin/...`, because the lead can change its own clone and its refs. In
+  the script, name commits by `AF_BASE_SHA` and `AF_HEAD`. Make the script
+  fail on an empty or unreadable range.
 - `"at": "merge"` runs a check only at the merge gate. `"severity": "warn"`
-  reports without blocking; a label an agent sets itself is always `warn`,
-  since it proves only that the agent said so.
-- A name is lower-case letters, digits and `-`, used once, and not a standard
-  check's; it stands for the check in the report and in `--skip`.
+  reports without blocking. A label that an agent sets itself is always
+  `warn`, because it proves only that the agent said so.
+- A name is lower-case letters, digits and `-`. It is used once, and it is
+  not a standard check's name. The name stands for the check in the report
+  and in `--skip`.
 
-Ask with AskUserQuestion (multi-select): each check found, the ones a guide
-or CI requires first.
+Ask with AskUserQuestion (multi-select), with each check you found. Put the
+ones that a guide or CI requires first.
 
 ## 5. Ask about the rest once
 
@@ -158,17 +173,17 @@ Go into the chosen parts only.
   default.
 - **Skills per step**: an extra skill a step uses besides its default one.
   For each step the person picks, `Keep: <its skills now>` first, then the
-  project's skills, then the person's. Save the bare name (`cross-e2e`);
-  where it comes from is decided per machine when a task starts. Save the full
+  project's skills, then the person's. Save the bare name (`cross-e2e`).
+  Where it comes from is decided per machine when a task starts. Save the full
   `plugin:skill` only when the bare name matches more than one of the
   person's skills. A skill from a plugin directory found in step 1 adds that
-  directory to `plugin_dirs` at the scope of the choice (the project's when
-  this setup has a project). The bundle carries that plugin whole, so no
-  machine needs it installed; prefer a directory that does not change with
-  the plugin's version over a cache path.
+  directory to `plugin_dirs`, at the scope of the choice: the project's, when
+  this setup has a project. The bundle carries that plugin whole, so no
+  machine needs the plugin installed. Prefer a directory that stays the same
+  across the plugin's versions to a cache path.
 - **Run the step**: the step's `does` names the skill, its non-interactive
-  options, its stop before merge, and what the lead does after it; its
-  `skills` hold the skill and the step's default skills, whose flow and
+  options, its stop before merge, and what the lead does after it. The step's
+  `skills` hold that skill and the step's default skills, whose flow and
   record still apply.
 - **Steps**: a new step needs an `id`, its `stage`, an `actor` (`lead`,
   `foreman`, `person`, or a role), what it `does`, its `skills`, and `next`
@@ -186,12 +201,12 @@ Go into the chosen parts only.
   prompt must keep its `Verdict:` line, and each verdict word must be an
   outcome of the role's steps: the gate reads the last one in the answer that
   `launch.py --role` saves in the task folder.
-- **Project gate** (step 4): the chosen checks in `gate`, at the project's
-  level.
+- **Project gate** (step 4): save the chosen checks in `gate`, at the
+  project's level.
 
 ## 7. Save and share
 
-Save at the scope from steps 2 and 5 (`setup.md` "4. Save"); `written` shows
+Save at the scope from steps 2 and 5 (`setup.md` "4. Save"). `written` shows
 each changed step by its `id`. Then show `loop.py show` again and one task's
 loop: `python3 <skill>/scripts/loop.py render --project <repo> --task <N>
 --difficulty mid --machine <label>`. For each skill it lists as missing:
@@ -201,10 +216,10 @@ loop: `python3 <skill>/scripts/loop.py render --project <repo> --task <N>
 - a name found nowhere is a typo or a skill to write; say which.
 
 Not every step fits at once. Show one table: each step, what it uses now,
-where that comes from, its level, and whether it is bound, the default, or
-open (a gap, or a question left for later). Go on with what is saved; the
-open ones keep the default. Log them, so the retro comes back to them
-(`SKILL.md` "Retro"):
+where that comes from, its level, and its state. The state is bound, the
+default, or open (a gap, or a question left for later). Go on with what is
+saved. The open steps keep the default. Log the open steps, so the retro
+comes back to them (`SKILL.md` "Retro"):
 
 ```bash
 python3 <skill>/scripts/log.py add --project <repo> --event setup --text "<n> steps fitted, <m> open" \

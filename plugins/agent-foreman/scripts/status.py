@@ -115,8 +115,12 @@ def check_note(task_loop, stage, step):
     return found, ""
 
 
+def step_of(task_loop, step_id):
+    return next((s for s in task_loop.get("work", []) + task_loop.get("check", []) if s["id"] == step_id), None)
+
+
 def describe(task_loop, step_id):
-    s = next((x for x in task_loop.get("work", []) + task_loop.get("check", []) if x["id"] == step_id), None)
+    s = step_of(task_loop, step_id)
     if s is None:
         return step_id
     skills = f" Skills: {', '.join(s['skills'])}." if s.get("skills") else ""
@@ -253,11 +257,10 @@ def main(argv):
                     rename_tab(entry.get("label", "").replace("<N>", str(args.round or 1)))
                 print("now: " + describe(task_loop, entry["id"]))
             elif args.event == "end":
-                after = next((s for s in task_loop.get("work", []) + task_loop.get("check", [])
-                              if s["id"] == target), None)
+                target_step = step_of(task_loop, target)
                 if target == STOP:
                     print("next: stop: no step follows; this is a stop point.")
-                elif after is not None and after["actor"] == "foreman" and not args.file:
+                elif target_step is not None and target_step["actor"] == "foreman" and not args.file:
                     print("next: " + describe(task_loop, target) + " This step is the foreman's: write a stop "
                           "line and report waiting (loop.md, Stop points); the foreman tells you where to go on.")
                 else:

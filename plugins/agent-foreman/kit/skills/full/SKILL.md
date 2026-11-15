@@ -24,7 +24,7 @@ description: >-
 
 ## Record
 
-**Evidence**: your answer is the step's evidence: each command with its output, and the verdict last.
+**Evidence**: your answer is the step's evidence. Give each command with its output, and put the verdict last.
 
 You write no file; you have no edit tools. launch.py saves your final answer, with your model, under `$AF_TASK_DIR/reviews/` (the task folder). QA does this and the user scenario test (`cross-check`) in one run and gives one answer: one line for each command, the mismatch lines, then one verdict:
 

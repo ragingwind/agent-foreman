@@ -21,7 +21,7 @@ description: >-
    5. Follow-ups: keep the lines already there. Add large clean-ups, `could` findings left open, and problems seen outside the task.
 3. **Push and open a draft pull request.**
    1. `git push -u origin <branch>`. If the branch was pushed before a rebase, use `git push --force-with-lease origin <branch>`.
-   2. No pull request yet: `gh pr create --draft --base <base> --head <branch> --title "<short imperative title>" --body-file "$AF_TASK_DIR/handoff.md"`. One exists (from an earlier round, or opened by a skill in an earlier step): `gh pr edit <number> --body-file "$AF_TASK_DIR/handoff.md"`, and when it is not a draft, `gh pr ready <number> --undo`, so that ready means the gate passed.
+   2. When there is no pull request yet, open a draft: `gh pr create --draft --base <base> --head <branch> --title "<short imperative title>" --body-file "$AF_TASK_DIR/handoff.md"`. A pull request may already exist, from an earlier round or from a skill in an earlier step. In that case, set its body: `gh pr edit <number> --body-file "$AF_TASK_DIR/handoff.md"`. When it is not a draft, make it one again: `gh pr ready <number> --undo`. Ready must mean that the gate passed.
    3. Check it: `gh pr view <number> --json url,headRefOid`. `headRefOid` must equal `git rev-parse HEAD`.
 4. **Wait for the checks**: `gh pr checks <number> --watch`, in the background or with a long timeout. When it says no checks are reported, go on. The gate blocks a check that has not finished.
 5. **Run the gate** with the command the brief gives. Exit 6: fix what it lists under `blocked`, then run it again. Do not edit the gate file.
@@ -60,7 +60,7 @@ Write `$AF_TASK_DIR/handoff.md` in exactly this shape:
 ````
 
 - A section with nothing in it says `none`.
-- The pull request body is this file, unchanged. When another skill replaces this one's action (the loop table shows `<skill> (flow and record: foreman-kit:handoff)`), the body is in the shape that skill asks and still holds this file's sections.
+- The pull request body is this file, unchanged. Another skill may replace this skill's action: the loop table then shows `<skill> (flow and record: foreman-kit:handoff)`. In that case, the body takes the shape that the other skill asks for, and it still holds this file's sections.
 
 ## Rules
 
