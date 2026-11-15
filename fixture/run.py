@@ -158,6 +158,9 @@ class Run:
             kind = out["report"].split()[1] if out["report"].startswith("REPORT:") else "none"
             if kind == "waiting":
                 word = self.plan_check(task, task_dir, rec)
+                if word is None:
+                    rec["result"] = "the foreman's plan-check wrote no end line"
+                    return self.finish(task, rec)
                 continue
             break
         if kind != "ready":
@@ -247,29 +250,36 @@ class Run:
         return entry
 
     def plan_check(self, task, task_dir, rec):
-        """The foreman's own judgment at plan-check, by a model, as SKILL.md has it."""
+        """The foreman's own judgment at plan-check, by a model, as SKILL.md has it. Returns the word for the
+        lead, or None when the foreman wrote no new end line for plan-check."""
         say(f"task {task}: plan-check by the foreman")
+        status = os.path.join(task_dir, "status.jsonl")
+        before = len([r for r in rows(status) if r.get("step") == "plan-check" and r.get("event") == "end"])
         prompt = (f"You are the foreman of agent-foreman for project {REPO}. Read {PLUGIN}/SKILL.md, the section "
                   f"\"Evidence at every step\", and do the plan-check for task {task} now: its lead is waiting. The "
                   f"task folder is {task_dir}. Run the scripts with python3 from {SCRIPTS}. Write plan-check's end line "
                   f"with `status.py note --file {task_dir}/status.jsonl` as that section says. Start no agent and "
                   f"message none. End with one line: `PLAN-CHECK: go — <why>` or `PLAN-CHECK: back — <what is "
                   f"missing>`.")
+        # The prompt goes on stdin: --disallowedTools takes every value after it, a prompt argument too.
         r = self.sh(["claude", "-p", "--model", "opus", "--dangerously-skip-permissions", "--output-format", "json",
-                     "--disallowedTools", "Bash(gh pr merge:*)", prompt], cwd=self.root, check=False, timeout=ROLE_TIMEOUT)
+                     "--disallowedTools", "Bash(gh pr merge:*)"], cwd=self.root, check=False, timeout=ROLE_TIMEOUT,
+                    stdin=prompt)
         try:
             data = json.loads(r.stdout)
         except ValueError:
-            data = {"result": r.stdout[-500:]}
+            data = {"result": (r.stdout + r.stderr)[-500:]}
         self.add_cost(data.get("total_cost_usd"))
         line = next((l.strip() for l in reversed(str(data.get("result", "")).splitlines())
                      if l.strip().startswith("PLAN-CHECK:")), "")
-        ends = [row for row in rows(os.path.join(task_dir, "status.jsonl"))
-                if row.get("step") == "plan-check" and row.get("event") == "end"]
-        rec.setdefault("plan_check", []).append({"line": line, "cost": data.get("total_cost_usd"),
-                                                 "end_line": ends[-1] if ends else None})
+        ends = [row for row in rows(status) if row.get("step") == "plan-check" and row.get("event") == "end"]
+        new = ends[-1] if len(ends) > before else None
+        rec.setdefault("plan_check", []).append({"line": line, "cost": data.get("total_cost_usd"), "end_line": new,
+                                                 "error": None if new else str(data.get("result", ""))[-500:]})
         say(f"task {task}: {line or 'no PLAN-CHECK line'}")
-        go = bool(ends) and ends[-1].get("outcome") == "go"
+        if new is None:
+            return None
+        go = new.get("outcome") == "go"
         why = line.split("—", 1)[1].strip() if "—" in line else ""
         return ("The foreman says: Go on to build. " if go else f"The foreman says: Go back to plan: {why}. ") + \
             "You were restarted: read the brief, plan.md and the last lines of status.jsonl, and go on."
