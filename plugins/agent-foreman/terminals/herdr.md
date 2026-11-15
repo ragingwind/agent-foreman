@@ -16,14 +16,15 @@ agent (its start errors, its input line, how to exit it) is in
 
 ```bash
 python3 <skill>/scripts/config.py machines        # label, ssh target, enabled
-H workspace list                                  # find the project's workspace label
-H workspace create --cwd <checkout> --label <workspace> --no-focus
+H workspace list                                  # the project's workspace has the settings' `workspace` label
 ```
 
-The new workspace id is `.result.workspace.workspace_id`. It comes with one
-shell tab (`.result.tab.tab_id`); leave it as the project's shell tab. It
-closes with the workspace (`H workspace close <w>`), which the foreman does
-only for a workspace it made.
+The foreman makes a project's workspace when it opens the first task tab
+on that machine ("Open a task tab"), not before, so no tab sits idle. herdr
+closes a workspace with its last tab: when the last task's tab closes, the
+workspace goes too, and the next task makes it again. Record its id in the
+ledger each time. A workspace the person made is used as it is, and the
+foreman never closes it.
 
 ## Open a task tab
 
@@ -32,13 +33,28 @@ the lead's first, on the tab's machine, at the task's base:
 
 ```bash
 python3 <skill>/scripts/clone.py make --project <repo> --task <task> --agent lead --ref origin/<base> --machine <label>
-H tab create --workspace <w> --cwd <clone> --label <task> --no-focus
 ```
 
 `<clone>` is the `path` it prints. `status: exists` means the task already
-has one; it is used as it is.
+has one; it is used as it is. Then the tab, in the project's workspace:
 
-The pane id is `.result.root_pane.pane_id`; the tab id is `.result.tab.tab_id`.
+- **No workspace with that label** on the machine: make it in the clone. Its
+  first tab is this task's tab.
+
+  ```bash
+  H workspace create --cwd <clone> --label <workspace> --no-focus
+  H tab rename <tab> <task>
+  ```
+
+  The workspace id is `.result.workspace.workspace_id`, the tab id
+  `.result.tab.tab_id`, the pane id `.result.root_pane.pane_id`.
+- **The workspace is there**:
+
+  ```bash
+  H tab create --workspace <w> --cwd <clone> --label <task> --no-focus
+  ```
+
+  The pane id is `.result.root_pane.pane_id`; the tab id is `.result.tab.tab_id`.
 
 ## Add a helper pane
 

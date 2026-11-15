@@ -23,8 +23,9 @@ description: >-
    1. `git push -u origin <branch>`. If the branch was pushed before a rebase, use `git push --force-with-lease origin <branch>`.
    2. No pull request yet: `gh pr create --draft --base <base> --head <branch> --title "<short imperative title>" --body-file "$AF_TASK_DIR/handoff.md"`. One exists from an earlier round: `gh pr edit <number> --body-file "$AF_TASK_DIR/handoff.md"`.
    3. Check it: `gh pr view <number> --json url,headRefOid`. `headRefOid` must equal `git rev-parse HEAD`.
-4. **Run the gate** with the command the brief gives. Exit 6: fix what it lists under `blocked`, then run it again. Do not edit the gate file.
-5. **Mark it ready**: `gh pr ready <number>`.
+4. **Wait for the checks**: `gh pr checks <number> --watch`, in the background or with a long timeout. When it says no checks are reported, go on. The gate blocks a check that has not finished.
+5. **Run the gate** with the command the brief gives. Exit 6: fix what it lists under `blocked`, then run it again. Do not edit the gate file.
+6. **Mark it ready**: `gh pr ready <number>`.
 
 ## Flow
 

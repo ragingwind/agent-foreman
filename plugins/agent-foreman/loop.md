@@ -87,7 +87,8 @@ point.
 ## Finalize and the gate
 
 Follow the `handoff` skill: rebase, write `handoff.md`, push and open a draft
-pull request whose body is `handoff.md`, then run the gate in your clone:
+pull request whose body is `handoff.md`, wait for its checks to finish (`gh
+pr checks <N> --watch`), then run the gate in your clone:
 
 ```bash
 python3 <bundle>/scripts/gate.py run <task folder>/gate.json --pr <N> --cwd <your clone> \

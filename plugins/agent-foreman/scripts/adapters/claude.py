@@ -49,10 +49,11 @@ def gateway_env(gateway, profile, environ):
 
 
 def command(cfg, profile_name, name=None, session_id=None, worktree=True, bundle=None, environ=None,
-            print_mode=False, disallowed=()):
+            print_mode=False, disallowed=(), resume=None):
     """Return (argv, variables to set, variable names to clear). In print mode
     the agent answers one prompt read from stdin and prints JSON (`claude -p`);
-    it runs where it is started, never in a worktree of its own."""
+    it runs where it is started, never in a worktree of its own. `resume`
+    continues an earlier session with its conversation, in the folder it ran in."""
     profile = cfg["profiles"][profile_name]
     gateway = cfg["gateways"][profile["gateway"]]
     env, clear = gateway_env(gateway, profile, os.environ if environ is None else environ)
@@ -66,7 +67,9 @@ def command(cfg, profile_name, name=None, session_id=None, worktree=True, bundle
         argv += ["-w"] + ([name] if name else [])
     if name:
         argv += ["--name", name]
-    if session_id:
+    if resume:
+        argv += ["--resume", resume]
+    elif session_id:
         argv += ["--session-id", session_id]
     argv += ["--model", model]
     if cfg["launch"]["permission"] == "bypass":

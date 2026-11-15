@@ -48,6 +48,35 @@ class RealKit(unittest.TestCase):
                 self.assertRegex(text, rf"[Ss]tep `{skills_of['id']}`", f"{name} says nothing of step {skills_of['id']}")
 
 
+PLUGIN = os.path.join(ROOT, "plugins", "agent-foreman")
+REF = re.compile(r'`([\w/.-]+\.md)` "([^"]+)"')
+
+
+class Documents(unittest.TestCase):
+    def test_every_section_a_document_names_exists(self):
+        """A reference such as `setup.md` "4. Save" names a heading of that file."""
+        for folder, _, files in os.walk(PLUGIN):
+            for name in files:
+                if not name.endswith(".md"):
+                    continue
+                with open(os.path.join(folder, name), encoding="utf-8") as f:
+                    text = f.read()
+                for target, heading in REF.findall(text):
+                    path = next((p for p in (os.path.join(folder, target), os.path.join(PLUGIN, target),
+                                             os.path.join(PLUGIN, "setup", target)) if os.path.isfile(p)), None)
+                    where = os.path.relpath(os.path.join(folder, name), PLUGIN)
+                    self.assertIsNotNone(path, f"{where}: no file {target}")
+                    with open(path, encoding="utf-8") as f:
+                        heads = [h.strip() for h in re.findall(r"^#+ (.+)$", f.read(), re.M)]
+                    self.assertIn(heading, heads, f"{where}: {target} has no section {heading!r}")
+
+    def test_the_foreman_agent_loads_its_skill_itself(self):
+        with open(os.path.join(PLUGIN, "agents", "agent-foreman.md"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotIn("initialPrompt", text)  # ignored for a plugin's agent: the session waits for a line
+        self.assertIn("/agent-foreman:agent-foreman", text)
+
+
 class RecordsMeetTheGate(unittest.TestCase):
     def setUp(self):
         self.home = TempHome()

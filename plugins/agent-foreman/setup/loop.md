@@ -81,9 +81,10 @@ Go into the chosen parts only.
 - **Steps**: a new step needs an `id`, its `stage`, an `actor` (`lead`,
   `foreman`, `person`, or a role), what it `does`, its `skills`, and `next`
   (each outcome to a step id or `stop`; the last outcome is the success
-  path, which must reach `stop`). It goes after an existing step (`"after": "<id>"`). A step is
-  removed with `{"id": "<id>", "remove": true}`. The order of existing steps
-  stays.
+  path, which must reach `stop`). Put it in the list where it runs, with no
+  `"after"` key: saving works out its place, and the dry run's `written`
+  shows it. A step is removed with `{"id": "<id>", "remove": true}`. The
+  order of existing steps stays.
 - **Difficulty**: per step, `run` at low, mid and high (`always`, `never`,
   `if-not-trivial`), `count` (how many agents, for a role's step) and
   `extra` (an added instruction). A stage whose steps all do not run is
@@ -98,7 +99,7 @@ Go into the chosen parts only.
 
 ## 5. Save
 
-At the scope from steps 2 and 3 (`SKILL.md` "Save"); `written` shows each
+At the scope from steps 2 and 3 (`setup.md` "4. Save"); `written` shows each
 changed step by its `id`. Then show `loop.py show` again and one task's loop:
 `python3 <skill>/scripts/loop.py render --project <repo> --task <N> --difficulty
 mid --machine <label>`. For each skill it lists as missing:

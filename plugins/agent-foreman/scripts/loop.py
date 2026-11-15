@@ -559,7 +559,7 @@ def _cli(argv):
                 n = s.get("count", {}).get(lv)
                 cells.append(run + (f" ×{n}" if n and n > 1 else ""))
             nxt = "; ".join(f"{k} → {v}" for k, v in s["next"].items())
-            print(f"| {stage_of(s)} | {s['id']} | {s['actor']} | {s['does'][:60].replace('|', '/')} | "
+            print(f"| {stage_of(s)} | {s['id']} | {s['actor']} | {s['does'].replace('|', '/')} | "
                   f"{', '.join(s.get('skills', [])) or '-'} | {nxt} | {' | '.join(cells)} |")
         return 0
 

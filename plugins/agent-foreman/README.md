@@ -29,26 +29,33 @@ The foreman writes no code and reviews no code itself.
 
 ## How it works
 
+```text
+ PERSON           FOREMAN                            LEAD                 ROLE AGENTS
+   │                │                                 │
+   │ task           │                                 │
+   ├───────────────▶│ register   task.md              │
+   │                │ brief      loop.json            │
+   │                │            gate.json + sha256   │
+   │                │ launch ────────────────────────▶│ work loop, round 1
+   │                │ watch, coordinate               │ review, recheck ─▶ PAIR
+   │                │◀────────────────── REPORT ready │
+   │                │ verify-session ─────────────────────────────────────▶ RED TEAM ∥ QA
+   │                │◀──────────────────────────────────────────── verdicts
+   │                │ sent back? ── findings-r<N>.md ▶│ round N+1
+   │                │ merge-gate  gate.py run --sha   │
+   │                │ merge                           │
+   │                │ cleanup    archive, remove      │
+   │◀─────── report │ ■ STOP                          │
 ```
-intake (foreman)
-  your request → task.md → task folder and lead
-        ↓
-build session (lead, in its own clone)
-  plan → build → verify → review → finalize → ready
-           ↻ for each work item: [implement → test → commit]
-                            inside review: pair review → simplify → fix findings → pair re-check
-  verify fails              → build
-  review: a large fix needed → build
-  finalize: rebase conflict → build
-        ↓ ready (gate passed)
-verification session (started by the foreman; both run together)
-  redteam-review (red team) ─┐
-                             ├→ both pass → merge gate → merge → archive and clean up
-  test (QA) ─────────────────┘
-  code finding · full tests fail · product problem in the scenario → build
-  scenario script problem                                          → verify
-  environment problem · over 3 rounds · anything else              → you
-```
+
+Where a task goes back, and who decides:
+
+| Found | Goes to |
+| --- | --- |
+| verify fails, a fix too large for review, a rebase conflict | build, in the same session |
+| a code finding, full tests fail, a product problem in the scenario | build, next round |
+| a problem only in the scenario script | verify, next round |
+| an environment problem, no verdict, 3 rounds still finding something | you |
 
 | Session | Stage | What happens | Default skills |
 | --- | --- | --- | --- |
@@ -123,13 +130,18 @@ it from writing a fake answer file into `reviews/`.
 
    To change one setting later, say it in words: "add machine build-02".
 
-3. **Start the foreman:**
+3. **Start the foreman**, in the project's checkout:
 
    ```bash
    claude --agent agent-foreman
    ```
 
-   Then name the work: `Add a --json flag to the list command of acme/api.`
+   It waits for your first line. Name the work: `Add a --json flag to the
+   list command of acme/api.`
+
+   You can close it at any time; the leads keep working in their tabs.
+   Start it again the same way, and it opens with the last exchanges of the
+   project's earlier foreman and picks up from there.
 
 Agents start with `--dangerously-skip-permissions`, so they do not stop for
 permission prompts. To have them ask, set `launch.permission` to `default`

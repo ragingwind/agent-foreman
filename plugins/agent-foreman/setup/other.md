@@ -6,7 +6,7 @@ at the person's level (every project) or a project's.
 
 | Section | Keys | Standard |
 | --- | --- | --- |
-| `launch` | `profile` (used only when no profile is named; the foreman names one from the tier), `permission` (`bypass` or `default`), `worktree` (`true` or `false`) | `sonnet`, `bypass`, `false` |
+| `launch` | `permission` (`bypass` or `default`), `worktree` (`true` or `false`) | `bypass`, `false` |
 | `labels` | `default` (the tab label), `events` (a label per stage, or for `blocked`, `exited`, `owner-decision`). Placeholders: `{task}`, `{stage}`, `{round}`, `{machine}`, `{profile}`, `{project}` | `{task} {stage}` |
 | `report` | `language` (free text in reports), `address` (how to address the person, or empty), `template` | the person's language, none, a status table |
 | `ops` | `check_minutes`, `report_minutes` (a lead's stage line at least this often), `stall_minutes` (more than `report_minutes`), `backoff` (`first_hours`, `factor`), `batch` (tasks at once, or null), `placement` (`least-busy` or `ask`), `disk_check`, `disk_min_free_gb`, `after_merge` (steps) | 10, 15, 30, 1 h ×2, none, `least-busy`, on, 20, 8 steps |
@@ -37,4 +37,4 @@ with `Keep: <its value now>` first. Notes:
 
 ## 3. Save
 
-At the scope the person chose (`SKILL.md` "Save").
+At the scope the person chose (`setup.md` "4. Save").

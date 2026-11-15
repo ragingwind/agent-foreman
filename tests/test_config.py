@@ -20,20 +20,20 @@ class Levels(unittest.TestCase):
 
     def test_standard_alone_is_valid(self):
         cfg = config.load()
-        self.assertEqual(cfg["launch"]["profile"], "sonnet")
+        self.assertNotIn("profile", cfg["launch"])  # the foreman names the profile at every start
         self.assertEqual(config.validate(cfg), [])
 
     def test_user_over_standard_and_project_over_user(self):
         self.home.write("config/agent-foreman/config.json",
-                        {"launch": {"profile": "opus"}, "ops": {"check_minutes": 5}})
+                        {"launch": {"permission": "default"}, "ops": {"check_minutes": 5}})
         self.home.write("state/agent-foreman/projects/o-r/project.json",
                         {"repo": "o/r", "machines": {"m1": "/src/r"}, "ops": {"check_minutes": 20}})
         user = config.load()
-        self.assertEqual(user["launch"]["profile"], "opus")
-        self.assertEqual(user["launch"]["permission"], "bypass")  # untouched key falls back
+        self.assertEqual(user["launch"]["permission"], "default")
+        self.assertEqual(user["launch"]["worktree"], False)  # untouched key falls back
         project = config.load("o/r")
         self.assertEqual(project["ops"]["check_minutes"], 20)
-        self.assertEqual(project["launch"]["profile"], "opus")
+        self.assertEqual(project["launch"]["permission"], "default")
         self.assertEqual(project["workspace"], "r")
         self.assertEqual(config.validate(project, saved=MACHINES, project=True), [])
 
@@ -94,7 +94,7 @@ class Problems(unittest.TestCase):
                            "gateways": {"g": {"kind": "anthropic-compatible", "base_url": "ftp://x",
                                               "token_env": "BAD NAME", "auth": "basic", "models": {}}},
                            "profiles": {"p": {"gateway": "g", "model": "m", "roles": {}}}})
-        for word in ("launch: profile", "base_url", "token_env", "auth", "model 'm'", "role opus"):
+        for word in ("launch: unknown key 'profile'; name the profile", "base_url", "token_env", "auth", "model 'm'", "role opus"):
             self.assertTrue(any(word in x for x in p), word)
 
     def test_project_machines(self):
@@ -176,7 +176,7 @@ class Providers(unittest.TestCase):
                         tiers={"low": ["nope"], "mid": [], "huge": ["opus"]})
         bad["extra"] = 1
         p = config.providers_problems(bad)
-        for want in ("unknown key 'extra'", "provider tf: base_url must start", "provider tf: auth must be",
+        for want in ("unknown key 'extra'", "provider tf: base_url must be the provider's", "provider tf: auth must be",
                      "provider tf: token_env must name", "model zai-org/GLM: needs a name",
                      "model zai-org/GLM: context must be", "roles: opus names 'ghost'", "roles: 'huge' is not",
                      "model sonnet: the name sonnet is taken", "another provider has the same id",
@@ -189,6 +189,19 @@ class Providers(unittest.TestCase):
         self.assertIn("provider tf: auth must be", r.stdout)
         self.assertNotIn("gateway tf", r.stdout)  # named once, in the file's terms
         self.assertEqual(json.loads(run("config.py", "providers").stdout)["problems"], p)
+
+    def test_a_file_that_is_not_json_says_where(self):
+        self.home.write("config/agent-foreman/providers.json", '{"providers": [],}')
+        r = run("config.py", "providers")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("providers.json: not valid JSON at line 1, column 18", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_a_placeholder_url_is_refused(self):
+        tf = {**TF, "base_url": "https://..."}
+        self.assertTrue(any("base_url must be the provider's" in p for p in config.providers_problems(providers(tf))))
+        self.assertFalse(config.url_ok("https://..."))
+        self.assertTrue(config.url_ok("https://tf.example/anthropic"))
 
     def test_models_outside_the_file_are_named_and_never_used(self):
         self.home.write("config/agent-foreman/config.json", {"tiers": {"mid": ["haiku"]}, "ops": {"batch": 2}})
@@ -334,6 +347,31 @@ class Save(unittest.TestCase):
         self.assertFalse(os.path.exists(path))
 
 
+class SaveAStep(unittest.TestCase):
+    """A new step is checked where the saved file puts it."""
+
+    def setUp(self):
+        self.home = TempHome()
+
+    def tearDown(self):
+        self.home.close()
+
+    def test_a_step_out_of_place_is_refused_and_one_in_place_is_saved(self):
+        lint = {"id": "lint", "stage": "build", "actor": "lead", "does": "Run the linter.", "skills": [],
+                "next": {"done": "verify"}}
+        full = config.load()
+        full["loop"]["work"].append({**lint, "after": "build"})  # at the end, though it says after build
+        _, _, problems = config.save("user", full, dry_run=True)
+        self.assertTrue(any("its steps must come one after another" in p for p in problems), problems)
+        full = config.load()
+        work = full["loop"]["work"]
+        work.insert([s["id"] for s in work].index("build") + 1, lint)
+        _, written, problems = config.save("user", full)
+        self.assertEqual(problems, [])
+        self.assertEqual([s for s in written["loop"]["work"] if s["id"] == "lint"][0]["after"], "build")
+        self.assertEqual([s["id"] for s in config.load()["loop"]["work"]][:3], ["plan", "build", "lint"])
+
+
 class Skills(unittest.TestCase):
     def setUp(self):
         self.home = TempHome()
@@ -437,12 +475,33 @@ class Cli(unittest.TestCase):
         r = run("config.py", "show", "--project", "not-a-repo")
         self.assertEqual(r.returncode, 2)
 
+    def test_tier_refuses_an_unknown_role(self):
+        r = run("config.py", "tier", "--difficulty", "mid", "--role", "red-team")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--role must be one of lead, pair, redteam, qa", r.stderr)
+
+    def test_no_herdr_says_so(self):
+        import shutil, sys
+        path = os.pathsep.join([os.path.dirname(sys.executable), "/usr/bin", "/bin"])
+        if shutil.which("herdr", path=path):
+            self.skipTest("herdr is on the bare PATH")
+        r = run("config.py", "machines", env={"PATH": path})
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("herdr is not on PATH", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_cleanup_removes_the_clones_before_the_branch(self):
+        steps = config.standard()["ops"]["after_merge"]
+        remove = next(i for i, s in enumerate(steps) if "clone.py remove" in s)
+        branch = next(i for i, s in enumerate(steps) if "refs/heads" in s)
+        self.assertLess(remove, branch)  # clone.py remove refuses a clone whose commits are on no remote
+
     def test_paths_and_show(self):
         r = run("config.py", "paths", "--project", "o/r")
         self.assertEqual(r.returncode, 0)
         self.assertTrue(json.loads(r.stdout)["ledger"].endswith("projects/o-r/ledger.md"))
         r = run("config.py", "show")
-        self.assertEqual(json.loads(r.stdout)["launch"]["profile"], "sonnet")
+        self.assertEqual(json.loads(r.stdout)["launch"]["permission"], "bypass")
 
     def test_save_needs_level(self):
         self.assertEqual(run("config.py", "save", stdin="{}").returncode, 2)

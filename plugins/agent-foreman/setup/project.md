@@ -62,7 +62,7 @@ foreman's preflight checks it again.
 
 ## 4. Save
 
-At the project's level (`SKILL.md` "Save"). A new project's settings:
+At the project's level (`setup.md` "4. Save"). A new project's settings:
 
 ```json
 {

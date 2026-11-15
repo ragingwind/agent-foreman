@@ -1,7 +1,8 @@
-"""ARCHITECTURE.md's pictures against the code: the work and check loops
-(Mermaid) against the standard loop, the picture of who does what against
-the manage loop and the roles, and the picture of how a step moves against
-what `status.py note` does."""
+"""ARCHITECTURE.md's pictures against the code: the work and check loops,
+drawn as sequences with their outcomes listed under them, against the
+standard loop; the picture of who does what against the manage loop and the
+roles, and README.md's copy of it; and the picture of how a step moves
+against what `status.py note` does. Every picture is a ```text block."""
 import json
 import os
 import re
@@ -13,39 +14,33 @@ import config
 import loop
 import status
 
-DOC = os.path.join(ROOT, "plugins", "agent-foreman", "ARCHITECTURE.md")
-EDGE = re.compile(r"^\s*(\w+)\s*-->\|([\w-]+)\|\s*(\w+)\s*$", re.M)
-NODE = re.compile(r'^\s*(\w+)\["([^"]*)"\]\s*$', re.M)
+PLUGIN = os.path.join(ROOT, "plugins", "agent-foreman")
+DOC = os.path.join(PLUGIN, "ARCHITECTURE.md")
+README = os.path.join(PLUGIN, "README.md")
+EDGE = re.compile(r"([a-z][a-z-]*) ─([a-z-]+)─▶ ([a-z][a-z-]*)")
+SENT = re.compile(r"^  │ ([a-z][a-z-]*) {2,}", re.M)  # the line a step starts on in a sequence
 
 
-def doc():
-    with open(DOC, encoding="utf-8") as f:
-        return f.read()
-
-
-def block(fence, marker):
-    """The one block fenced as `fence` that holds `marker`."""
-    found = [b for b in re.findall(rf"```{fence}\n(.*?)```", doc(), re.S) if marker in b]
+def block(marker, path=DOC):
+    """The one ```text block of the file that holds `marker`."""
+    with open(path, encoding="utf-8") as f:
+        found = [b for b in re.findall(r"```text\n(.*?)```", f.read(), re.S) if marker in b]
     if len(found) != 1:
-        raise AssertionError(f"{len(found)} ```{fence} blocks hold {marker!r} in ARCHITECTURE.md")
+        raise AssertionError(f"{len(found)} ```text blocks hold {marker!r} in {os.path.basename(path)}")
     return found[0]
 
 
-def step_id(node):
-    """A node's step id: `redteam_review` is redteam-review; `stop` and
-    `stop_<anything>` are stop."""
-    return "stop" if re.fullmatch(r"stop(_\w+)?", node) else node.replace("_", "-")
-
-
 def drawn(name):
-    """A loop's Mermaid picture: its outcome edges {(step, outcome, to)}, each
-    node's label lines {step: [lines]}, and the steps drawn as trivial-skipped."""
-    text = block("mermaid", f"%% loop: {name}")
-    edges = {(step_id(a), outcome, step_id(b)) for a, outcome, b in EDGE.findall(text)}
-    labels = {step_id(n): label.split("<br/>") for n, label in NODE.findall(text)}
-    m = re.search(r"^\s*class ([\w,]+) trivial\s*$", text, re.M)
-    skipped = {step_id(n) for n in m.group(1).split(",")} if m else set()
-    return edges, labels, skipped
+    """A loop's picture: the steps in the order the sequence starts them, the
+    outcome edges listed under it {(step, outcome, to)}, each step's actor,
+    and the steps a trivial task skips."""
+    sequence, _, listed = block(f"{name.upper()} LOOP").partition(" outcomes:")
+    actors = {}
+    for part in re.search(r"^ actors: (.*)$", listed, re.M).group(1).split(" · "):
+        who, _, steps = part.partition(" = ")
+        actors.update({s: who for s in steps.split(", ")})
+    m = re.search(r"^ a trivial task skips: (.*)$", listed, re.M)
+    return SENT.findall(sequence), set(EDGE.findall(listed)), actors, set(m.group(1).split(", ")) if m else set()
 
 
 class LoopPictures(unittest.TestCase):
@@ -53,11 +48,11 @@ class LoopPictures(unittest.TestCase):
         self.std = config.standard()["loop"]
 
     def check_loop(self, name):
-        edges, labels, _ = drawn(name)
+        order, edges, actors, _ = drawn(name)
         steps = self.std[name]
+        self.assertEqual(order, [s["id"] for s in steps])
         self.assertEqual(edges, {(s["id"], k, v) for s in steps for k, v in s["next"].items()})
-        for s in steps:
-            self.assertEqual(labels.get(s["id"]), [s["id"], s["actor"]], f"node {s['id']}")
+        self.assertEqual(actors, {s["id"]: s["actor"] for s in steps})
 
     def test_work_loop(self):
         self.check_loop("work")
@@ -69,19 +64,22 @@ class LoopPictures(unittest.TestCase):
         ids = {s["id"] for s in self.std["work"]}
         skipped = {d: ids - {s["id"] for s in loop.plan(self.std, d, trivial=True)} for d in loop.LEVELS}
         self.assertEqual(len({frozenset(v) for v in skipped.values()}), 1, skipped)  # one picture fits all
-        self.assertEqual(drawn("work")[2], skipped["mid"])
+        self.assertEqual(drawn("work")[3], skipped["mid"])
 
 
 class WhoDoesWhat(unittest.TestCase):
     def test_manage_steps_in_order(self):
-        text, at = block("text", "FOREMAN"), 0
+        text, at = block(" PERSON "), 0
         for s in config.standard()["loop"]["manage"]:
             m = re.compile(rf"\b{re.escape(s['id'])}\b").search(text, at)
             self.assertIsNotNone(m, f"manage step {s['id']} is not drawn after the one before it")
             at = m.end()
 
+    def test_readme_shows_the_same_picture(self):
+        self.assertEqual(block(" PERSON ", README), block(" PERSON "))
+
     def test_prompt_roles(self):
-        text = block("text", "FOREMAN").replace(" ", "")
+        text = block(" PERSON ").replace(" ", "")
         for name, role in config.standard()["loop"]["roles"].items():
             if role.get("mode") == "prompt":
                 self.assertIn(name.upper().replace("-", ""), text, name)
@@ -92,7 +90,7 @@ class StepPicture(unittest.TestCase):
 
     def setUp(self):
         self.home = TempHome()
-        self.text = block("text", "status.py note")
+        self.text = block("the agent")
         data = task_loop()
         self.status = self.home.write("task/status.jsonl", "")
         self.home.write("task/loop.json", data)

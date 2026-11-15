@@ -273,6 +273,9 @@ class Cli(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("| review | recheck | pair |", r.stdout)
         self.assertIn("if-not-trivial | if-not-trivial | if-not-trivial", r.stdout)
+        import config
+        for s in config.standard()["loop"]["work"]:
+            self.assertIn(s["does"].replace("|", "/"), r.stdout)  # each step whole, never cut
         r = run("loop.py", "show", "--loop", "check")
         self.assertIn("| test | test | qa |", r.stdout)
         self.assertEqual(run("loop.py", "render").returncode, 2)
@@ -364,6 +367,8 @@ class Prompt(unittest.TestCase):
         self.assertIn("full tests: none is set; write `not run: no full test command`", text)
         self.assertIn("Trivial task: no.", text)
         self.assertIn("skills foreman-kit:full, foreman-kit:cross-check say", text)
+        self.assertIn("and the base branch is main.", text)  # the full skill compares failures with the base
+        self.assertNotIn("<", text.split("Verdict:")[0].replace("<head>", ""))  # every placeholder filled
         self.home.write("task/loop.json", task_loop(difficulty="low"))  # redteam and qa: sonnet, then opus
         out = json.loads(self.prompt("--step", "redteam-review", "--task-dir", self.task, "--agent", "redteam-2").stdout)
         self.assertEqual([c.split()[2] for c in out["commands"]], ["opus", "sonnet"])  # agent 2 starts on the next

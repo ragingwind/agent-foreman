@@ -2,10 +2,14 @@
 """Start a coding agent from a agent-foreman profile.
 
 Usage:
-  python3 launch.py [PROFILE] [--name NAME] [--session-id UUID] [--project OWNER/REPO]
+  python3 launch.py PROFILE [--name NAME] [--session-id UUID | --resume UUID] [--project OWNER/REPO]
                     [--no-worktree] [--task-dir DIR] [--status FILE] [--disallow TOOL,...] [--dry-run]
-  python3 launch.py [PROFILE] --print --prompt-file FILE --out FILE [--role ROLE] [--name NAME]
+  python3 launch.py PROFILE --print --prompt-file FILE --out FILE [--role ROLE] [--name NAME]
                     [--session-id UUID] [--task-dir DIR] [--status FILE] [--disallow TOOL,...] [--dry-run]
+
+--resume UUID starts the agent again with its earlier conversation (the
+session id the ledger holds), in the clone it ran in: a lead whose process
+ended keeps what it knew. It does not go with --print or --session-id.
 
 --disallow TOOL,... removes tools from the agent (a reviewer gets no edit
 tools). It narrows what the agent can do; it is not a sandbox.
@@ -24,7 +28,7 @@ the command (scripts/adapters/). Run from a bundle (a directory that holds
 settings and loads the bundle's skills into the agent. Run from the skill, it
 uses the merged settings (`--project` adds the project's).
 
-PROFILE defaults to the settings' launch profile. The script sets the
+PROFILE is the one the foreman picked from the tier. The script sets the
 gateway's environment for this process only and replaces itself with the
 agent, so it runs the same in any shell.
 
@@ -78,9 +82,10 @@ def bundle_root():
 
 def main():
     parser = argparse.ArgumentParser(description="Start a coding agent from a agent-foreman profile.")
-    parser.add_argument("profile", nargs="?")
+    parser.add_argument("profile", help="the profile to run on (config.py tier picks it)")
     parser.add_argument("--name", help="session name; also the worktree name")
     parser.add_argument("--session-id", help="session id (a UUID) the foreman chose, so it can find the transcript")
+    parser.add_argument("--resume", metavar="UUID", help="continue that session, with its conversation")
     parser.add_argument("--project", help="OWNER/REPO whose settings apply (ignored in a bundle)")
     parser.add_argument("--no-worktree", action="store_true")
     parser.add_argument("--print", dest="print_mode", action="store_true",
@@ -93,6 +98,8 @@ def main():
     parser.add_argument("--role", help="with --print: the loop role this agent plays, recorded for the gate")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    if args.resume and (args.print_mode or args.session_id):
+        fail(2, "--resume continues a pane agent's session; it goes with neither --print nor --session-id")
     if args.print_mode and not (args.prompt_file and args.out):
         fail(2, "--print needs --prompt-file and --out")
     if args.print_mode:
@@ -123,7 +130,7 @@ def main():
     if problems:
         fail(EXIT_SETUP_NEEDED, f"settings problem ({where}): {problems[0]}")
 
-    profile_name = args.profile or cfg["launch"]["profile"]
+    profile_name = args.profile
     profile = cfg["profiles"].get(profile_name)
     if profile is None:
         fail(EXIT_SETUP_NEEDED, f"profile {profile_name!r} does not exist")
@@ -135,7 +142,8 @@ def main():
         argv, env, clear = adapter.command(cfg, profile_name, name=args.name, session_id=args.session_id,
                                            worktree=cfg["launch"]["worktree"] and not args.no_worktree,
                                            bundle=bundle, print_mode=args.print_mode,
-                                           disallowed=[t.strip() for t in args.disallow.split(",") if t.strip()])
+                                           disallowed=[t.strip() for t in args.disallow.split(",") if t.strip()],
+                                           resume=args.resume)
     except adapters.TokenMissing as e:
         fail(EXIT_TOKEN_MISSING, f"token variable {e.variable} is not set in this environment")
     status = args.status or (os.path.join(task_dir, "status.jsonl") if task_dir else None)

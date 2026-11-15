@@ -155,6 +155,18 @@ def read_json(path, default=None):
         return json.load(f)
 
 
+def read_settings(path):
+    """A settings file the person may edit by hand (config.json, providers.json,
+    project.json); {} when missing. A file that is not valid JSON stops the
+    script with where the error is, as a setup problem."""
+    try:
+        return read_json(path)
+    except json.JSONDecodeError as e:
+        print(f"{path}: not valid JSON at line {e.lineno}, column {e.colno}: {e.msg}. Fix the file and run again.",
+              file=sys.stderr)
+        raise SystemExit(EXIT_SETUP_NEEDED)
+
+
 def write_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp.", suffix=".json")
@@ -254,6 +266,17 @@ def _entries(value):
     return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
 
 
+def url_ok(url):
+    """An http(s) URL with a host name, not a placeholder such as https://..."""
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(str(url))
+        host = parsed.hostname or ""
+    except ValueError:
+        return False
+    return parsed.scheme in ("http", "https") and bool(re.search(r"[A-Za-z0-9]", host)) and ".." not in host
+
+
 def from_providers(data):
     """providers.json as the gateways, profiles and tiers the scripts use."""
     gateways, profiles = {}, {}
@@ -304,8 +327,9 @@ def providers_problems(data):
         problems += [f"{where}: unknown key {k!r}" for k in p if k not in PROVIDER_KEYS]
         compatible = bool(p.get("base_url"))
         if compatible:
-            if not str(p["base_url"]).startswith(("http://", "https://")):
-                problems.append(f"{where}: base_url must start with http:// or https://")
+            if not url_ok(p["base_url"]):
+                problems.append(f"{where}: base_url must be the provider's http:// or https:// address, "
+                                f"not {p['base_url']!r}")
             if p.get("auth") not in AUTHS:
                 problems.append(f"{where}: auth must be one of {', '.join(AUTHS)}")
             if not ENV_NAME.match(str(p.get("token_env", ""))):
@@ -367,7 +391,7 @@ def with_providers(cfg):
     """`cfg` with the models of providers.json, when the file exists."""
     if not os.path.exists(providers_path()):
         return cfg
-    return {**cfg, **from_providers(read_json(providers_path()))}
+    return {**cfg, **from_providers(read_settings(providers_path()))}
 
 
 def models_file_problems(repo=None):
@@ -375,9 +399,9 @@ def models_file_problems(repo=None):
     the project's file, where they would never be read."""
     problems = []
     if os.path.exists(providers_path()):
-        problems += providers_problems(read_json(providers_path()))
+        problems += providers_problems(read_settings(providers_path()))
     for path in [user_path()] + ([project_path(repo)] if repo else []):
-        held = [k for k in MODEL_KEYS if k in read_json(path)]
+        held = [k for k in MODEL_KEYS if k in read_settings(path)]
         if held:
             problems.append(f"{path}: {', '.join(held)} belong in {providers_path()}; remove them here")
     return problems
@@ -402,9 +426,9 @@ def _without_models(settings):
 def load(repo=None):
     """Settings in effect: standard, then user, then the project's when `repo`
     is given; the models from providers.json."""
-    cfg = with_providers(merge(standard(), _without_models(read_json(user_path()))))
+    cfg = with_providers(merge(standard(), _without_models(read_settings(user_path()))))
     if repo:
-        cfg = merge(cfg, _without_models(read_json(project_path(repo))))
+        cfg = merge(cfg, _without_models(read_settings(project_path(repo))))
         cfg.setdefault("repo", repo)
         cfg.setdefault("workspace", repo.split("/", 1)[1])
     return cfg
@@ -425,8 +449,8 @@ def validate_launch(cfg):
             continue
         if g["kind"] == "anthropic":
             continue
-        if not str(g.get("base_url", "")).startswith(("http://", "https://")):
-            problems.append(f"gateway {name}: base_url must start with http:// or https://")
+        if not url_ok(g.get("base_url", "")):
+            problems.append(f"gateway {name}: base_url must be an http:// or https:// address")
         if not ENV_NAME.match(str(g.get("token_env", ""))):
             problems.append(f"gateway {name}: token_env must be an environment variable name")
         if g.get("auth") not in AUTHS:
@@ -471,8 +495,8 @@ def validate_launch(cfg):
                 problems.append(f"tiers: {tier} names profile {name!r}, which does not exist")
 
     launch = cfg.get("launch", {})
-    if launch.get("profile") not in profiles:
-        problems.append(f"launch: profile {launch.get('profile')!r} does not exist")
+    problems += [f"launch: unknown key {k!r}" + ("; name the profile when an agent starts" if k == "profile" else "")
+                 for k in launch if k not in ("permission", "worktree")]
     if launch.get("permission") not in PERMISSIONS:
         problems.append(f"launch: permission must be one of {', '.join(PERMISSIONS)}")
     if not isinstance(launch.get("worktree"), bool):
@@ -619,6 +643,9 @@ def validate(cfg, saved=None, skills=None, project=False):
 
 def herdr_machines():
     """Saved herdr machines: label -> {"target": ssh target, "enabled": bool}."""
+    if shutil.which("herdr") is None:
+        print("herdr is not on PATH: install it (https://herdr.dev) and run again.", file=sys.stderr)
+        raise SystemExit(EXIT_SETUP_NEEDED)
     out = subprocess.run(["herdr", "machine", "list"], capture_output=True, text=True, check=True)
     machines = {}
     for line in out.stdout.splitlines():
@@ -639,7 +666,7 @@ if out["checkout"]:
     out["origin"] = r.stdout.strip()
     url = re.sub(r"\\.git$", "", out["origin"].rstrip("/"))
     out["origin_matches"] = bool(re.search(r"[:/]" + re.escape(repo) + "$", url, re.I))
-out["tools"] = {t: bool(shutil.which(t)) for t in (exe, "git", "gh", "python3")}
+out["tools"] = {t: bool(shutil.which(t)) for t in exe.split(",") + ["git", "gh", "python3"]}
 out["tokens"] = {n: bool(os.environ.get(n)) for n in names}
 print(json.dumps(out))
 """
@@ -663,8 +690,10 @@ def machine_state(label, path, repo, cfg, machines=None):
     A remote machine is checked inside its login shell, as agents start
     there. Returns the probe's answer with "ready" and "problems"."""
     from remote import remote_argv
-    exe = adapters.get(adapters.kind_of(cfg["profiles"][cfg["launch"]["profile"]])).EXECUTABLE
-    args = [path, repo, exe, *token_names(cfg)]
+    tiered = {p for tier in cfg.get("tiers", {}).values() for p in tier if p in cfg.get("profiles", {})}
+    exes = sorted({adapters.get(adapters.kind_of(cfg["profiles"][p])).EXECUTABLE for p in tiered}
+                  or {adapters.get(adapters.DEFAULT).EXECUTABLE})
+    args = [path, repo, ",".join(exes), *token_names(cfg)]
     if label == LOCAL:
         argv = [sys.executable, "-c", MACHINE_PROBE, *args]
     else:
@@ -856,18 +885,18 @@ def save(level, full, repo=None, saved=None, skills=None, dry_run=False):
     The models are never written here: they live in providers.json."""
     base = standard()
     if level == "project":
-        base = merge(base, _without_models(read_json(user_path())))
+        base = merge(base, _without_models(read_settings(user_path())))
         path = project_path(repo)
     else:
         path = user_path()
     base = with_providers(base)
-    effective = merge(base, full)
+    written = diff(base, full)
+    effective = merge(base, written)  # what loading the saved file gives, so the check sees what is stored
     if level == "project":
         effective.setdefault("repo", repo)
         effective.setdefault("workspace", repo.split("/", 1)[1])
     problems = settings_problems(effective, repo=repo if level == "project" else None, saved=saved, skills=skills,
                                  project=level == "project")
-    written = diff(base, full)
     held = [k for k in MODEL_KEYS if k in written]
     if held:
         problems.append(f"{', '.join(held)}: models are set in {providers_path()}, not saved here")
@@ -920,7 +949,7 @@ def _cli(argv):
             os.makedirs(os.path.dirname(path), exist_ok=True)
             shutil.copyfile(providers_sample_path(), path)
             created = True
-        problems = providers_problems(read_json(path)) if os.path.exists(path) else []
+        problems = providers_problems(read_settings(path)) if os.path.exists(path) else []
         print(json.dumps({"path": path, "exists": os.path.exists(path), "created": created, "problems": problems},
                          indent=2, ensure_ascii=False))
         if problems:
@@ -966,16 +995,14 @@ def _cli(argv):
         return 0 if state["ready"] else EXIT_SETUP_NEEDED
     elif args.command == "profiles":
         cfg = load(args.project)
-        default = cfg["launch"].get("profile")
         for name, p in cfg["profiles"].items():
             roles = p.get("roles")
             role_text = "  roles " + "/".join(roles[r] for r in ROLES) if roles else ""
-            mark = "*" if name == default else " "
-            print(f"{mark}{name:12} {p['gateway']:24} {p['model']}{role_text}")
+            print(f"{name:12} {p['gateway']:24} {p['model']}{role_text}")
     elif args.command == "projects":
         root = os.path.join(state_dir(), "projects")
         for entry in sorted(os.listdir(root)) if os.path.isdir(root) else []:
-            p = read_json(os.path.join(root, entry, "project.json"))
+            p = read_settings(os.path.join(root, entry, "project.json"))
             if p.get("repo"):
                 print(f"{p['repo']:40} {' '.join(p.get('machines', {}))}")
     elif args.command == "tier":
@@ -983,6 +1010,10 @@ def _cli(argv):
             print("config.py: tier needs --difficulty low|mid|high", file=sys.stderr)
             return 2
         cfg = load(args.project)
+        roles = ["lead"] + list(cfg.get("loop", {}).get("roles", {}))
+        if args.role not in roles:
+            print(f"config.py: --role must be one of {', '.join(roles)}, not {args.role!r}", file=sys.stderr)
+            return 2
         tier = role_tier(args.difficulty, args.role, cfg)
         skip = [x for x in args.skip.split(",") if x]
         profiles = (tier_profiles(cfg, tier, skip) if args.role == "lead"

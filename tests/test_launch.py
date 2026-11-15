@@ -20,14 +20,14 @@ class Launch(unittest.TestCase):
         self.home.close()
 
     def test_skill_mode_dry_run(self):
-        r = run("launch.py", "--name", "issue-1", "--session-id", "abc-123", "--dry-run")
+        r = run("launch.py", "sonnet", "--name", "issue-1", "--session-id", "abc-123", "--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
         # Standard: the agent starts in its own clone, so no worktree.
         self.assertIn("command: claude --name issue-1 --session-id abc-123 --model sonnet "
                       "--dangerously-skip-permissions", r.stdout)
         self.assertNotIn("--plugin-dir", r.stdout)
         self.home.write("config/agent-foreman/config.json", {"launch": {"worktree": True}})
-        r = run("launch.py", "--name", "issue-1", "--dry-run")
+        r = run("launch.py", "sonnet", "--name", "issue-1", "--dry-run")
         self.assertIn("command: claude -w issue-1 --name issue-1", r.stdout)
 
     def test_bundle_mode_adds_plugin_dir_and_uses_bundle_settings(self):
@@ -36,9 +36,8 @@ class Launch(unittest.TestCase):
         self.home.write("bundle/bundle.json", {"agent": "claude"})
         self.home.write("bundle/config.json", {"gateways": {"anthropic": {"kind": "anthropic"}},
                                                "profiles": {"opus": {"gateway": "anthropic", "model": "opus"}},
-                                               "launch": {"profile": "opus", "permission": "default",
-                                                          "worktree": False}})
-        r = run("launch.py", "--dry-run", cwd=os.path.join(root, "scripts"))
+                                               "launch": {"permission": "default", "worktree": False}})
+        r = run("launch.py", "opus", "--dry-run", cwd=os.path.join(root, "scripts"))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(f"command: claude --model opus --plugin-dir {root}", r.stdout)
 
@@ -48,17 +47,34 @@ class Launch(unittest.TestCase):
         self.home.write("bundle/bundle.json", {"agent": "elsewhere"})
         self.home.write("bundle/config.json", {"gateways": {"anthropic": {"kind": "anthropic"}},
                                                "profiles": {"opus": {"gateway": "anthropic", "model": "opus"}},
-                                               "launch": {"profile": "opus", "permission": "default",
-                                                          "worktree": False}})
-        r = run("launch.py", "--dry-run", cwd=os.path.join(root, "scripts"))
+                                               "launch": {"permission": "default", "worktree": False}})
+        r = run("launch.py", "opus", "--dry-run", cwd=os.path.join(root, "scripts"))
         self.assertEqual(r.returncode, 3)
         self.assertIn("this bundle is for elsewhere", r.stderr)
 
     def test_unknown_agent_kind_is_setup(self):
         self.home.write("config/agent-foreman/providers.json", providers(sonnet={"agent": "nope"}))
-        r = run("launch.py", "--dry-run")
+        r = run("launch.py", "sonnet", "--dry-run")
         self.assertEqual(r.returncode, 3)
         self.assertIn("agent 'nope' is not supported", r.stderr)
+
+    def test_models_without_sonnet_still_launch(self):
+        self.home.write("config/agent-foreman/providers.json",
+                        {"providers": [{"id": "anthropic", "models": [{"id": "opus"}, {"id": "haiku"}]}],
+                         "tiers": {"low": ["haiku"], "mid": ["haiku", "opus"], "high": ["opus", "haiku"]}})
+        r = run("launch.py", "opus", "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("--model opus", r.stdout)
+
+    def test_resume_continues_a_session(self):
+        r = run("launch.py", "opus", "--name", "7", "--resume", "abc-123", "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("--name 7 --resume abc-123 --model opus", r.stdout)
+        self.assertNotIn("--session-id", r.stdout)
+        for extra in (["--session-id", "x"], ["--print", "--prompt-file", "p", "--out", "o"]):
+            r = run("launch.py", "opus", "--resume", "abc-123", "--dry-run", *extra)
+            self.assertEqual(r.returncode, 2, extra)
+            self.assertIn("--resume continues a pane agent's session", r.stderr)
 
     def test_disallowed_tools(self):
         r = run("launch.py", "opus", "--no-worktree", "--disallow", "Edit, Write,NotebookEdit", "--dry-run")
@@ -71,7 +87,7 @@ class Launch(unittest.TestCase):
 
     def test_bad_settings_is_setup(self):
         self.home.write("config/agent-foreman/config.json", {"launch": {"permission": "maybe"}})
-        r = run("launch.py", "--dry-run")
+        r = run("launch.py", "sonnet", "--dry-run")
         self.assertEqual(r.returncode, 3)
         self.assertIn("permission", r.stderr)
 
@@ -87,7 +103,10 @@ class Launch(unittest.TestCase):
         self.assertNotIn("secret-value-xyz", r.stdout + r.stderr)
 
     def test_bad_project_argument(self):
-        self.assertEqual(run("launch.py", "--project", "bad", "--dry-run").returncode, 2)
+        self.assertEqual(run("launch.py", "sonnet", "--project", "bad", "--dry-run").returncode, 2)
+        r = run("launch.py", "--dry-run")  # the foreman always names the profile
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("profile", r.stderr)
 
 
 FAKE_CLAUDE = """#!/usr/bin/env python3
@@ -231,8 +250,8 @@ class PromptMode(unittest.TestCase):
         self.assertIn("AF_STATUS_FILE", r.stdout.split("clear:")[1].split("\n")[0])
 
     def test_print_needs_files(self):
-        self.assertEqual(run("launch.py", "--print", "--prompt-file", self.prompt, env=self.env).returncode, 2)
-        self.assertEqual(run("launch.py", "--print", "--prompt-file", "/no/such", "--out", self.out,
+        self.assertEqual(run("launch.py", "opus", "--print", "--prompt-file", self.prompt, env=self.env).returncode, 2)
+        self.assertEqual(run("launch.py", "opus", "--print", "--prompt-file", "/no/such", "--out", self.out,
                              env=self.env).returncode, 2)
 
 

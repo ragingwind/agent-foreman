@@ -13,7 +13,7 @@ description: >-
 ## Action
 
 1. Check that your clone is at the head commit the prompt names: `git rev-parse HEAD`.
-2. Run the full test command the prompt names, as written. Keep its exit code and raw output. When the prompt says none is set, write `not run: no full test command`.
+2. Run the full test command the prompt names, as written. Keep its exit code and raw output. When the prompt says none is set, write `not run: no full test command`; that line alone does not fail the verdict.
 3. A command that cannot run here, because it needs a secret, a service or a machine you do not have: do not pretend it ran. Write it as `not run`, with the reason.
 4. A failure: run the same command at the base before you call it new. Inside your clone: `git worktree add .base-check $(git merge-base HEAD origin/<base>)`, run it in `.base-check`, then `git worktree remove --force .base-check`.
 5. Fix nothing. Do not edit, commit, or push.
@@ -35,4 +35,4 @@ Verdict: fail
 ```
 
 - Under each `ran:` line, a fence with the summary lines as they came. Under each failure, a fence with its full error message and the summary line. Do not retell output in your own words.
-- The last line is `Verdict: pass` or `Verdict: fail`, plain, on its own line. It is `pass` only when every command ran and passed and the user scenario test passed.
+- The last line is `Verdict: pass` or `Verdict: fail`, plain, on its own line. It is `pass` only when every command that is set ran and passed and the user scenario test passed.

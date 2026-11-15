@@ -1,0 +1,11 @@
+{
+  "description": "Keep the foreman's place across sessions: each turn's end notes where its conversation is, and a new foreman session starts with the last one's exchanges.",
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "startup", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session.py\" start", "timeout": 10}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/session.py\" stop", "timeout": 10}]}
+    ]
+  }
+}

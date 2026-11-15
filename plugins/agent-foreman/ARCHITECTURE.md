@@ -3,9 +3,10 @@
 This is the design the code follows. Where the code and this page differ, the
 page is the target and the code is behind it.
 
-`tests/test_architecture.py` checks the pictures in sections 1 and 6 against
-`defaults.json` and `status.py`: change a loop or `status.py note` and its
-picture together.
+`tests/test_architecture.py` checks the pictures in sections 1 and 6, and the
+picture in `README.md`, against `defaults.json` and `status.py`: change a
+loop or `status.py note` and its picture together. Every picture is plain
+text; a loop is drawn as a sequence, with its outcomes listed under it.
 
 ## 1. Who does what
 
@@ -49,16 +50,18 @@ profile's). The pair, the red team and QA never run on the lead's profile.
 
 ## 2. Layers
 
-```
-foreman (loop control)
---------------------------------------------------------------
-terminal layer: herdr | prompt mode   (later: tmux, ghostty)
---------------------------------------------------------------
-tab = one task's session          ||  tab 2  ||  ...
-pane 1: lead                      ||  ...    ||
-prompt runs: pair, red team, QA   ||         ||
---------------------------------------------------------------
-agent adapter: claude             (later: other kinds)
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│ foreman: loop control                                            │
+├──────────────────────────────────────────────────────────────────┤
+│ terminal layer: herdr, prompt mode     (later: tmux, ghostty)    │
+├───────────────────────────────────┬──────────────┬───────────────┤
+│ tab: one task's session           │ tab 2        │ ...           │
+│ pane 1: lead                      │              │               │
+│ prompt runs: pair, red team, QA   │              │               │
+├───────────────────────────────────┴──────────────┴───────────────┤
+│ agent adapter: claude                  (later: other kinds)      │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 **Terminal layer.** One interface, several adapters. herdr and prompt mode
@@ -169,32 +172,33 @@ hash.
 
 ### Work loop: the build session (lead)
 
-```mermaid
-flowchart TD
-  %% loop: work
-  plan["plan<br/>lead"]
-  build["build<br/>lead"]
-  verify["verify<br/>lead"]
-  review["review<br/>pair"]
-  simplify["simplify<br/>lead"]
-  fix["fix<br/>lead"]
-  recheck["recheck<br/>pair"]
-  finalize["finalize<br/>lead"]
-  stop(["stop: ready"])
-  plan -->|done| build
-  build -->|done| verify
-  verify -->|fail| build
-  verify -->|done| review
-  review -->|done| simplify
-  simplify -->|done| fix
-  fix -->|large| build
-  fix -->|done| recheck
-  recheck -->|changes| fix
-  recheck -->|approved| finalize
-  finalize -->|conflict| build
-  finalize -->|done| stop
-  class review,simplify,fix,recheck trivial
-  classDef trivial stroke-dasharray: 5 5
+```text
+ WORK LOOP · the build session, round N
+ LEAD (own clone)                                PAIR (other model)  status.py note
+  │                                               │                   │
+  │ plan      plan.md rows, scenario.md ─────────────────────────────▶│ end done
+  │ build     one row at a time, its tests ──────────────────────────▶│ end done
+  │ verify    tests, smoke, scenario.md ─────────────────────────────▶│ end done | fail
+  │ review    clone at head, loop.py prompt ─────▶│                   │
+  │◀──────────────────────────── answer, Verdict ─│                   │
+  │           ───────────────────────────────────────────────────────▶│ end done
+  │ simplify  clean-up commits ──────────────────────────────────────▶│ end done
+  │ fix       must-fix, should-fix ──────────────────────────────────▶│ end done | large
+  │ recheck   only the fixes, loop.py prompt ────▶│                   │
+  │◀──────────────────────────── answer, Verdict ─│                   │
+  │           ───────────────────────────────────────────────────────▶│ end approved | changes
+  │ finalize  rebase, handoff.md, draft PR,       │                   │
+  │           gate --before-ready, gh pr ready ──────────────────────▶│ end done | conflict
+  │                                               │                   │
+ outcomes:
+   plan ─done─▶ build                  build ─done─▶ verify
+   verify ─done─▶ review               verify ─fail─▶ build
+   review ─done─▶ simplify             simplify ─done─▶ fix
+   fix ─done─▶ recheck                 fix ─large─▶ build
+   recheck ─approved─▶ finalize        recheck ─changes─▶ fix
+   finalize ─done─▶ stop               finalize ─conflict─▶ build
+ actors: lead = plan, build, verify, simplify, fix, finalize · pair = review, recheck
+ a trivial task skips: review, simplify, fix, recheck
 ```
 
 - The stages are plan, build, verify, review (review, simplify, fix,
@@ -207,8 +211,9 @@ flowchart TD
 - finalize: rebase, `handoff.md`, a draft pull request whose body is
   `handoff.md`, `gate.py run --before-ready`, then `gh pr ready`.
 - A **trivial** task (docs or text only, a typo, a rename that changes no
-  behavior; the foreman marks it in the brief) skips the dashed steps: its
-  loop is plan → build → verify → finalize, with no scenario and no pair.
+  behavior; the foreman marks it in the brief) skips the steps the picture's
+  last line names: its loop is plan → build → verify → finalize, with no
+  scenario and no pair.
 - A **round** is one pass of the build session: 1 at first; the foreman gives
   the next number when the verification session sends the task back
   (`status.py note --round`).
@@ -220,23 +225,22 @@ again without reading the diff.
 
 ### Check loop: the verification session (foreman)
 
-```mermaid
-flowchart TD
-  %% loop: check
-  ready(["lead: REPORT ready"])
-  redteam_review["redteam-review<br/>redteam"]
-  test["test<br/>qa"]
-  build["build<br/>work loop, next round"]
-  verify["verify<br/>work loop, next round"]
-  stop_redteam(["stop"])
-  stop_qa(["stop"])
-  ready --> redteam_review
-  ready --> test
-  redteam_review -->|approved| stop_redteam
-  redteam_review -->|changes| build
-  test -->|fail| build
-  test -->|script| verify
-  test -->|pass| stop_qa
+```text
+ CHECK LOOP · the verification session, both steps at once
+ FOREMAN                                  RED TEAM       QA     status.py note --file
+  │                                           │           │           │
+  │ gate --before-ready on the lead's claim   │           │           │
+  │ redteam-review  clone at head, prompt ───▶│           │           │
+  │ test            clone at head, prompt ───────────────▶│           │
+  │◀──────────────────────── answer, Verdict ─│           │           │
+  │◀──────────────────────────────────── answer, Verdict ─│           │
+  │                 ─────────────────────────────────────────────────▶│ end, once per step
+  │                                           │           │           │
+ outcomes:
+   redteam-review ─approved─▶ stop     redteam-review ─changes─▶ build
+   test ─pass─▶ stop                   test ─fail─▶ build
+   test ─script─▶ verify
+ actors: redteam = redteam-review · qa = test
 ```
 
 - On `REPORT: ready` the foreman runs the gate with `--before-ready` on the
@@ -467,6 +471,13 @@ Pass conditions are code, not prose (`scripts/gate.py`).
 - **Ledger**: `ledger.md` in the same folder: state and links only, one row
   per task with its gate hash. A new foreman reads it to take over;
   decisions, findings and briefs live in the task folder.
+- **The foreman's place**: `~/.local/state/agent-foreman/foreman/<owner>-<repo>.json`,
+  the project's last foreman session (id, transcript, folder, time). The
+  plugin's `Stop` hook writes it at each turn's end; its `SessionStart` hook,
+  in a new foreman session, adds that session's last exchanges, at most 9,000
+  characters (`scripts/session.py`). Only in a session started with
+  `claude --agent agent-foreman`, whose hooks see `agent_type`
+  `agent-foreman:agent-foreman`.
 
 ## 12. Layout
 
@@ -483,3 +494,4 @@ into `~/.claude/skills/agent-foreman` as a user skill.
 | `scripts/`, `terminals/`, `adapters/`, `defaults.json` | The scripts, the terminal layer, the agent kinds, the standard settings |
 | `providers.json.sample` | The standard models by provider; setup copies it to `~/.config/agent-foreman/providers.json` for the person to edit |
 | `agents/agent-foreman.md` | `claude --agent agent-foreman`; only with the plugin installed |
+| `hooks/hooks.json` | The foreman's place across sessions (section 11); only with the plugin installed |

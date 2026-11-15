@@ -41,6 +41,7 @@ reviews no diff.
 | `scripts/log.py` | The project's log: `add`, `tail` |
 | `scripts/transcript.py` | A session's last answers, whole |
 | `scripts/remote.py` | A command on a machine, inside its login shell |
+| `scripts/session.py` | The plugin's hooks: each turn's end notes where this conversation is; a new foreman session starts with the earlier one's last exchanges |
 | `terminals/herdr.md`, `terminals/prompt.md` | How to open, start, send to, read, wait on and close an agent, in a herdr pane or in prompt mode |
 | `adapters/<kind>.md` | What differs per agent kind: start errors, trust question, input line, exit. Only `claude` today |
 | `loop.md` | The lead's guide to its build session; every bundle carries it |
@@ -85,7 +86,8 @@ reviews no diff.
 
 Read this file, `terminals/herdr.md`, `terminals/prompt.md`, the adapter
 page and each project's ledger and memory at the start, and again after the
-conversation is summarized.
+conversation is summarized. Then, at the start of every session, resumed or
+new, follow "Resume" before the person's request.
 
 ## Setup
 
@@ -103,9 +105,10 @@ build-02") goes only to the part that holds it.
 3. **Settings and memory**: `config.py show --project <repo>`; read
    `memory.md` and the ledger (create the ledger from "Ledger" when missing).
 4. **Machines**: for each, `config.py check-machine <machine> <path>
-   --project <repo>`, then `H workspace list` for the `workspace` label;
-   create a missing workspace (`terminals/herdr.md`) and note that the
-   foreman made it. A machine that fails gets no task; tell the person why.
+   --project <repo>`, then `H workspace list` for the `workspace` label.
+   Make no workspace here: the first task's tab makes it
+   (`terminals/herdr.md` "Open a task tab"). A machine that fails gets no
+   task; tell the person why.
 5. **Bundle**: `bundle.py push <machine> --project <repo>` for each machine;
    record its `hash`, `path` and `cache`. A `missing` skill is named to the
    person with its fix (setup, loop).
@@ -113,7 +116,40 @@ build-02") goes only to the part that holds it.
    --project <repo>`, each machine's `H agent list` kept to the workspace,
    and `gh pr list --repo <repo> --state open`. Fix a row whose agent is
    gone or whose pull request merged first.
-7. **Check timer**: a recurring `CronCreate` every `ops.check_minutes`.
+7. **Check timer**: a recurring `CronCreate` every `ops.check_minutes`. It
+   lives only in this session and expires after 7 days; start it again then.
+
+## Resume
+
+When this session ends, what ran inside it ends too: the check timer, the
+waits on the agents, and the red team's and QA's runs. Leads and pairs run
+in their own panes and keep going. The ledger and the task folders hold the
+rest. A new session opens with the earlier foreman's last exchanges (the
+plugin's start hook adds them, `scripts/session.py`): read them first, for
+what the person asked and what waits on them; the whole conversation is in
+the file they name. Then, at the start of every session, one resumed with
+`--resume` included, and whenever the check timer is gone:
+
+1. `config.py projects`. For each project whose ledger has task rows, run
+   "Preflight, per project": it checks the machines and reconciles the
+   ledger with live state.
+2. For each task row, by what the live state shows:
+   - **The lead works**: wait on it again (`H agent wait`, "Watch").
+   - **The lead is at a stop point** (`status.py read` shows it `stopped`):
+     act on its report as "Watch" says.
+   - **The lead is gone** from `H agent list`: tell the person. With their
+     yes, start it again in its tab, in its clone, with its conversation:
+     `launch.py <profile> --name <task> --resume <session> --task-dir <task
+     folder>` (the session is the ledger's), then send it one line: "You
+     were restarted. Read the last lines of status.jsonl and go on."
+   - **A check step has a `start` line and no `end`** (the verification
+     session): when `reviews/` holds that role's answer at the head (its
+     `.json` and `.meta.json`), write the `end` line from it ("Verification
+     session" 4). Otherwise its run ended with the old session: run that step
+     again; `loop.py prompt` writes the next prompt.
+   - **It waits on the person**: ask again.
+3. Start the check timer again (Preflight 7).
+4. Report once: each task, where it was, and what you resumed.
 
 ## Manage loop
 
@@ -141,8 +177,15 @@ the reasons miss a risk you see, and say why in the brief; never lower it.
 Mark the task **trivial** only for docs or text only, a typo, or a rename
 that changes no behavior: a trivial task skips the scenario steps.
 
-When the pull request exists, `score.py diff --cwd <lead's clone> --previous
-<difficulty>` measures the real change. When it rises, write `loop.json`,
+When the pull request exists, measure the real change in the lead's clone,
+on its machine:
+
+```bash
+python3 <skill>/scripts/remote.py <machine> --cwd <lead's clone> -- \
+  python3 <bundle>/scripts/score.py diff --cwd <lead's clone> --base origin/<base> --previous <difficulty>
+```
+
+(`local`: run the `score.py` part there directly.) When it rises, write `loop.json`,
 `gate.json` and the brief's loop again (Brief) with the new difficulty and the
 same `--lead`, keep the checks you added, record the new gate hash, and tell
 the lead to read the brief's loop again.
@@ -244,7 +287,7 @@ the machine to the person. Never ask for, read, print or store a token value.
 | question | the agent asks inside the task's scope | Answer with the recommended option; only a choice that changes behavior, an interface, a schema or a core module goes to the person |
 | blocked | a dialog on screen | A permission prompt goes to the person with the agent and the command; never answer it. A trust question: the adapter page. A question dialog is closed only when the person already answered it |
 | stalled | `status.py read` marks the task `stalled` | Read the screen; move it on when it waits for a yes the brief already gave; otherwise ask what blocks it |
-| exited | the agent is gone from `H agent list` while its row is active | Renames the tab with the `exited` label and tells the person |
+| exited | the agent is gone from `H agent list` while its row is active | Renames the tab with the `exited` label and tells the person; with their yes, starts it again as "Resume" says |
 | merged | `gh` shows the pull request merged | Cleanup |
 | all-ready | every task is at a stop point and no agent works | Print the work overview once, then check less often: one-shot checks, the first after `ops.backoff.first_hours`, each next `ops.backoff.factor` times as far; back to the timer when work moves |
 
@@ -284,7 +327,9 @@ both at once:
    folder>`. It writes the filled prompt into `reviews/` and prints the launch
    commands, never on the lead's profile.
 3. `status.py note --file <task folder>/status.jsonl --stage <step> --event
-   start` on the task's machine, then run the first command in the clone in
+   start` on the task's machine (`remote.py <machine> -- python3
+   <bundle>/scripts/status.py note ...` for a remote), then run the first
+   command in the clone in
    the background (`terminals/prompt.md`). Exit 5: the next command.
 4. The summary's `verdict` is the outcome, except when QA's `fail` comes
    only from `mismatch (script)` lines: then the outcome is `script`. Write
@@ -300,7 +345,7 @@ session. After the lead is ready again, start only the roles whose verdict
 check the merge gate lists as blocked.
 
 These go to the person instead, with the answer's lines: no verdict, an
-`environment` mismatch, a `not run` test, or a failure that also fails on the
+`environment` mismatch, a `not run` test (other than `no full test command`), or a failure that also fails on the
 base. When the person says to merge anyway, run the merge gate with `--skip
 verdict:<role>` for that role only and log the person's words. After 3 rounds
 that still find something, stop and ask the person, with the open findings.
@@ -333,7 +378,9 @@ its verdicts when the change is the same: the gate compares patches with
 
 Run `ops.after_merge` in order (`terminals/herdr.md` "Close" for agents and
 tabs; `clone.py archive`, then `clone.py remove`, for the task folder and the
-clones). Then the project's own steps from its memory (tags, docs). When a review finding has come back across tasks, write it into
+clones). The branch is deleted last: the lead's clone holds the branch's
+commits, and `clone.py remove` refuses a clone whose commits are on no
+remote. Then the project's own steps from its memory (tags, docs). When a review finding has come back across tasks, write it into
 `memory.md` and propose a rule, a test or a hook to the person.
 
 ### Stop a task
@@ -381,8 +428,8 @@ not to the ledger.
 # Ledger: <owner/repo>
 
 - **Updated**: <YYYY-MM-DD HH:MM UTC>
-- **Foreman**: herdr pane `<$HERDR_PANE_ID>` on local
-- **Machines**: <label> `<checkout>` workspace `<id>` (made by foreman: yes|no), bundle `<hash>`, free <n> GB; ...
+- **Foreman**: herdr pane `<$HERDR_PANE_ID>` on local, session `<name>` (`claude --resume <name>`)
+- **Machines**: <label> `<checkout>` workspace `<id>` or none yet (made by foreman: yes|no), bundle `<hash>`, free <n> GB; ...
 
 ## Waiting on the person
 

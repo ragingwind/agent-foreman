@@ -70,7 +70,7 @@ class Bundle(unittest.TestCase):
 
     def test_settings_change_makes_new_hash(self):
         h1, _, _, _ = bundle.build("o/r", [])
-        self.home.write("config/agent-foreman/config.json", {"launch": {"profile": "opus"}})
+        self.home.write("config/agent-foreman/config.json", {"launch": {"permission": "default"}})
         h2, _, _, _ = bundle.build("o/r", [])
         self.assertNotEqual(h1, h2)
 
