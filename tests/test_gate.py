@@ -146,7 +146,7 @@ class RoleChecks(unittest.TestCase):
         self.assertFalse(check("verdict", pr(), task_dir=qa, **spec)[0])  # a qa answer is not the pair's
         self.assertTrue(check("verdict", pr(), task_dir=qa, role="qa", accept=["pass"])[0])
 
-    def test_failed_run_last_line_and_count(self):
+    def test_failed_run_and_last_line(self):
         spec = {"role": "pair", "accept": ["approved"]}
         root = task_folder(self.home, [("pair-1", "pair", "sonnet", "approved", HEAD, "2026-11-14T01:00:00Z", False)])
         ok, evidence = check("verdict", pr(), task_dir=root, **spec)
@@ -157,11 +157,6 @@ class RoleChecks(unittest.TestCase):
         with open(os.path.join(root, "reviews", "pair-1-2026-11-14T01:00:00Z.json"), "w") as f:
             json.dump({"result": "Verdict: approved\nOn second look:\nVerdict: changes"}, f)
         self.assertFalse(check("verdict", pr(), task_dir=root, **spec)[0])  # the last Verdict line counts
-        shutil.rmtree(os.path.join(root, "reviews"))
-        task_folder(self.home, [("pair-1", "pair", "sonnet", "approved", HEAD, "2026-11-14T01:00:00Z")])
-        self.assertFalse(check("verdict", pr(), task_dir=root, count=2, **spec)[0])
-        task_folder(self.home, [("pair-2", "pair", "opus", "approved", HEAD, "2026-11-14T01:00:00Z")])
-        self.assertTrue(check("verdict", pr(), task_dir=root, count=2, **spec)[0])
 
     def test_docs(self):
         root = task_folder(self.home)
@@ -225,11 +220,11 @@ class Template(unittest.TestCase):
 
     def test_follows_the_loop(self):
         high = gate.template(task_loop(difficulty="high"), "f" * 64, 7)
-        verdicts = [(c["role"], c["count"], c["accept"], c["not_profiles"], c.get("at"))
+        verdicts = [(c["role"], c["accept"], c["not_profiles"], c.get("at"))
                     for c in high["checks"] if c["check"] == "verdict"]
-        self.assertEqual(verdicts, [("pair", 1, ["approved"], ["opus"], None),
-                                    ("redteam", 1, ["approved"], ["opus"], "merge"),
-                                    ("qa", 1, ["pass"], ["opus"], "merge")])
+        self.assertEqual(verdicts, [("pair", ["approved"], ["opus"], None),
+                                    ("redteam", ["approved"], ["opus"], "merge"),
+                                    ("qa", ["pass"], ["opus"], "merge")])
         self.assertEqual(gate.validate_gate(high), [])
         self.assertEqual([c["sha256"] for c in high["checks"] if c["check"] == "loop-file"], ["f" * 64])
         self.assertEqual([c["ids"] for c in high["checks"] if c["check"] == "steps"],

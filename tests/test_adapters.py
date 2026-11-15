@@ -36,13 +36,13 @@ class Claude(unittest.TestCase):
         self.home.close()
 
     def test_command(self):
-        argv, env, clear = claude.command(self.cfg, "sonnet", name="issue-1", session_id="abc",
-                                          worktree=True, bundle="/b", environ={})
-        self.assertEqual(argv, ["claude", "-w", "issue-1", "--name", "issue-1", "--session-id", "abc",
+        argv, env, clear = claude.command(self.cfg, "sonnet", name="issue-1", session_id="abc", bundle="/b",
+                                          environ={})
+        self.assertEqual(argv, ["claude", "--name", "issue-1", "--session-id", "abc",
                                 "--model", "sonnet", "--dangerously-skip-permissions", "--plugin-dir", "/b"])
         self.assertEqual(env, {})
         self.assertIn("ANTHROPIC_BASE_URL", clear)
-        argv, _, _ = claude.command(self.cfg, "opus", worktree=False, print_mode=True, environ={},
+        argv, _, _ = claude.command(self.cfg, "opus", print_mode=True, environ={},
                                     disallowed=["Edit", "Write"])
         self.assertEqual(argv, ["claude", "-p", "--output-format", "json", "--model", "opus",
                                 "--dangerously-skip-permissions", "--disallowedTools", "Edit,Write"])
@@ -55,7 +55,7 @@ class Claude(unittest.TestCase):
         with self.assertRaises(adapters.TokenMissing) as e:
             claude.command(cfg, "p", environ={})
         self.assertEqual(e.exception.variable, "T")
-        argv, env, _ = claude.command(cfg, "p", worktree=False, environ={"T": "v"})
+        argv, env, _ = claude.command(cfg, "p", environ={"T": "v"})
         self.assertEqual(argv[:3], ["claude", "--model", "m-1"])
         self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "v")
 

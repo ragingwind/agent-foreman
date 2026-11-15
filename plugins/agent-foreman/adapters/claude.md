@@ -7,18 +7,11 @@ What is particular to Claude Code agents. The code side is
 | Item | Claude Code |
 | --- | --- |
 | herdr kind | `claude` |
-| Command | `claude --name <name> --session-id <id> --model <model> [--dangerously-skip-permissions] --plugin-dir <bundle>`, in the agent's clone (`-w <name>` only with `launch.worktree` on) |
+| Command | `claude --name <name> --session-id <id> --model <model> [--dangerously-skip-permissions] --plugin-dir <bundle>`, in the agent's clone |
 | Skills in a brief | `foreman-kit:<skill>` |
 | Transcript | `~/.claude/projects/*/<session id>.jsonl`, read by `transcript.py` |
 | Prompt mode | `claude -p --output-format json` with the prompt on stdin; `launch.py --print` runs it and keeps the JSON |
 | Trust | Asked once per folder; a trusted parent folder does not count. Answered for clones the foreman made ("Trust question") |
-
-## Start errors
-
-- `Workspace trust not yet accepted`: only a worktree session (`-w`, with
-  `launch.worktree` on) shows it; it cannot start in a folder Claude Code was
-  never trusted in. Tell the person to run `claude` once in that checkout and
-  accept the trust question. Never accept it for them.
 
 ## Trust question
 
@@ -70,10 +63,6 @@ person's unsent input: leave it and report it.
 1. Type the command and press Enter as two calls:
    `H pane send-text <pane> '/exit'`, then `H pane send-keys <pane> Enter`.
    (`send-keys <pane> '/exit'` fails with `unsupported key`.)
-2. Read the pane. Only a worktree session asks "Keep worktree" (1) or
-   "Remove worktree" (2). When the agent's changes are pushed, `H pane
-   send-keys <pane> Down` then `Enter`; the pane prints `Worktree removed.`.
-3. When the agent is still in `H agent list`, close the tab (`H tab close
-   <tab>`), which ends the process. A worktree left behind is removed with
-   `git -C <checkout> worktree remove <path>`; a clone with `clone.py
+2. When the agent is still in `H agent list`, close the tab (`H tab close
+   <tab>`), which ends the process. Its clone is removed with `clone.py
    remove`.

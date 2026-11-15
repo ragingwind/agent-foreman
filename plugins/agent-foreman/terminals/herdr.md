@@ -9,7 +9,7 @@ ids (`wA:p3`, `wA:t2`) are per machine. `herdr --skill` prints herdr's own
 skill; read it once per session.
 
 This page holds what is the same for every agent kind. What depends on the
-agent (its start errors, its input line, how to exit it) is in
+agent (its trust question, its input line, how to exit it) is in
 `adapters/<kind>.md`, for the kind the agent's profile names.
 
 ## Machines and workspaces
@@ -89,8 +89,7 @@ H agent rename <pane> <name>
   start is seen for a moment, then exits. `H agent rename` succeeding is the
   proof; on `agent_not_found`, read the pane.
 - When the pane shows `launch.py:` and a shell prompt instead of the agent,
-  read the exit line and go to `SKILL.md` "Launch". Errors the agent itself
-  prints at start are in its adapter page, "Start errors".
+  read the exit line and go to `SKILL.md` "Launch".
 
 ## Send the brief
 

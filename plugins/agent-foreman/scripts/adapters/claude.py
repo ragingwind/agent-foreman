@@ -48,23 +48,19 @@ def gateway_env(gateway, profile, environ):
     return env, clear
 
 
-def command(cfg, profile_name, name=None, session_id=None, worktree=True, bundle=None, environ=None,
+def command(cfg, profile_name, name=None, session_id=None, bundle=None, environ=None,
             print_mode=False, disallowed=(), resume=None):
     """Return (argv, variables to set, variable names to clear). In print mode
-    the agent answers one prompt read from stdin and prints JSON (`claude -p`);
-    it runs where it is started, never in a worktree of its own. `resume`
+    the agent answers one prompt read from stdin and prints JSON (`claude -p`).
+    Either way it runs in the folder it is started in, its own clone. `resume`
     continues an earlier session with its conversation, in the folder it ran in."""
     profile = cfg["profiles"][profile_name]
     gateway = cfg["gateways"][profile["gateway"]]
     env, clear = gateway_env(gateway, profile, os.environ if environ is None else environ)
     model = profile["model"] if gateway.get("kind") == "anthropic" else gateway["models"][profile["model"]]["id"]
-    # `-w` takes an optional name, so it goes first and is followed by an
-    # option; otherwise it would swallow the next argument as the worktree name.
     argv = [EXECUTABLE]
     if print_mode:
         argv += ["-p", "--output-format", "json"]
-    elif worktree:
-        argv += ["-w"] + ([name] if name else [])
     if name:
         argv += ["--name", name]
     if resume:

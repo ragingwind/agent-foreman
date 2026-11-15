@@ -43,7 +43,7 @@ reviews no diff.
 | `scripts/remote.py` | A command on a machine, inside its login shell |
 | `scripts/session.py` | The plugin's hooks: each turn's end notes where this conversation is; a new foreman session starts with the earlier one's last exchanges |
 | `terminals/herdr.md`, `terminals/prompt.md` | How to open, start, send to, read, wait on and close an agent, in a herdr pane or in prompt mode |
-| `adapters/<kind>.md` | What differs per agent kind: start errors, trust question, input line, exit. Only `claude` today |
+| `adapters/<kind>.md` | What differs per agent kind: trust question, input line, exit. Only `claude` today |
 | `loop.md` | The lead's guide to its build session; every bundle carries it |
 | `kit/skills/` | The default skills, one per loop action; every bundle carries them as `foreman-kit:<name>` |
 | `setup/` | Setting up: `setup.md` runs the parts in order; `models.md`, `project.md`, `loop.md`, `other.md` hold each part |

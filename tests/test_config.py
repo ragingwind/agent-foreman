@@ -30,7 +30,7 @@ class Levels(unittest.TestCase):
                         {"repo": "o/r", "machines": {"m1": "/src/r"}, "ops": {"check_minutes": 20}})
         user = config.load()
         self.assertEqual(user["launch"]["permission"], "default")
-        self.assertEqual(user["launch"]["worktree"], False)  # untouched key falls back
+        self.assertEqual(user["ops"]["stall_minutes"], 30)  # untouched key falls back
         project = config.load("o/r")
         self.assertEqual(project["ops"]["check_minutes"], 20)
         self.assertEqual(project["launch"]["permission"], "default")
@@ -414,7 +414,7 @@ class Skills(unittest.TestCase):
                 "--plugin-dir", "/no/such/dir", "--model", "x"]
         self.assertEqual(config.session_plugin_dirs(argv), [other])
         plugins = [{"id": "other@inline", "enabled": True, "installPath": other},
-                   {"id": "agent-foreman@herdr-skills", "enabled": True, "installPath": config.SELF_DIR}]
+                   {"id": "agent-foreman@agent-foreman", "enabled": True, "installPath": config.SELF_DIR}]
         found = config.local_skills(plugins, user_skills_dir=os.path.join(self.home.root, "none"))
         self.assertEqual(list(found), ["other:tidy"])
         p = config.validate(config.merge(config.load(), {"plugin_dirs": [config.SELF_DIR, copy]}))

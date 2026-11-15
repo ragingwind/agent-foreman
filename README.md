@@ -1,4 +1,4 @@
-# herdr-skills
+# agent-foreman
 
 Agent skills and Claude Code plugins for [herdr](https://herdr.dev), the
 terminal workspace manager for coding agents. This repository is a Claude
@@ -13,15 +13,15 @@ Code plugin marketplace: add it once, then install the plugins you want.
 In Claude Code:
 
 ```
-/plugin marketplace add ragingwind/herdr-skills
-/plugin install agent-foreman@herdr-skills
+/plugin marketplace add ragingwind/agent-foreman
+/plugin install agent-foreman@agent-foreman
 ```
 
 From a shell:
 
 ```bash
-claude plugin marketplace add ragingwind/herdr-skills
-claude plugin install agent-foreman@herdr-skills
+claude plugin marketplace add ragingwind/agent-foreman
+claude plugin install agent-foreman@agent-foreman
 ```
 
 Each plugin's README lists its requirements, first-run steps and what it

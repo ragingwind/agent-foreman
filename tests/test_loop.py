@@ -88,12 +88,12 @@ class Validate(unittest.TestCase):
         bad = {"roles": {"lead": {"mode": "tab"}, "r": {"mode": "prompt", "prompt": "none", "deny_tools": "Edit"}},
                "prompts": {"x": " "},
                "work": [stage("a", nxt={"done": "nowhere"}), stage("a", actor="ghost"),
-                        stage("b", run={"huge": "always", "mid": "if-user-visible"}, count={"high": 0}),
+                        stage("b", run={"huge": "always", "mid": "if-user-visible"}),
                         {"id": "c", "actor": "lead", "does": "", "skills": "x", "next": {}}]}
         p = "\n".join(loop.validate_loop(bad))
         for words in ("prompt x is empty", "role name 'lead' is not allowed", "mode must be one of",
                       "prompt 'none' does not exist", "deny_tools must be a list", "goes to 'nowhere'",
-                      "step a appears twice", "actor 'ghost'", "names 'huge'", "run for mid", "count for high",
+                      "step a appears twice", "actor 'ghost'", "names 'huge'", "run for mid",
                       "says nothing", "skills must be a list", "next must name"):
             self.assertIn(words, p)
 
@@ -215,7 +215,7 @@ class Render(unittest.TestCase):
         self.assertIn("| 4 | review | `634 review <N>` | review | pair |", out)
         self.assertIn("| foreman-kit:tidy | done → fix |", out)  # a replaced default skill
         self.assertIn("changes → fix; approved → finalize (finalize)", out)
-        self.assertIn("| pair | prompt | agent 1: sonnet | opus |", out)
+        self.assertIn("| pair | prompt | sonnet | opus |", out)
         self.assertIn("`loop.py prompt --step <step>`", out)
         self.assertNotIn("Missing skills", out)
 
@@ -232,7 +232,7 @@ class Render(unittest.TestCase):
         self.assertIn("| 1 | redteam-review | `634 redteam-review` | redteam-review | redteam |", out)
         self.assertIn("changes → build (build session); approved → stop", out)
         self.assertIn("script → verify (build session)", out)
-        self.assertIn("| qa | prompt | agent 1: opus |", out)
+        self.assertIn("| qa | prompt | opus |", out)
 
     def test_as_data(self):
         data = loop.as_data(self.cfg, "634", "mid", False, self.resolved, kit_name, "o/r", "main", "sonnet",
@@ -253,12 +253,6 @@ class Render(unittest.TestCase):
         self.assertEqual([s["id"] for s in trivial["work"]], ["plan", "build", "verify", "finalize"])
         self.assertEqual(next(s for s in trivial["work"] if s["id"] == "verify")["next"]["done"], "finalize")
         self.assertEqual(set(trivial["roles"]), {"redteam", "qa"})
-
-    def test_assign(self):
-        self.assertEqual(loop.assign(["a", "b", "c"], 2), (["a", "b"], ""))
-        self.assertEqual(loop.assign(["a"], 1), (["a"], ""))
-        self.assertIn("only 1", loop.assign(["a"], 2)[1])
-        self.assertEqual(loop.assign([], 1), ([], "no profile for this role"))
 
 
 class Cli(unittest.TestCase):
@@ -289,11 +283,11 @@ class Cli(unittest.TestCase):
         r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "high", "--machine", "local")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("| foreman-kit:work-breakdown, scenario |", r.stdout)  # the project's skill replaces cross-check
-        self.assertIn("| pair | prompt | agent 1: sonnet | - |", r.stdout)  # high: never the lead's opus
+        self.assertIn("| pair | prompt | sonnet | - |", r.stdout)  # high: never the lead's opus
         self.assertNotIn("opus |", r.stdout.split("| Role |")[1])
         r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "high", "--machine", "local",
                 "--lead", "sonnet")  # the lead fell back to sonnet
-        self.assertIn("| pair | prompt | agent 1: opus | - |", r.stdout)
+        self.assertIn("| pair | prompt | opus | - |", r.stdout)
         args = ["loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "low", "--machine", "local",
                 "--json"]
         self.assertEqual(run(*args).returncode, 2)  # needs --base

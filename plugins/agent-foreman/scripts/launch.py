@@ -3,7 +3,7 @@
 
 Usage:
   python3 launch.py PROFILE [--name NAME] [--session-id UUID | --resume UUID] [--project OWNER/REPO]
-                    [--no-worktree] [--task-dir DIR] [--status FILE] [--disallow TOOL,...] [--dry-run]
+                    [--task-dir DIR] [--status FILE] [--disallow TOOL,...] [--dry-run]
   python3 launch.py PROFILE --print --prompt-file FILE --out FILE [--role ROLE] [--name NAME]
                     [--session-id UUID] [--task-dir DIR] [--status FILE] [--disallow TOOL,...] [--dry-run]
 
@@ -32,8 +32,8 @@ PROFILE is the one the foreman picked from the tier. The script sets the
 gateway's environment for this process only and replaces itself with the
 agent, so it runs the same in any shell.
 
---print runs the agent once in prompt mode, where it is started (no
-worktree): the prompt comes from --prompt-file, the agent's JSON result goes
+--print runs the agent once in prompt mode, where it is started: the
+prompt comes from --prompt-file, the agent's JSON result goes
 to --out, and one line of JSON is printed: ok, session_id, cost, denials,
 out, and verdict (the word on the answer's last `Verdict:` line). Next to
 --out it writes `<out without .json>.meta.json`: the role (--role), the
@@ -83,11 +83,10 @@ def bundle_root():
 def main():
     parser = argparse.ArgumentParser(description="Start a coding agent from a agent-foreman profile.")
     parser.add_argument("profile", help="the profile to run on (config.py tier picks it)")
-    parser.add_argument("--name", help="session name; also the worktree name")
+    parser.add_argument("--name", help="session name")
     parser.add_argument("--session-id", help="session id (a UUID) the foreman chose, so it can find the transcript")
     parser.add_argument("--resume", metavar="UUID", help="continue that session, with its conversation")
     parser.add_argument("--project", help="OWNER/REPO whose settings apply (ignored in a bundle)")
-    parser.add_argument("--no-worktree", action="store_true")
     parser.add_argument("--print", dest="print_mode", action="store_true",
                         help="answer one prompt and exit (prompt mode)")
     parser.add_argument("--prompt-file", help="with --print: the prompt")
@@ -140,7 +139,6 @@ def main():
     adapter = adapters.get(kind)
     try:
         argv, env, clear = adapter.command(cfg, profile_name, name=args.name, session_id=args.session_id,
-                                           worktree=cfg["launch"]["worktree"] and not args.no_worktree,
                                            bundle=bundle, print_mode=args.print_mode,
                                            disallowed=[t.strip() for t in args.disallow.split(",") if t.strip()],
                                            resume=args.resume)

@@ -158,9 +158,9 @@ A loop is a list of steps. Each step has an actor, what it does, the skills
 it uses, and `next`: where each outcome goes, a step id or `stop`. The last
 outcome in `next` is the success path; `config.py check` reports a loop whose
 success path does not reach `stop` from the work loop's first step and from
-each check step. The rules per difficulty (`run`, `count`, `extra`) are on
-the steps. A stage is a run of steps with the same `stage`; tab labels,
-status lines and reports follow the stages. Setup (loop) designs the loops;
+each check step. The rule per difficulty (`run`) is on the steps. A stage
+is a run of steps with the same `stage`; tab labels, status lines and
+reports follow the stages. Setup (loop) designs the loops;
 each project can change them.
 
 **The task's loop.** With the brief, the foreman writes the task's loop into
@@ -357,7 +357,7 @@ Pass conditions are code, not prose (`scripts/gate.py`).
     Agent block filled (not for a trivial task).
   - `ci`: every status check finished and passed.
   - `base-fresh`: the head contains the base branch's head.
-  - `verdict`: enough agents of a role whose latest answer in `reviews/`
+  - `verdict`: an agent of the role whose latest answer in `reviews/`
     (`launch.py --role`) ran to the end with a `Verdict:` the role accepts,
     at the head commit (with `--cwd`, also at an earlier commit whose change
     is the same, by `git patch-id`), on a profile other than the lead's.
@@ -414,7 +414,7 @@ Pass conditions are code, not prose (`scripts/gate.py`).
 
 - Every agent that touches files works in its own clone (`clone.py make`):
   `~/.cache/agent-foreman/work/<project>/<task>/<agent>`. It starts inside
-  that clone, never in a shared checkout, so `launch.worktree` is off.
+  that clone, never in a shared checkout.
   - The lead's clone comes from the project's checkout on that machine. The
     pair's, the red team's, QA's and the lead's scenario clone come from the
     lead's clone at its head, with `--fresh --no-push`. Either way `origin`

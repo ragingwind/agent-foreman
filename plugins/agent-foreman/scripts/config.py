@@ -496,11 +496,9 @@ def validate_launch(cfg):
 
     launch = cfg.get("launch", {})
     problems += [f"launch: unknown key {k!r}" + ("; name the profile when an agent starts" if k == "profile" else "")
-                 for k in launch if k not in ("permission", "worktree")]
+                 for k in launch if k != "permission"]
     if launch.get("permission") not in PERMISSIONS:
         problems.append(f"launch: permission must be one of {', '.join(PERMISSIONS)}")
-    if not isinstance(launch.get("worktree"), bool):
-        problems.append("launch: worktree must be true or false")
     return problems
 
 

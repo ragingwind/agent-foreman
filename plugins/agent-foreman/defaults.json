@@ -107,8 +107,7 @@
     ]
   },
   "launch": {
-    "permission": "bypass",
-    "worktree": false
+    "permission": "bypass"
   },
   "bundle": {
     "skills": []

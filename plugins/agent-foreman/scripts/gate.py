@@ -33,7 +33,7 @@ Checks (each may say "severity": "warn" to report without blocking):
                   filled (not for a trivial task)
   ci              every status check finished and passed
   base-fresh      the head contains the base branch's head
-  verdict         at least "count" agents of "role" whose latest answer in the
+  verdict         an agent of "role" whose latest answer in the
                   task folder's reviews/ (launch.py --role) ends with a
                   `Verdict:` in "accept", given at the head SHA (with --cwd,
                   also at an earlier SHA whose change is the same), on a
@@ -301,7 +301,6 @@ def check_verdict(pr, spec, ctx):
     if not ctx.get("task_dir"):
         return False, "needs --task-dir"
     accept = [a.lower() for a in spec.get("accept", ["approved"])]
-    count = spec.get("count", 1)
     banned = set(spec.get("not_profiles", []))
     good, seen = 0, []
     for agent, meta, text in latest_answers(ctx["task_dir"], spec["role"]):
@@ -314,7 +313,7 @@ def check_verdict(pr, spec, ctx):
         seen.append(f"{agent} {meta.get('profile')} {head[:7] or '?'} {verdict or 'no verdict'}"
                     + ("" if meta.get("ok") is True else " (the run failed)")
                     + ("" if meta.get("profile") not in banned else " (the lead's profile)"))
-    return good >= count, f"{good} of {count} {spec['role']} at the head; seen: {', '.join(seen) or 'none'}"
+    return good > 0, f"{good} accepted {spec['role']} answer(s) at the head; seen: {', '.join(seen) or 'none'}"
 
 
 def check_tests_weakened(pr, spec, ctx):
@@ -416,12 +415,8 @@ def template(task_loop, loop_sha=None, pr=None):
     checks += [{"check": "steps", "ids": [s["id"] for s in work if s["stage"] != last_stage]},
                {"check": "docs", "trivial": task_loop["trivial"]}, {"check": "ci"}, {"check": "base-fresh"}]
     for which, at in (("work", None), ("check", "merge")):
-        counts = {}
-        for s in task_loop[which]:
-            if s["actor"] in roles:
-                counts[s["actor"]] = max(counts.get(s["actor"], 1), s.get("count", 1))
-        for role, count in counts.items():
-            spec = {"check": "verdict", "role": role, "count": count, "accept": roles[role].get("accept", ["approved"]),
+        for role in dict.fromkeys(s["actor"] for s in task_loop[which] if s["actor"] in roles):
+            spec = {"check": "verdict", "role": role, "accept": roles[role].get("accept", ["approved"]),
                     "not_profiles": [lead] if lead else []}
             if at:
                 spec["at"] = at

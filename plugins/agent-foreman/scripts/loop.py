@@ -22,8 +22,7 @@ the action is done, never the flow or the record.
 
 A loop is a list of steps. A step: {"id", "stage", "actor", "does",
 "skills": [...], "next": {outcome: step id or "stop"}, and optionally "run":
-{difficulty: "always"|"never"|"if-not-trivial"}, "count": {difficulty: n},
-"extra": {difficulty: text}}. "if-not-trivial" runs unless the foreman
+{difficulty: "always"|"never"|"if-not-trivial"}}. "if-not-trivial" runs unless the foreman
 marked the task trivial: docs or text only, a typo, or a rename that changes
 no behavior. The last outcome in "next" is the success path, and from the
 work loop's first step and from each check step it must reach "stop"; a step
@@ -139,18 +138,15 @@ def validate_loop(loop):
                 for outcome, target in nxt.items():
                     if target != STOP and target not in targets:
                         problems.append(f"{where}: outcome {outcome} goes to {target!r}, which is not a step")
-            for key, allowed in (("run", RUNS), ("count", None), ("extra", None)):
-                table = s.get(key, {})
-                if not isinstance(table, dict):
-                    problems.append(f"{where}: {key} must map difficulties to values")
-                    continue
-                for level, value in table.items():
-                    if level not in LEVELS:
-                        problems.append(f"{where}: {key} names {level!r}; use {', '.join(LEVELS)}")
-                    elif allowed and value not in allowed:
-                        problems.append(f"{where}: run for {level} must be one of {', '.join(allowed)}")
-                    elif key == "count" and (not isinstance(value, int) or value < 1):
-                        problems.append(f"{where}: count for {level} must be 1 or more")
+            table = s.get("run", {})
+            if not isinstance(table, dict):
+                problems.append(f"{where}: run must map difficulties to values")
+                continue
+            for level, value in table.items():
+                if level not in LEVELS:
+                    problems.append(f"{where}: run names {level!r}; use {', '.join(LEVELS)}")
+                elif value not in RUNS:
+                    problems.append(f"{where}: run for {level} must be one of {', '.join(RUNS)}")
     return problems or success_problems(loop)
 
 
@@ -210,8 +206,7 @@ def stage_ids(loop, which="work"):
 
 def plan(loop, difficulty, trivial=False, which="work"):
     """The steps that run for one task, with `next` rewired past the ones
-    that do not run, and each step's stage, count and extra for this
-    difficulty."""
+    that do not run, and each step's stage."""
     steps = loop.get(which, [])
     runs = {}
     for s in steps:
@@ -231,11 +226,9 @@ def plan(loop, difficulty, trivial=False, which="work"):
     for s in steps:
         if not runs[s["id"]]:
             continue
-        item = {k: v for k, v in s.items() if k not in ("run", "count", "extra")}
+        item = {k: v for k, v in s.items() if k != "run"}
         item["stage"] = stage_of(s)
         item["next"] = {k: land(v) for k, v in s["next"].items()}
-        item["count"] = s.get("count", {}).get(difficulty, 1)
-        item["extra"] = s.get("extra", {}).get(difficulty, "")
         out.append(item)
     return out
 
@@ -312,18 +305,6 @@ def has_rounds(steps, stage):
                for s in steps if s["stage"] == stage for t in s["next"].values())
 
 
-def assign(candidates, count):
-    """Give `count` agents of one role a profile each, all different where the
-    candidates allow, so two reviewers do not share one model's blind spots.
-    Returns (profiles, warning or "")."""
-    if not candidates:
-        return [], "no profile for this role"
-    picks = [candidates[i] if i < len(candidates) else candidates[-1] for i in range(count)]
-    short = len(set(picks)) < count
-    return picks, (f"only {len(set(picks))} different profile(s) for {count} agents; add a model with /agent-foreman:agent-foreman setup"
-                   if short else "")
-
-
 def stage_labels(cfg, task, steps):
     """The tab label of each stage, with `<N>` for the round where it repeats."""
     from config import label
@@ -349,7 +330,7 @@ def as_data(cfg, task, difficulty, trivial, resolved, call_name, repo, base, lea
         steps = plan(loop, difficulty, trivial, which)
         labels = stage_labels(cfg, task, steps)
         out[which] = [{"id": s["id"], "stage": s["stage"], "label": labels[s["stage"]], "actor": s["actor"],
-                       "does": s["does"] + (f" {s['extra']}" if s["extra"] else ""), "count": s["count"],
+                       "does": s["does"],
                        "skills": [call_name(*resolved[n]) for n in s.get("skills", []) if resolved[n][0] != "missing"],
                        "next": s["next"]} for s in steps]
         for s in steps:
@@ -458,26 +439,19 @@ def render(cfg, task, difficulty, trivial, resolved, profiles, call_name, which=
         st = s["stage"]
         first = i == 1 or steps[i - 2]["stage"] != st
         tab = f"`{labels[st]}`" if first else ""
-        actor = s["actor"] + (f" × {s['count']}" if s["count"] > 1 else "")
         skills = ", ".join(call_name(*resolved[n]) for n in s.get("skills", []) if resolved[n][0] != "missing") or "-"
-        does = s["does"] + (f" {s['extra']}" if s["extra"] else "")
         nxt = "; ".join(f"{k} → {v}" + (f" ({stage[v]})" if v in stage and stage[v] != st else "")
                         + (" (build session)" if v != STOP and v not in stage else "")
                         for k, v in s["next"].items())
-        lines.append(f"| {i} | {st if first else ''} | {tab} | {s['id']} | {actor} | {does.replace('|', '/')} | "
+        lines.append(f"| {i} | {st if first else ''} | {tab} | {s['id']} | {s['actor']} | {s['does'].replace('|', '/')} | "
                      f"{skills} | {nxt} |")
-    acting = {}
-    for s in steps:
-        if s["actor"] not in PEOPLE:
-            acting[s["actor"]] = max(acting.get(s["actor"], 1), s["count"])
+    acting = list(dict.fromkeys(s["actor"] for s in steps if s["actor"] not in PEOPLE))
     if acting:
-        lines += ["", "| Role | Mode | Agents and profiles | Fallback (never the lead's) |", "| --- | --- | --- | --- |"]
-        for r, n in acting.items():
-            picks, warning = assign(profiles.get(r, []), n)
-            agents = "; ".join(f"agent {i}: {p}" for i, p in enumerate(picks, 1)) or "-"
-            rest = [p for p in profiles.get(r, []) if p not in picks]
-            lines.append(f"| {r} | {loop['roles'][r]['mode']} | {agents}{' (' + warning + ')' if warning else ''} | "
-                         f"{', '.join(rest) or '-'} |")
+        lines += ["", "| Role | Mode | Profile | Fallback (never the lead's) |", "| --- | --- | --- | --- |"]
+        for r in acting:
+            candidates = profiles.get(r, [])
+            lines.append(f"| {r} | {loop['roles'][r]['mode']} | {candidates[0] if candidates else '- (no profile for this role)'} | "
+                         f"{', '.join(candidates[1:]) or '-'} |")
         lines += ["", "Start a role's agent with `loop.py prompt --step <step>` from the agent's own clone: it "
                       "writes the prompt from loop.json and prints the commands to run, as loop.md says."]
     return "\n".join(lines) + "\n"
@@ -553,11 +527,7 @@ def _cli(argv):
         print("| Stage | Step | Actor | Does | Skills | Next | low | mid | high |\n"
               "| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
         for s in loop.get(args.loop, []):
-            cells = []
-            for lv in LEVELS:
-                run = s.get("run", {}).get(lv, "always")
-                n = s.get("count", {}).get(lv)
-                cells.append(run + (f" ×{n}" if n and n > 1 else ""))
+            cells = [s.get("run", {}).get(lv, "always") for lv in LEVELS]
             nxt = "; ".join(f"{k} → {v}" for k, v in s["next"].items())
             print(f"| {stage_of(s)} | {s['id']} | {s['actor']} | {s['does'].replace('|', '/')} | "
                   f"{', '.join(s.get('skills', [])) or '-'} | {nxt} | {' | '.join(cells)} |")

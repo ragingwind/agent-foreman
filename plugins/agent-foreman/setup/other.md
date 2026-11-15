@@ -6,7 +6,7 @@ at the person's level (every project) or a project's.
 
 | Section | Keys | Standard |
 | --- | --- | --- |
-| `launch` | `permission` (`bypass` or `default`), `worktree` (`true` or `false`) | `bypass`, `false` |
+| `launch` | `permission` (`bypass` or `default`) | `bypass` |
 | `labels` | `default` (the tab label), `events` (a label per stage, or for `blocked`, `exited`, `owner-decision`). Placeholders: `{task}`, `{stage}`, `{round}`, `{machine}`, `{profile}`, `{project}` | `{task} {stage}` |
 | `report` | `language` (free text in reports), `address` (how to address the person, or empty), `template` | the person's language, none, a status table |
 | `ops` | `check_minutes`, `report_minutes` (a lead's stage line at least this often), `stall_minutes` (more than `report_minutes`), `backoff` (`first_hours`, `factor`), `batch` (tasks at once, or null), `placement` (`least-busy` or `ask`), `disk_check`, `disk_min_free_gb`, `after_merge` (steps) | 10, 15, 30, 1 h ×2, none, `least-busy`, on, 20, 8 steps |
@@ -31,7 +31,6 @@ with `Keep: <its value now>` first. Notes:
 
 - `permission: default` makes agents stop at permission prompts; the person
   answers them in the agent's tab, never the foreman.
-- `worktree: true` only matters for an agent started outside its own clone.
 - A label per stage uses the loop's stage names (`loop.py show`).
 - A `bundle` skill must be one `config.py skills` lists.
 

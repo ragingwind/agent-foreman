@@ -86,9 +86,7 @@ Go into the chosen parts only.
   shows it. A step is removed with `{"id": "<id>", "remove": true}`. The
   order of existing steps stays.
 - **Difficulty**: per step, `run` at low, mid and high (`always`, `never`,
-  `if-not-trivial`), `count` (how many agents, for a role's step) and
-  `extra` (an added instruction). A stage whose steps all do not run is
-  skipped.
+  `if-not-trivial`). A stage whose steps all do not run is skipped.
 - **Roles**: `mode` (`prompt` or `pane`), `step` (tiers above the lead's), and
   the fixed prompt. `loop.py prompt` fills in `<task>`, `<repo>`, `<base>`,
   `<head>`, `<diff>`, `<task folder>`, `<skill>`, `<skills>`, `<full test
