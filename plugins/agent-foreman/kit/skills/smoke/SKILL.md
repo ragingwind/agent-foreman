@@ -30,6 +30,8 @@ description: >-
 
 ## Record
 
+**Evidence** for the step's `end` line: `smoke: plan.md Checks <n> entries`.
+
 Add one entry under `## Checks` in `$AF_TASK_DIR/plan.md` (the task folder) for each command, in exactly this shape:
 
 ````markdown

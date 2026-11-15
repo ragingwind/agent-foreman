@@ -6,6 +6,26 @@ the foreman runs the verification session (a red team and QA) on other
 models. When they find something, the foreman sends you back into the build
 session.
 
+## Evidence at every step
+
+**No step ends without evidence.** The `end` line of every step names the
+skills the step ran and where their record is, so the foreman can check it:
+
+```
+--done "work-breakdown: plan.md 4 rows; cross-check: scenario.md 6 steps"
+--done "tdd, commit: W1 3f2a9c1, W2 8b1d0e4, W3 c07e5aa"
+--done "unit: plan.md Checks 3 entries, all pass; smoke: 1 entry; cross-check: scenario.md run, Verdict: pass"
+--done "review: pair-1, Verdict: changes, reviews/pair-1-1.json"
+--done "handoff: handoff.md; pull request #12 ready; gate passed"
+```
+
+`status.py note` refuses an `end` line without it. The foreman checks each
+skill's record against your line (`gate.py record`) before the task goes
+on; what it cannot find, it asks you about or sends you back to do. A
+project skill the table names counts the same way: its own result (commits,
+a pull request) goes in the line, with the record of the default skill it
+stands in for.
+
 ## What you get
 
 - **The task folder**: `$AF_TASK_DIR` (also written in the brief). Every
@@ -18,7 +38,8 @@ session.
   `loop.json`; the gate blocks when either changed.
 
 You have approval for every step in the brief: do not stop between steps to
-ask whether to go on.
+ask whether to go on. The one exception is a step the table gives to the
+foreman (`plan-check`, at high difficulty): there you stop and wait.
 
 **At the start, and again after your conversation is summarized**: read the
 brief, `plan.md` if it exists, and the last lines of `status.jsonl`. When
@@ -38,16 +59,23 @@ brief, `plan.md` if it exists, and the last lines of `status.jsonl`. When
    and prints what the step does.
 2. Do it with the skills the table names. A skill's **Action** says how,
    its **Flow** says which outcome to end with, and its **Record** says what
-   to write in the task folder and in what shape.
+   to write in the task folder and in what shape. A skill shown as `<skill>
+   (flow and record: <default skill>)` replaces that default skill's
+   action: do the work the way `<skill>` says, then end with the default
+   skill's Flow and write its Record. When a skill starts agents of its own,
+   write `progress` lines while they work.
 3. End it with the outcome that happened, one of the step's `Next` keys in
    the table:
 
    ```bash
-   python3 <bundle>/scripts/status.py note --stage <stage> --step <step> --event end --outcome <outcome> --done "<one line>"
+   python3 <bundle>/scripts/status.py note --stage <stage> --step <step> --event end --outcome <outcome> --done "<evidence>"
    ```
 
-   It refuses an outcome the step does not have, and prints the next step.
-   Go there.
+   It refuses an outcome the step does not have, and an `end` line without
+   evidence ("Evidence at every step"). It prints the next step: go there.
+   When it says the next step is the foreman's, stop there: write a stop
+   line (`--event stop --done "waiting: <what the foreman checks>"`) and
+   report `waiting`. The foreman tells you where to go on.
 
 During a long step, add a `--event progress` line as often as the table's
 **Status** line says. No line for as long as it says counts as a stall. The
@@ -63,11 +91,14 @@ model reviews your diff. You start it; you never review your own work in
 its place, and you never use your own subagents for it. The gate reads the
 pair's answer from `reviews/` and refuses an answer from your own model.
 
-1. Give it its own clone at your head:
+1. Give it its own clone at your head, with the agent-instruction files as
+   the base has them (the base SHA from `gh pr view <N> --json baseRefOid -q
+   .baseRefOid`, or `git rev-parse origin/<base>` before the pull request
+   exists):
 
    ```bash
    python3 <bundle>/scripts/clone.py make --project <repo> --task <task> --agent pair-1 \
-     --from <your clone> --ref <head SHA> --fresh --no-push
+     --from <your clone> --ref <head SHA> --fresh --no-push --instructions-from <base SHA>
    ```
 
 2. From inside the `path` it prints:
@@ -120,30 +151,35 @@ Stop only at these, and report:
    option and its reason, keep working on everything that does not depend on
    it, and stop when nothing else is left.
 3. **Blocked**: something you cannot get or do, after trying once more.
+4. **Waiting for the foreman**: the next step is the foreman's (`plan-check`
+   at high difficulty). Its stop line is on that step (`--step plan-check`).
 
-For a decision or blocked, write the stop line yourself:
+For a decision, blocked or waiting, write the stop line yourself:
 
 ```bash
 python3 <bundle>/scripts/status.py note --stage <current stage> --step <current step> --event stop \
   --done "<the REPORT line>" [--blocked "<what you need>"]
 ```
 
-Never merge. Decide any other question inside the task's scope with the
-option you would recommend, and write it in `plan.md`'s Decisions in one line
-with its reason.
+Never merge: the foreman merges after the gate, and `gh pr merge` is denied
+to you. Decide any other question inside the task's scope with the option
+you would recommend (also one a skill asks you), and write it in `plan.md`'s
+Decisions in one line with its reason.
 
 ## Report
 
 At a stop point, after the stop line, end your turn with one line:
 
 ```
-REPORT: <ready | decision | blocked> — <one line: the pull request, the verdicts and rounds, or what you need>
+REPORT: <ready | decision | blocked | waiting> — <one line: the pull request, the verdicts and rounds, or what you need>
 ```
 
 ## Records
 
-- Everything about the task goes in the task folder. Nothing goes in issue
-  or pull request comments except the pull request body.
+- Everything about the task goes in the task folder. A project skill the
+  table names may also write what it writes (labels, issue or pull request
+  comments); apart from that, nothing goes in issue or pull request comments
+  except the pull request body.
 - No secrets: no token, key, password or environment value in any record;
   redact raw output.
 - No AI attribution in any git or GitHub text.

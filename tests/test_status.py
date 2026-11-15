@@ -106,17 +106,21 @@ class Note(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("now: build (build, lead): Build it. Skills: foreman-kit:unit.", r.stdout)
         self.assertEqual(lines(self.file)[0]["step"], "build")  # filled in from the loop
+        r = run("status.py", "note", "--stage", "verify", "--event", "end", "--outcome", "done", env=env)
+        self.assertEqual(r.returncode, 2)  # an end line carries its evidence
+        self.assertIn("needs --done, the step's evidence", r.stderr)
         for outcome in (None, "pass"):  # an end line names one of the step's own outcomes
-            r = run("status.py", "note", "--stage", "verify", "--event", "end",
+            r = run("status.py", "note", "--stage", "verify", "--event", "end", "--done", "unit: Checks",
                     *(["--outcome", outcome] if outcome else []), env=env)
             self.assertEqual(r.returncode, 2, outcome)
             self.assertIn("needs --outcome, one of fail, done (step verify)", r.stderr)
-        r = run("status.py", "note", "--stage", "verify", "--event", "end", "--outcome", "fail", env=env)
+        r = run("status.py", "note", "--stage", "verify", "--event", "end", "--outcome", "fail", "--done", "x", env=env)
         self.assertEqual(r.stdout.strip(), "next: build (build, lead): Build it. Skills: foreman-kit:unit.")
         self.assertEqual((lines(self.file)[-1]["outcome"], lines(self.file)[-1]["to"]), ("fail", "build"))
-        r = run("status.py", "note", "--stage", "verify", "--event", "end", "--outcome", "done", env=env)
+        r = run("status.py", "note", "--stage", "verify", "--event", "end", "--outcome", "done", "--done", "x", env=env)
         self.assertIn("next: stop: no step follows", r.stdout)
         r = run("status.py", "note", "--file", self.file, "--stage", "test", "--event", "end", "--outcome", "script",
+                "--done", "qa-1: mismatch (script) only; reviews/qa-1-1.json",
                 env={"AF_STATUS_FILE": ""})  # the foreman, for a check step
         self.assertIn("next: verify (verify, lead): Check it.", r.stdout)
 

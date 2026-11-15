@@ -11,10 +11,11 @@ import config
 import gate
 
 HEAD = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0"
+BASE = "b0b1b2b3b4b5b6b7b8b9b0b1b2b3b4b5b6b7b8b9"
 
 
 def pr(**over):
-    data = {"number": 7, "state": "OPEN", "isDraft": False, "baseRefName": "main", "headRefOid": HEAD,
+    data = {"number": 7, "state": "OPEN", "isDraft": False, "baseRefName": "main", "baseRefOid": BASE, "headRefOid": HEAD,
             "additions": 30, "deletions": 5, "behind_by": 0,
             "statusCheckRollup": [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
             "files": [{"filename": "src/x.py", "status": "modified", "patch": "@@\n-a = 1\n+a = 2"}]}
@@ -85,6 +86,14 @@ class Checks(unittest.TestCase):
         self.assertTrue(ok)
         self.assertTrue(check("tests-weakened", pr())[0])
 
+    def test_agent_instructions_count_as_weakening(self):
+        files = [{"filename": f, "status": "modified", "patch": ""} for f in
+                 (".claude/skills/review/SKILL.md", "CLAUDE.md", "pkg/AGENTS.md", "docs/claude.txt")]
+        ok, evidence = check("tests-weakened", pr(files=files))
+        self.assertFalse(ok)
+        self.assertEqual(evidence.count("edited agent instructions"), 3, evidence)
+        self.assertTrue(check("tests-weakened", pr(files=files), allow=["agent-files"])[0])
+
     def test_size_ready_and_skips(self):
         big = pr(additions=500, deletions=20)
         self.assertFalse(check("size", big, max_lines=400)[0])
@@ -110,6 +119,220 @@ class Checks(unittest.TestCase):
         self.assertEqual(gate.validate_gate({"repo": "bad"}), ["gate: repo must look like owner/name"])
         for old in ("sections", "scenario"):  # the pull-request comment checks are gone
             self.assertIn(f"'{old}'", gate.validate_gate({"repo": "o/r", "checks": [{"check": old}]})[0])
+
+
+class CommandChecks(unittest.TestCase):
+    def test_a_command_gets_the_task_in_its_environment(self):
+        script = ('test "$AF_REPO" = o/r && test "$AF_PR" = 7 && test "$AF_TASK" = 12 && test "$AF_BASE" = main '
+                  f'&& test "$AF_HEAD" = {HEAD} && test "$AF_TASK_DIR" = /t')
+        g = {"repo": "o/r", "pr": 7, "task": "12", "checks": [{"check": "command", "name": "env", "run": script}]}
+        self.assertTrue(gate.evaluate(pr(), g, cwd=os.getcwd(), task_dir="/t")["pass"])
+        self.assertFalse(gate.evaluate(pr(baseRefName="dev"), g, cwd=os.getcwd(), task_dir="/t")["pass"])
+        self.assertEqual(gate.evaluate(pr(), g)["checks"][0]["evidence"], "needs --cwd")
+
+    def test_named_commands_report_and_skip_apart(self):
+        g = {"repo": "o/r", "pr": 7, "checks": [{"check": "command", "run": "true"},
+                                                {"check": "command", "name": "closing-keyword", "run": "false"},
+                                                {"check": "command", "name": "done-label", "run": "false",
+                                                 "severity": "warn"}]}
+        report = gate.evaluate(pr(), g, cwd=os.getcwd())
+        self.assertEqual([c["check"] for c in report["checks"]], ["command", "closing-keyword", "done-label"])
+        self.assertEqual(report["blocked"], ["closing-keyword"])  # a warn check reports without blocking
+        report = gate.evaluate(pr(), g, cwd=os.getcwd(), skip={"closing-keyword"})
+        self.assertEqual(([c["check"] for c in report["checks"]], report["pass"]), (["command", "done-label"], True))
+        report = gate.evaluate(pr(), g, cwd=os.getcwd(), skip={"command"})  # the full tests alone
+        self.assertEqual([c["check"] for c in report["checks"]], ["closing-keyword", "done-label"])
+
+    def test_project_checks(self):
+        good = [{"check": "command", "name": "closing-keyword", "run": "x", "at": "merge"},
+                {"check": "command", "name": "done-label", "run": "y", "severity": "warn"}]
+        self.assertEqual(gate.project_check_problems(good), [])
+        self.assertEqual(gate.project_check_problems([]), [])
+        self.assertEqual(gate.validate_gate({"repo": "o/r", "checks": good}), [])
+        self.assertEqual(gate.project_check_problems([{"check": "command", "name": "a", "from_base": "s/x.sh"}]), [])
+        bad = [({"check": "command"}, "must be a list"),
+               ([{"check": "command", "name": ["a"], "run": "x"}], "lower-case letters"),
+               ([{"check": "command", "name": "a", "run": "x", "from_base": "s.sh"}], "one of them"),
+               ([{"check": "command", "name": "a", "from_base": "../up.sh"}], "a path inside the repository"),
+               ([{"check": "command", "name": "a", "from_base": "/etc/x"}], "a path inside the repository"),
+               (["x"], "must be an object"),
+               ([{"check": "ci", "name": "a", "run": "x"}], "must be a command check"),
+               ([{"check": "command", "run": "x"}], "needs a name"),
+               ([{"check": "command", "name": "a", "run": " "}], "needs run"),
+               ([{"check": "command", "name": "a"}], "needs run"),
+               ([{"check": "command", "name": "a", "run": "x", "when": 1}], "unknown key(s) when"),
+               ([{"check": "command", "name": "a", "run": "x", "severity": "loud"}], "severity must be"),
+               ([{"check": "command", "name": "a", "run": "x", "at": "ready"}], "at must be merge"),
+               ([{"check": "command", "name": "Bad Name", "run": "x"}], "lower-case letters"),
+               ([{"check": "command", "name": "ci", "run": "x"}], "taken by a standard check"),
+               ([{"check": "command", "name": "verdict-qa", "run": "x"}], "taken by a standard check"),
+               ([{"check": "command", "name": "a", "run": "x"}, {"check": "command", "name": "a", "run": "y"}],
+                "used twice")]
+        for checks, words in bad:
+            problems = gate.project_check_problems(checks)
+            self.assertTrue(any(words in p for p in problems), (checks, words, problems))
+        p = gate.validate_gate({"repo": "o/r", "checks": [{"check": "ci", "name": "x"},
+                                                          {"check": "command", "name": "a", "run": "x"},
+                                                          {"check": "command", "name": "a", "run": "y"},
+                                                          {"check": "command", "run": "z", "at": "ready"}]})
+        for words in ("only a command check takes a name", "used twice", "at must be merge"):
+            self.assertTrue(any(words in x for x in p), words)
+
+
+class FromBase(unittest.TestCase):
+    """A from_base check runs the script as GitHub's base commit has it, whatever the lead did to its clone."""
+
+    def setUp(self):
+        self.home = TempHome()
+        self.repo = os.path.join(self.home.root, "repo")
+        self.origin = os.path.join(self.home.root, "origin.git")
+        g = ["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-C", self.repo]
+        self.git = lambda *a: subprocess.run(g + list(a), check=True, capture_output=True, text=True).stdout.strip()
+        subprocess.run(["git", "init", "-q", "--bare", self.origin], check=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", self.repo], check=True)
+        self.git("config", "user.email", "t@example.invalid")
+        self.git("config", "user.name", "t")
+        self.home.write("repo/check.sh", '#!/bin/sh\ntest "$AF_PR" = 7 && echo "base script for $AF_BASE_SHA"\n')
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "strict")
+        self.base = self.git("rev-parse", "HEAD")
+        self.git("remote", "add", "origin", self.origin)
+        self.git("push", "-q", "origin", "main")
+        self.spec = {"check": "command", "name": "c", "from_base": "check.sh"}
+
+    def tearDown(self):
+        self.home.close()
+
+    def run_check(self, **over):
+        return self.command(pr(baseRefOid=self.base, **over), self.repo, self.spec)
+
+    @staticmethod
+    def command(data, cwd, spec):
+        return gate.check_command(data, spec, {"cwd": cwd, "task_dir": None})
+
+    def test_runs_the_base_script(self):
+        ok, evidence = self.run_check()
+        self.assertTrue(ok, evidence)
+        self.assertIn(f"base script for {self.base}", evidence)
+        self.assertFalse(self.run_check(number=8)[0])  # the script's own test fails
+
+    def test_the_lead_cannot_swap_the_script(self):
+        self.home.write("repo/check.sh", "#!/bin/sh\nexit 0\n")
+        self.git("commit", "-q", "-am", "weaker")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")  # the lead moves its own origin ref
+        self.assertFalse(self.run_check(number=8)[0])  # still the base commit's script
+
+    def test_a_script_it_cannot_get_blocks(self):
+        for over, words in (({"baseRefOid": "f" * 40}, "no check.sh at the base"), ({"baseRefOid": None}, "no base commit")):
+            ok, evidence = self.command(pr(**over), self.repo, self.spec)
+            self.assertFalse(ok)
+            self.assertIn(words, evidence)
+        ok, evidence = self.command(pr(baseRefOid=self.base), self.repo, {**self.spec, "from_base": "gone.sh"})
+        self.assertEqual((ok, evidence.startswith("no gone.sh at the base")), (False, True))
+
+    def test_fetched_when_the_clone_lacks_the_commit(self):
+        clone = os.path.join(self.home.root, "clone")
+        subprocess.run(["git", "init", "-q", clone], check=True)
+        subprocess.run(["git", "-C", clone, "remote", "add", "origin", self.origin], check=True)
+        ok, evidence = self.command(pr(baseRefOid=self.base), clone, self.spec)
+        self.assertTrue(ok, evidence)
+
+
+class Record(unittest.TestCase):
+    """gate.py record: one step's evidence, checked when the step ends."""
+
+    def setUp(self):
+        self.home = TempHome()
+        self.repo = os.path.join(self.home.root, "repo")
+        g = ["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-C", self.repo]
+        self.git = lambda *a: subprocess.run(g + list(a), check=True, capture_output=True, text=True).stdout.strip()
+        subprocess.run(["git", "init", "-q", "-b", "main", self.repo], check=True)
+        self.git("config", "user.email", "t@example.invalid")
+        self.git("config", "user.name", "t")
+        self.git("commit", "-q", "--allow-empty", "-m", "W1")
+        self.sha = self.git("rev-parse", "--short", "HEAD")
+        self.loop = task_loop(difficulty="mid")
+        self.task = os.path.join(self.home.root, "task")
+        self.home.write("task/plan.md", PLAN.replace("abc1234", self.sha) + "\n## Checks\n\n### Tests near the change: x\n```\nok\n```\n"
+                        "### Smoke: y\n```\nok\n```\n")
+        self.home.write("task/scenario.md", SCENARIO)
+        self.home.write("task/handoff.md", HANDOFF)
+
+    def tearDown(self):
+        self.home.close()
+
+    def ended(self, *steps, done="the record is in the task folder"):
+        self.home.write("task/status.jsonl", "".join(json.dumps({"step": s, "event": "end", "done": done}) + "\n"
+                                                     for s in steps))
+
+    def record(self, step, cwd=None, loop=None):
+        return gate.record_checks(loop or self.loop, step, self.task, cwd)
+
+    def test_every_lead_step_in_order(self):
+        self.ended("plan", "build", "verify", "finalize")
+        for step in ("plan", "build", "verify", "finalize"):
+            r = self.record(step, self.repo)
+            self.assertTrue(r["ok"], (step, r["checks"]))
+        self.assertEqual(self.record("plan")["skills"], ["work-breakdown", "cross-check"])
+        self.assertEqual(self.record("verify", self.repo)["skills"], ["unit", "smoke", "cross-check"])
+        self.assertEqual(self.record("simplify")["unchecked"], ["simplify"])
+
+    def test_no_evidence_no_pass(self):
+        r = self.record("plan")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["checks"][0], {"check": "evidence", "ok": False,
+                                          "evidence": "no end line with evidence for plan"})
+        self.ended("plan", done=" ")
+        self.assertFalse(self.record("plan")["ok"])
+
+    def test_build_needs_a_real_commit_for_each_done_row(self):
+        self.ended("build")
+        self.assertIn("needs --cwd", self.record("build")["checks"][1]["evidence"])
+        self.home.write("task/plan.md", PLAN.replace("abc1234", "1234567"))
+        self.assertIn("W1's commit 1234567 is not in the clone's history", self.record("build", self.repo)["checks"][1]["evidence"])
+        self.home.write("task/plan.md", PLAN.replace("| done | abc1234 |", "| todo | |"))
+        self.assertIn("W1 is todo, not done", self.record("build", self.repo)["checks"][1]["evidence"])
+
+    def test_a_replaced_default_is_held_to_the_default_s_record(self):
+        plan = next(s for s in self.loop["work"] if s["id"] == "plan")
+        plan["skills"] = ["plan-and-proof (flow and record: foreman-kit:work-breakdown)", "flowkit:notes",
+                          "foreman-kit:tidy-up"]  # a plugin skill, and a person's skill copied into the bundle
+        self.ended("plan")
+        os.remove(os.path.join(self.task, "plan.md"))
+        r = self.record("plan")
+        self.assertEqual((r["skills"], r["ok"]), (["work-breakdown"], False))
+        self.assertEqual(r["checks"][1], {"check": "record:work-breakdown", "ok": False, "evidence": "no plan.md"})
+
+    def test_a_scenario_is_only_for_a_task_that_is_not_trivial(self):
+        os.remove(os.path.join(self.task, "scenario.md"))
+        self.ended("plan", "verify")
+        self.assertFalse(self.record("plan")["ok"])
+        self.assertTrue(self.record("plan", loop=task_loop(difficulty="mid", trivial=True))["ok"])
+
+    def test_a_role_step_needs_its_finished_answer(self):
+        self.ended("review")
+        self.assertFalse(self.record("review")["ok"])
+        task_folder(self.home, [("pair-1", "pair", "opus", "approved", HEAD, "2026-11-15T00:30:00Z", False)],
+                    plan=None, handoff=None, scenario=None)  # the run failed
+        self.assertFalse(self.record("review")["ok"])
+        task_folder(self.home, [("pair-2", "pair", "opus", "", HEAD, "2026-11-15T00:40:00Z")],
+                    plan=None, handoff=None, scenario=None)  # no verdict in the answer
+        self.assertFalse(self.record("review")["ok"])
+        task_folder(self.home, [("pair-1", "pair", "opus", "changes", HEAD, "2026-11-15T01:00:00Z")], plan=None,
+                    handoff=None, scenario=None)
+        r = self.record("review")
+        self.assertTrue(r["ok"], r["checks"])
+        self.assertIn("pair-1", r["checks"][1]["evidence"])
+
+    def test_cli(self):
+        self.home.write("task/loop.json", self.loop)
+        self.ended("plan")
+        r = run("gate.py", "record", "--step", "plan", "--task-dir", self.task)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(json.loads(r.stdout)["step"], "plan")
+        self.assertEqual(run("gate.py", "record", "--step", "build", "--task-dir", self.task).returncode, 6)
+        self.assertEqual(run("gate.py", "record", "--step", "nope", "--task-dir", self.task).returncode, 2)
+        self.assertEqual(run("gate.py", "record", "--task-dir", self.task).returncode, 2)
 
 
 class RoleChecks(unittest.TestCase):
@@ -228,7 +451,7 @@ class Template(unittest.TestCase):
         self.assertEqual(gate.validate_gate(high), [])
         self.assertEqual([c["sha256"] for c in high["checks"] if c["check"] == "loop-file"], ["f" * 64])
         self.assertEqual([c["ids"] for c in high["checks"] if c["check"] == "steps"],
-                         [["plan", "build", "verify", "review", "simplify", "fix", "recheck"]])
+                         [["plan", "plan-check", "build", "verify", "review", "simplify", "fix", "recheck"]])
         fallback = gate.template(task_loop(difficulty="high", lead="sonnet"))
         self.assertEqual({tuple(c["not_profiles"]) for c in fallback["checks"] if c["check"] == "verdict"}, {("sonnet",)})
         low = gate.template(task_loop(difficulty="low", trivial=True))
@@ -380,6 +603,27 @@ class Cli(unittest.TestCase):
         task = "~/" + os.path.relpath(self.task, self.home.root)
         r = run("gate.py", "run", rel, "--task-dir", task, "--before-ready", env={**self.env, "HOME": self.home.root})
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_project_checks_join_the_gate_and_runs_are_recorded(self):
+        data = task_loop(difficulty="low")
+        data["gate"] = [{"check": "command", "name": "pr-body", "run": 'test "$AF_PR" = 7'},
+                        {"check": "command", "name": "epic-tests", "run": "false", "at": "merge"}]
+        self.loop = self.home.write("task/loop.json", data)
+        g = self.template("--pr", "7")
+        with open(g) as f:
+            names = [gate.check_name(c) for c in json.load(f)["checks"]]
+        self.assertEqual(names[names.index("verdict:qa") + 1:], ["pr-body", "epic-tests", "tests-weakened", "size",
+                                                                "ready"])
+        r = run("gate.py", "run", g, "--task-dir", self.task, "--cwd", self.home.root, "--before-ready", env=self.env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # epic-tests waits for the merge gate
+        self.assertIn("pr-body", [c["check"] for c in json.loads(r.stdout)["checks"]])
+        r = run("gate.py", "run", g, "--task-dir", self.task, "--cwd", self.home.root, env=self.env)
+        self.assertEqual(json.loads(r.stdout)["blocked"], ["verdict:redteam", "verdict:qa", "epic-tests"])
+        with open(os.path.join(self.task, "gates.jsonl")) as f:
+            rows = [json.loads(line) for line in f]
+        self.assertEqual([(r["before_ready"], r["pass"], r["blocked"]) for r in rows],
+                         [(True, True, []), (False, False, ["verdict:redteam", "verdict:qa", "epic-tests"])])
+        self.assertEqual(rows[0]["head"], HEAD)
 
     def test_template_and_bad_arguments(self):
         self.assertEqual(json.loads(run("gate.py", "template", "--loop", self.loop).stdout)["pr"], None)

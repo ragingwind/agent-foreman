@@ -39,6 +39,8 @@ Plan small pieces in order, and decide how each one is checked, before any code.
 
 ## Record
 
+**Evidence** for the step's `end` line: `work-breakdown: plan.md <n> rows`.
+
 Write `$AF_TASK_DIR/plan.md` in exactly this shape:
 
 ````markdown

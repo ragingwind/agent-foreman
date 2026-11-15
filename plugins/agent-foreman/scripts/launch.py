@@ -12,7 +12,12 @@ session id the ledger holds), in the clone it ran in: a lead whose process
 ended keeps what it knew. It does not go with --print or --session-id.
 
 --disallow TOOL,... removes tools from the agent (a reviewer gets no edit
-tools). It narrows what the agent can do; it is not a sandbox.
+tools). The adapter also denies merging a pull request to every agent: the
+foreman merges. Both narrow what the agent can do; neither is a sandbox.
+
+Run from a bundle, each plugin its config.json names (one whose skill the
+project's loops use) is loaded into the agent whole from the bundle's
+plugins/<name>/, so a plugin's skills keep their agents and scripts.
 
 --task-dir DIR gives the agent its task folder (`status.py dir`): it sets
 AF_TASK_DIR, and AF_STATUS_FILE to the folder's status.jsonl unless --status
@@ -137,11 +142,15 @@ def main():
     if bundle and kind != bundle_kind:
         fail(EXIT_SETUP_NEEDED, f"profile {profile_name} runs {kind}, but this bundle is for {bundle_kind}")
     adapter = adapters.get(kind)
+    dirs = [os.path.join(bundle, "plugins", n) for n in cfg.get("plugins", [])] if bundle else []
+    gone = [d for d in dirs if not os.path.isfile(os.path.join(d, ".claude-plugin", "plugin.json"))]
+    if gone:
+        fail(EXIT_SETUP_NEEDED, f"the bundle lacks the plugin at {gone[0]}; push the bundle again (bundle.py push)")
     try:
         argv, env, clear = adapter.command(cfg, profile_name, name=args.name, session_id=args.session_id,
                                            bundle=bundle, print_mode=args.print_mode,
                                            disallowed=[t.strip() for t in args.disallow.split(",") if t.strip()],
-                                           resume=args.resume)
+                                           resume=args.resume, plugin_dirs=dirs)
     except adapters.TokenMissing as e:
         fail(EXIT_TOKEN_MISSING, f"token variable {e.variable} is not set in this environment")
     status = args.status or (os.path.join(task_dir, "status.jsonl") if task_dir else None)

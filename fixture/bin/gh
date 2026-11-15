@@ -1,0 +1,399 @@
+#!/usr/bin/env python3
+"""A local stand-in for GitHub's `gh`, for the fixture run (fixture/run.py).
+
+The repository is a local bare repository; pull requests, their checks and
+labels live in a JSON state file (FAKE_GH_STATE), written under a lock so
+several agents can call at once. A pull request's check runs the state's
+`ci` command in a scratch clone of its head, once per head commit.
+
+It answers what the foreman's scripts and its agents use: `pr create`,
+`view`, `edit`, `ready`, `checks`, `list`, `diff`, `merge`, `close`,
+`comment`; `issue view` and `issue list` (from the state's tasks folder);
+`repo view`; `auth status`; and `api` for a pull request, its files, a
+compare, a commit and the repository. `--json FIELDS` and `-q`/`--jq EXPR`
+work as in gh (jq when it is on PATH). Every call is logged in the state
+with the calling agent (AF_AGENT); anything else is refused with exit 1 and
+logged as unsupported, so a run's report shows what an agent tried.
+"""
+import fcntl
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+
+class Refused(Exception):
+    pass
+
+
+def git(*args, cwd=None, check=True):
+    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise Refused(f"git {' '.join(args[:3])}: {r.stderr.strip()[:200]}")
+    return r.stdout.strip()
+
+
+class Hub:
+    def __init__(self, state):
+        self.s = state
+        self.origin = state["origin"]
+
+    # --- the repository -----------------------------------------------------
+    def sha(self, ref):
+        return git("--git-dir", self.origin, "rev-parse", "--verify", "--quiet", ref, check=False)
+
+    def files(self, pr):
+        base, head = pr["base"], self.head_sha(pr)
+        rng = f"{self.sha('refs/heads/' + base)}...{head}"
+        out = []
+        for line in git("--git-dir", self.origin, "diff", "--numstat", rng).splitlines():
+            added, deleted, path = line.split("\t", 2)
+            status = git("--git-dir", self.origin, "diff", "--name-status", rng, "--", path).split("\t")[0]
+            out.append({"filename": path, "status": {"A": "added", "D": "removed"}.get(status[:1], "modified"),
+                        "additions": int(added) if added.isdigit() else 0,
+                        "deletions": int(deleted) if deleted.isdigit() else 0,
+                        "patch": git("--git-dir", self.origin, "diff", rng, "--", path)})
+        return out
+
+    def head_sha(self, pr):
+        return pr.get("merged_head") or self.sha("refs/heads/" + pr["head"]) or ""
+
+    def check(self, pr):
+        """The check run for the pull request's head: the ci command, run once per commit."""
+        head = self.head_sha(pr)
+        if not head:
+            return []
+        runs = pr.setdefault("checks", {})
+        if head not in runs:
+            scratch = tempfile.mkdtemp(prefix="fake-gh-ci.")
+            try:
+                git("clone", "--quiet", self.origin, scratch)
+                git("checkout", "--quiet", head, cwd=scratch)
+                r = subprocess.run(self.s.get("ci", "true"), shell=True, cwd=scratch, capture_output=True, text=True)
+                runs[head] = "SUCCESS" if r.returncode == 0 else "FAILURE"
+            finally:
+                shutil.rmtree(scratch, ignore_errors=True)
+        return [{"name": "ci", "context": "ci", "status": "COMPLETED", "conclusion": runs[head],
+                 "workflowName": "ci", "detailsUrl": f"{self.url()}/actions"}]
+
+    def url(self, n=None):
+        return f"https://fake.github/{self.s['repo']}" + (f"/pull/{n}" if n else "")
+
+    # --- pull requests --------------------------------------------------------
+    def pr_json(self, pr):
+        base_sha = self.sha("refs/heads/" + pr["base"])
+        files = self.files(pr) if pr["state"] == "OPEN" and self.head_sha(pr) else pr.get("files", [])
+        return {"number": pr["number"], "title": pr["title"], "body": pr["body"], "url": self.url(pr["number"]),
+                "state": pr["state"], "isDraft": pr["draft"], "baseRefName": pr["base"], "baseRefOid": base_sha,
+                "headRefName": pr["head"], "headRefOid": self.head_sha(pr),
+                "additions": sum(f["additions"] for f in files), "deletions": sum(f["deletions"] for f in files),
+                "changedFiles": len(files), "files": [{"path": f["filename"], "additions": f["additions"],
+                                                       "deletions": f["deletions"]} for f in files],
+                "statusCheckRollup": self.check(pr) if pr["state"] == "OPEN" else [],
+                "labels": [{"name": n} for n in pr["labels"]], "mergeable": "MERGEABLE",
+                "reviewDecision": "", "comments": pr.get("comments", []),
+                "mergedAt": pr.get("merged_at"), "closed": pr["state"] != "OPEN",
+                "author": {"login": "fixture-agent"}}
+
+    def find(self, key):
+        prs = self.s["prs"]
+        if key is None:
+            branch = git("branch", "--show-current", check=False)
+            found = [p for p in prs.values() if p["head"] == branch]
+            if not found:
+                raise Refused(f"no pull requests found for branch \"{branch}\"")
+            return sorted(found, key=lambda p: p["state"] != "OPEN")[0]
+        m = re.search(r"(\d+)$", key)
+        if m and m.group(1) in prs:
+            return prs[m.group(1)]
+        found = [p for p in prs.values() if p["head"] == key]
+        if found:
+            return found[-1]
+        raise Refused(f"no pull request found for {key}")
+
+
+def take(args, *names, flag=False):
+    """The value of an option (or True for a flag), removed from args."""
+    for i, a in enumerate(args):
+        for n in names:
+            if a == n:
+                del args[i]
+                return True if flag else args.pop(i)
+            if not flag and a.startswith(n + "="):
+                del args[i]
+                return a.split("=", 1)[1]
+    return None
+
+
+def emit(data, fields, query):
+    if fields:
+        keep = [f.strip() for f in fields.split(",") if f.strip()]
+        data = ({k: d.get(k) for k in keep} for d in data) if isinstance(data, list) else {k: data.get(k) for k in keep}
+        data = list(data) if not isinstance(data, dict) else data
+    text = json.dumps(data)
+    if query:
+        if shutil.which("jq"):
+            r = subprocess.run(["jq", "-r", query], input=text, capture_output=True, text=True)
+            if r.returncode:
+                raise Refused(f"jq: {r.stderr.strip()}")
+            sys.stdout.write(r.stdout)
+            return
+        value, stream = data, False  # without jq, a small path language: .a .a.b .a[].b .[]
+        for name, each in re.findall(r"\.([A-Za-z_]\w*)?(\[\])?", query):
+            if name:
+                value = [(v or {}).get(name) for v in value] if stream else (value or {}).get(name)
+            if each:
+                value = [x for v in value for x in v] if stream else list(value or [])
+                stream = True
+        for v in (value if stream else [value]):
+            print(v if isinstance(v, str) else json.dumps(v))
+        return
+    print(text)
+
+
+def run(hub, argv, cwd):
+    args = list(argv)
+    take(args, "-R", "--repo")
+    query = take(args, "-q", "--jq")
+    fields = take(args, "--json")
+    if not args:
+        raise Refused("no command")
+    if args[:2] == ["auth", "status"]:
+        print("fake.github: logged in as fixture-agent")
+        return 0
+    if args[0] == "--version":
+        print("gh version 0.0.0-fake")
+        return 0
+    if args[:2] == ["repo", "view"]:
+        emit({"nameWithOwner": hub.s["repo"], "name": hub.s["repo"].split("/")[1],
+              "owner": {"login": hub.s["repo"].split("/")[0]}, "url": hub.url(), "isPrivate": True,
+              "defaultBranchRef": {"name": hub.s.get("default_branch", "main")}}, fields, query)
+        return 0
+    if args[0] == "issue" and args[1:2] in (["view"], ["list"]):
+        folder = hub.s["tasks_dir"]
+        issues = []
+        for name in sorted(os.listdir(folder)):
+            if name.endswith(".md"):
+                text = open(os.path.join(folder, name), encoding="utf-8").read()
+                title, _, body = text.partition("\n")
+                issues.append({"number": int(name[:-3]), "title": title.lstrip("# ").strip(), "body": body.strip(),
+                               "state": "OPEN", "labels": [], "comments": [], "url": f"{hub.url()}/issues/{name[:-3]}"})
+        if args[1] == "list":
+            emit(issues, fields, query) if fields or query else print(
+                "\n".join(f"{i['number']}\t{i['title']}" for i in issues))
+            return 0
+        take(args, "--comments", flag=True)
+        n = next((a for a in args[2:] if a.lstrip("#").isdigit()), None)
+        issue = next((i for i in issues if str(i["number"]) == str(n).lstrip("#")), None)
+        if issue is None:
+            raise Refused(f"no issue {n}")
+        emit(issue, fields, query) if fields or query else print(f"{issue['title']}\n\n{issue['body']}")
+        return 0
+    if args[0] == "pr":
+        return pr(hub, args[1:], fields, query, cwd)
+    if args[0] == "api":
+        return api(hub, args[1:], query)
+    raise Refused("unsupported")
+
+
+def pr(hub, args, fields, query, cwd):
+    if not args:
+        raise Refused("unsupported")
+    cmd, rest = args[0], args[1:]
+    if cmd == "create":
+        base = take(rest, "--base", "-B") or hub.s.get("default_branch", "main")
+        head = take(rest, "--head", "-H") or git("branch", "--show-current", cwd=cwd)
+        title = take(rest, "--title", "-t") or head
+        body_file = take(rest, "--body-file", "-F")
+        body = open(body_file, encoding="utf-8").read() if body_file else (take(rest, "--body", "-b") or "")
+        draft = bool(take(rest, "--draft", "-d", flag=True))
+        if not hub.sha("refs/heads/" + head):
+            raise Refused(f"the head branch {head} is not on the remote; push it first")
+        if any(p["head"] == head and p["state"] == "OPEN" for p in hub.s["prs"].values()):
+            raise Refused(f"a pull request for branch \"{head}\" already exists")
+        n = hub.s["next"]
+        hub.s["next"] = n + 1
+        hub.s["prs"][str(n)] = {"number": n, "title": title, "body": body, "base": base, "head": head,
+                                "draft": draft, "state": "OPEN", "labels": [], "comments": [],
+                                "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        print(hub.url(n))
+        return 0
+    if cmd == "list":
+        state = (take(rest, "--state", "-s") or "open").upper()
+        head = take(rest, "--head", "-H")
+        rows = [hub.pr_json(p) for p in hub.s["prs"].values()
+                if (state == "ALL" or p["state"] == state) and (head is None or p["head"] == head)]
+        emit(rows, fields, query) if fields or query else print(
+            "\n".join(f"{r['number']}\t{r['title']}\t{r['headRefName']}\t{r['state']}" for r in rows))
+        return 0
+    key = next((a for a in rest if not a.startswith("-")), None)
+    if key is not None:
+        rest.remove(key)
+    p = hub.find(key)
+    if cmd == "view":
+        take(rest, "--comments", flag=True)
+        data = hub.pr_json(p)
+        emit(data, fields, query) if fields or query else print(
+            f"{data['title']}\n{data['state']}{' (draft)' if data['isDraft'] else ''}\n{data['url']}\n\n{data['body']}")
+        return 0
+    if cmd == "edit":
+        for opt, key_ in (("--title", "title"), ("--base", "base")):
+            v = take(rest, opt)
+            if v is not None:
+                p[key_] = v
+        body_file = take(rest, "--body-file", "-F")
+        body = take(rest, "--body", "-b")
+        if body_file:
+            p["body"] = open(body_file, encoding="utf-8").read()
+        elif body is not None:
+            p["body"] = body
+        add, remove = take(rest, "--add-label"), take(rest, "--remove-label")
+        if add:
+            p["labels"] = sorted(set(p["labels"]) | {x for x in add.split(",") if x})
+        if remove:
+            p["labels"] = [x for x in p["labels"] if x not in remove.split(",")]
+        print(hub.url(p["number"]))
+        return 0
+    if cmd == "ready":
+        p["draft"] = bool(take(rest, "--undo", flag=True))
+        print(f"Pull request #{p['number']} is {'a draft' if p['draft'] else 'marked as ready for review'}")
+        return 0
+    if cmd == "checks":
+        take(rest, "--watch", flag=True)
+        take(rest, "--required", flag=True)
+        take(rest, "--interval", "-i")
+        runs = hub.check(p)
+        if fields or query:
+            emit([{"name": r["name"], "state": r["conclusion"], "bucket": "pass" if r["conclusion"] == "SUCCESS"
+                   else "fail", "link": r["detailsUrl"]} for r in runs], fields, query)
+        else:
+            for r in runs:
+                print(f"{r['name']}\t{'pass' if r['conclusion'] == 'SUCCESS' else 'fail'}\t1s\t{r['detailsUrl']}")
+        return 0 if all(r["conclusion"] == "SUCCESS" for r in runs) else 1
+    if cmd == "diff":
+        print(git("--git-dir", hub.origin, "diff", f"{hub.sha('refs/heads/' + p['base'])}...{hub.head_sha(p)}"))
+        return 0
+    if cmd == "comment":
+        p.setdefault("comments", []).append({"body": take(rest, "--body", "-b") or "",
+                                             "author": os.environ.get("AF_AGENT", "?")})
+        print(hub.url(p["number"]))
+        return 0
+    if cmd == "close":
+        p["state"] = "CLOSED"
+        print(f"Closed pull request #{p['number']}")
+        return 0
+    if cmd == "merge":
+        return merge(hub, p, rest)
+    raise Refused("unsupported")
+
+
+def merge(hub, p, rest):
+    if p["state"] != "OPEN":
+        raise Refused(f"pull request #{p['number']} is {p['state'].lower()}")
+    if p["draft"]:
+        raise Refused(f"pull request #{p['number']} is still a draft")
+    squash = not take(rest, "--merge", "-m", flag=True)
+    take(rest, "--squash", "-s", flag=True)
+    take(rest, "--rebase", "-r", flag=True)
+    delete = take(rest, "--delete-branch", "-d", flag=True)
+    head = hub.head_sha(p)
+    p["files"] = hub.files(p)
+    scratch = tempfile.mkdtemp(prefix="fake-gh-merge.")
+    try:
+        git("clone", "--quiet", "--branch", p["base"], hub.origin, scratch)
+        for k, v in (("user.email", "fake@fake.github"), ("user.name", "fake gh")):
+            git("config", k, v, cwd=scratch)
+        if squash:
+            git("merge", "--squash", head, cwd=scratch)
+            git("-c", "commit.gpgsign=false", "commit", "--quiet", "-m", f"{p['title']} (#{p['number']})", cwd=scratch)
+        else:
+            git("-c", "commit.gpgsign=false", "merge", "--no-ff", "--quiet", "-m",
+                f"Merge pull request #{p['number']}", head, cwd=scratch)
+        git("push", "--quiet", "origin", p["base"], cwd=scratch)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    p.update(state="MERGED", merged_head=head, merged_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    if delete:
+        git("--git-dir", hub.origin, "branch", "-D", p["head"], check=False)
+    print(f"Merged pull request #{p['number']}")
+    return 0
+
+
+def api(hub, args, query):
+    method = (take(args, "-X", "--method") or "GET").upper()
+    take(args, "--paginate", flag=True)
+    while take(args, "-H", "--header"):
+        pass
+    path = next((a for a in args if not a.startswith("-")), "")
+    path = path.split("?")[0].lstrip("/")
+    repo = hub.s["repo"]
+    if method != "GET":
+        raise Refused(f"unsupported: {method} {path}")
+    m = re.fullmatch(rf"repos/{re.escape(repo)}/pulls/(\d+)/files", path)
+    if m:
+        emit(hub.files(hub.find(m.group(1))), None, query)
+        return 0
+    m = re.fullmatch(rf"repos/{re.escape(repo)}/pulls/(\d+)", path)
+    if m:
+        d = hub.pr_json(hub.find(m.group(1)))
+        emit({"number": d["number"], "state": "open" if d["state"] == "OPEN" else "closed", "draft": d["isDraft"],
+              "merged": d["state"] == "MERGED", "title": d["title"], "body": d["body"],
+              "head": {"ref": d["headRefName"], "sha": d["headRefOid"]},
+              "base": {"ref": d["baseRefName"], "sha": d["baseRefOid"]}}, None, query)
+        return 0
+    m = re.fullmatch(rf"repos/{re.escape(repo)}/compare/(.+?)\.\.\.(.+)", path)
+    if m:
+        a, b = (hub.sha(x) or hub.sha("refs/heads/" + x) for x in m.groups())
+        if not (a and b):
+            raise Refused(f"no such commits {m.group(1)}...{m.group(2)}")
+        count = lambda r: int(git("--git-dir", hub.origin, "rev-list", "--count", r))
+        emit({"behind_by": count(f"{b}..{a}"), "ahead_by": count(f"{a}..{b}"),
+              "status": "ahead" if count(f"{b}..{a}") == 0 else "diverged"}, None, query)
+        return 0
+    m = re.fullmatch(rf"repos/{re.escape(repo)}/commits/(.+)", path)
+    if m:
+        sha = hub.sha(m.group(1)) or hub.sha("refs/heads/" + m.group(1))
+        if not sha:
+            raise Refused(f"no commit {m.group(1)}")
+        emit({"sha": sha}, None, query)
+        return 0
+    if path == f"repos/{repo}":
+        emit({"full_name": repo, "default_branch": hub.s.get("default_branch", "main"), "private": True}, None, query)
+        return 0
+    raise Refused(f"unsupported: GET {path}")
+
+
+def main(argv):
+    path = os.environ.get("FAKE_GH_STATE")
+    if not path:
+        print("fake gh: FAKE_GH_STATE is not set", file=sys.stderr)
+        return 1
+    with open(path + ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        with open(path, encoding="utf-8") as f:
+            state = json.load(f)
+        call = {"argv": argv, "agent": os.environ.get("AF_AGENT", ""), "cwd": os.getcwd(),
+                "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        try:
+            code = run(Hub(state), argv, os.getcwd())
+        except Refused as e:
+            message = str(e)
+            print(f"fake gh: {message}", file=sys.stderr)
+            if message.startswith("unsupported"):
+                state.setdefault("unsupported", []).append(call)
+            code = 1
+        call["exit"] = code
+        state.setdefault("log", []).append(call)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=1)
+        os.replace(tmp, path)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,7 @@
+{
+  "name": "habit-streak",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -28,6 +28,8 @@ description: >-
 
 ## Record
 
+**Evidence** for the step's `end` line: each row and its commit, `commit: W1 <sha>, W2 <sha>`.
+
 - One work item, one commit.
 - In `$AF_TASK_DIR/plan.md` (the task folder), set the item's row: `status` to `done`, and `commit` to the short SHA. For example:
 

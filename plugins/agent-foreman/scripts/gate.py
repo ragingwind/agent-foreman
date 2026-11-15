@@ -7,6 +7,28 @@ Usage:
   gate.py template --loop LOOP.json [--pr N]
   gate.py hash GATE.json
   gate.py run GATE.json [--pr N] [--cwd CLONE] [--task-dir DIR] [--skip CHECK,...] [--before-ready] [--sha HEX]
+  gate.py record --step ID --task-dir DIR [--cwd CLONE]
+
+`record` checks one step's evidence when it ends, before the task goes on:
+the evidence its `end` line gives (--done), and the record each of its
+default skills must leave (a replaced one by the default its brief names
+under "flow and record"):
+  work-breakdown  plan.md's work breakdown, with test, status and commit
+                  columns and at least one row
+  cross-check     in a step with work-breakdown: scenario.md with numbered
+                  steps and their Expect lines (not for a trivial task);
+                  elsewhere: scenario.md's Agent blocks filled and its
+                  closing verdict
+  tdd, commit     every row done, with a commit that is in the clone (--cwd)
+                  and in HEAD's history
+  unit            outside the build: a "Tests near the change" entry under
+                  plan.md's Checks
+  smoke           a "Smoke" entry under plan.md's Checks
+  handoff         handoff.md with its sections
+  a role's step   the role's latest answer in reviews/, run to the end, with
+                  a Verdict
+The other default skills (simplify) have only the evidence line. It prints
+one JSON object, and exits 0 when every record is there, 6 when one is not.
 
 A gate file:
   {"repo": "owner/name", "pr": 12, "checks": [{"check": "<name>", ...}, ...]}
@@ -38,11 +60,26 @@ Checks (each may say "severity": "warn" to report without blocking):
                   `Verdict:` in "accept", given at the head SHA (with --cwd,
                   also at an earlier SHA whose change is the same), on a
                   profile not in "not_profiles" (the lead's)
-  tests-weakened  no removed test file, added skip marker, edited CI file or
-                  changed coverage threshold, except the kinds in "allow"
+  tests-weakened  no removed test file, added skip marker, edited CI file,
+                  changed coverage threshold or edited agent instructions
+                  (`.claude/`, `CLAUDE.md`, `AGENTS.md`), except the kinds in
+                  "allow" (removed-test, skip-marker, ci-edit, coverage,
+                  agent-files)
   size            additions + deletions at most "max_lines"
   ready           the pull request is no longer a draft
-  command         "run" exits 0 in the clone (--cwd)
+  command         "run" exits 0 in the clone (--cwd); it gets AF_REPO, AF_PR,
+                  AF_TASK, AF_TASK_DIR, AF_BASE, AF_BASE_SHA (the base
+                  branch's head on GitHub) and AF_HEAD in its environment.
+                  With "from_base": PATH instead of "run", the gate takes the
+                  script at PATH from AF_BASE_SHA itself (fetched from origin
+                  when the clone lacks it) and runs that: the lead's own
+                  copy, and its refs, do not count; a script it cannot get
+                  blocks
+
+A project's own checks (`gate` in its settings, carried in loop.json) are
+command checks with a "name", appended by `template`; the name stands for the
+check in the report and in --skip. An unnamed command check is the project's
+full tests (`tests.full`), named `command`.
 
 --before-ready skips `ready` and every check marked "at": "merge": the lead
 runs the gate before the verification session. --skip names checks to leave
@@ -50,7 +87,9 @@ out; a verdict check is named with its role, `verdict:qa`, and only when the
 person said so.
 
 `run` prints one JSON object and exits 0 when nothing blocks, 6 when a check
-blocks, 2 on bad arguments, 1 when gh or git fails.
+blocks, 2 on bad arguments, 1 when gh or git fails. With --task-dir it also
+appends the result's summary to the task folder's gates.jsonl, for the retro;
+the lead can write there too, so nothing trusts it as proof of a pass.
 """
 import argparse
 import fnmatch
@@ -67,12 +106,16 @@ TEST_PATHS = ["**/tests/**", "**/test/**", "**/__tests__/**", "**/*_test.*", "**
               "**/*.spec.*", "**/spec/**"]
 CI_PATHS = ["**/.github/workflows/**", "**/.gitlab-ci.yml", "**/Jenkinsfile", "**/.circleci/**",
             "**/azure-pipelines.yml"]
+# What an agent reads as instructions in a clone. A lead that edits them could steer its reviewers.
+AGENT_PATHS = ["**/.claude/**", "**/CLAUDE.md", "**/CLAUDE.local.md", "**/AGENTS.md"]
 SKIP_MARKERS = re.compile(r"@pytest\.mark\.(skip|xfail)|\b(it|test|describe)\.skip\(|\bx(it|describe)\(|"
                           r"\bt\.Skip(Now|f)?\(|@Ignore\b|@Disabled\b|#\[ignore\]|unittest\.skip|\.only\(")
 COVERAGE = re.compile(r"fail_under|fail-under|cov-fail-under|coverageThreshold|min(imum)?_coverage", re.I)
 PASSED = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 HANDOFF_SECTIONS = ("Purpose", "Decisions", "Tests", "Not touched", "Follow-ups")
 VERDICT = re.compile(r"^Verdict:\s*([A-Za-z][\w-]*)\W*$", re.I)
+CHECK_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+PROJECT_CHECK_KEYS = {"check", "name", "run", "from_base", "severity", "at"}
 
 
 def matches(path, pattern):
@@ -107,7 +150,7 @@ def gh_json(*args):
 def fetch(repo, pr):
     """Everything the checks read about one pull request."""
     view = gh_json("pr", "view", str(pr), "--repo", repo, "--json",
-                   "number,state,isDraft,baseRefName,headRefOid,additions,deletions,statusCheckRollup")
+                   "number,state,isDraft,baseRefName,baseRefOid,headRefOid,additions,deletions,statusCheckRollup")
     files = gh_json("api", "--paginate", f"repos/{repo}/pulls/{pr}/files?per_page=100")
     compare = gh_json("api", f"repos/{repo}/compare/{view['baseRefName']}...{view['headRefOid']}")
     view["files"] = files
@@ -325,6 +368,8 @@ def check_tests_weakened(pr, spec, ctx):
             found.append(f"removed test file {path}")
         if any(matches(path, p) for p in CI_PATHS) and "ci-edit" not in allow:
             found.append(f"edited CI file {path}")
+        if any(matches(path, p) for p in AGENT_PATHS) and "agent-files" not in allow:
+            found.append(f"edited agent instructions {path}")
         added = [l[1:] for l in patch.splitlines() if l.startswith("+") and not l.startswith("+++")]
         changed = added + [l[1:] for l in patch.splitlines() if l.startswith("-") and not l.startswith("---")]
         if "skip-marker" not in allow and any(SKIP_MARKERS.search(l) for l in added):
@@ -344,10 +389,165 @@ def check_ready(pr, spec, ctx):
     return not pr.get("isDraft"), "draft" if pr.get("isDraft") else "ready"
 
 
+def base_script(cwd, sha, path):
+    """(script text, None), or (None, why not): PATH as commit SHA has it,
+    fetched from origin when the clone lacks the commit."""
+    def git(*args):
+        return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
+    if not re.fullmatch(r"[0-9a-f]{7,64}", sha or ""):
+        return None, "no base commit from GitHub"
+    if git("cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
+        git("fetch", "--quiet", "origin", sha)
+    shown = git("show", f"{sha}:{path}")
+    if shown.returncode != 0:
+        return None, f"no {path} at the base {sha[:7]}: {shown.stderr.strip()[:200]}"
+    return shown.stdout, None
+
+
+def record_checks(task_loop, step_id, task_dir, cwd=None):
+    """What one step left behind: its `end` line's evidence and the record of
+    each of its default skills. Returns the report; "ok" is False when a
+    record is missing or wrong."""
+    import adapters
+    import loop as loops
+    kit = re.escape(adapters.get(adapters.DEFAULT).PLUGIN)  # a default skill's call name: foreman-kit:<name>
+    steps = [s for w in ("work", "check") for s in task_loop.get(w, [])]
+    step = next((s for s in steps if s["id"] == step_id), None)
+    if step is None:
+        raise ValueError(f"step {step_id!r} is not in this task's loop; its steps are "
+                         f"{', '.join(s['id'] for s in steps)}")
+    defaults = []
+    for shown in step.get("skills", []):
+        m = re.search(rf"\(flow and record: {kit}:([a-z-]+)\)", shown) or re.fullmatch(rf"{kit}:([a-z-]+)", shown)
+        if m and m.group(1) in loops.KIT and m.group(1) not in defaults:
+            defaults.append(m.group(1))
+    ctx = {"task_dir": task_dir, "cwd": cwd}
+    ended = [r for r in _rows(os.path.join(task_dir, "status.jsonl"))
+             if r.get("event") == "end" and r.get("step") == step_id]
+    evidence = str(ended[-1].get("done") or "") if ended else ""
+    checks = [{"check": "evidence", "ok": bool(evidence.strip()),
+               "evidence": evidence or f"no end line with evidence for {step_id}"}]
+    roles = task_loop.get("roles", {})
+    unchecked = []
+    if step["actor"] in roles:
+        answers = latest_answers(task_dir, step["actor"])
+        good = [(a, m) for a, m, text in answers if m.get("ok") is True and last_verdict(text)]
+        checks.append({"check": f"answer:{step['actor']}", "ok": bool(good),
+                       "evidence": ", ".join(f"{a} {str(m.get('head') or '?')[:7]} {m.get('verdict') or ''}".strip()
+                                             for a, m in good) or f"no finished answer of {step['actor']} with a verdict"})
+        return {"step": step_id, "skills": defaults, "checks": checks, "unchecked": [],
+                "ok": all(c["ok"] for c in checks)}
+    plan_text = read_task_file(ctx, "plan.md")
+    for skill in defaults:
+        problems = None
+        if skill == "work-breakdown":
+            found = table(plan_text or "", "Work breakdown")
+            header = [h.lower() for h in found[0]] if found else []
+            problems = (["no plan.md"] if plan_text is None else ["plan.md has no work breakdown"] if found is None
+                        else [f"the work breakdown has no {c} column" for c in ("test", "status", "commit")
+                              if c not in header] + (["the work breakdown has no rows"] if not found[1] else []))
+        elif skill == "cross-check" and "work-breakdown" in defaults:
+            scenario = read_task_file(ctx, "scenario.md")
+            problems = [] if task_loop.get("trivial") else (
+                ["no scenario.md"] if scenario is None else
+                (["scenario.md has no numbered step (### 1 · ...)"] if not re.search(r"^###\s+\d+", scenario, re.M)
+                 else []) + (["scenario.md has no Expect line"] if "**Expect**" not in scenario else []))
+        elif skill == "cross-check":
+            if task_loop.get("trivial"):
+                problems = []
+            else:
+                scenario = read_task_file(ctx, "scenario.md")
+                closing = (section(scenario or "", "Closing") or "").strip()
+                problems = (["no scenario.md"] if scenario is None else
+                            (["scenario.md has no closing verdict"] if not re.match(r"Verdict:\s*\w+", closing, re.I)
+                             else []) + ([f"scenario.md has {empty_agent_blocks(scenario)} Agent block(s) with no output"]
+                                         if empty_agent_blocks(scenario) else []))
+        elif skill in ("tdd", "commit"):
+            problems = _commit_problems(plan_text, cwd)
+        elif skill == "unit" and not {"tdd", "commit"} & set(defaults):
+            problems = [] if re.search(r"^###\s+Tests near the change", section(plan_text or "", "Checks") or "",
+                                       re.M | re.I) else ["plan.md's Checks has no \"Tests near the change\" entry"]
+        elif skill == "smoke":
+            problems = [] if re.search(r"^###\s+Smoke", section(plan_text or "", "Checks") or "", re.M | re.I) \
+                else ["plan.md's Checks has no \"Smoke\" entry"]
+        elif skill == "handoff":
+            handoff = read_task_file(ctx, "handoff.md")
+            problems = ["no handoff.md"] if handoff is None else [
+                f"handoff.md lacks {n}" for n in HANDOFF_SECTIONS if section(handoff, n) is None]
+        if problems is None:
+            if skill != "unit":
+                unchecked.append(skill)
+            continue
+        checks.append({"check": f"record:{skill}", "ok": not problems,
+                       "evidence": "; ".join(problems) or "in order"})
+    return {"step": step_id, "skills": defaults, "checks": checks, "unchecked": unchecked,
+            "ok": all(c["ok"] for c in checks)}
+
+
+def _rows(path):
+    rows = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
+    except OSError:
+        pass
+    return rows
+
+
+def _commit_problems(plan_text, cwd):
+    """Every row done, each with a commit in the clone and in HEAD's history."""
+    found = table(plan_text or "", "Work breakdown")
+    if not found or not found[1]:
+        return ["plan.md has no work breakdown rows"]
+    header = [h.lower() for h in found[0]]
+    if "status" not in header or "commit" not in header:
+        return ["the work breakdown has no status or commit column"]
+    if not cwd:
+        return ["needs --cwd, the lead's clone, to find the commits"]
+    problems = []
+    for row in found[1]:
+        if len(row) != len(header):
+            problems.append(f"{row[0] or '?'}: {len(row)} cells, not {len(header)}")
+            continue
+        status, sha = row[header.index("status")].lower(), row[header.index("commit")].strip("` ")
+        if status != "done":
+            problems.append(f"{row[0]} is {status or 'empty'}, not done")
+        elif not re.fullmatch(r"[0-9a-f]{7,40}", sha):
+            problems.append(f"{row[0]} is done with no commit")
+        elif subprocess.run(["git", "-C", cwd, "merge-base", "--is-ancestor", sha, "HEAD"],
+                            capture_output=True).returncode != 0:
+            problems.append(f"{row[0]}'s commit {sha} is not in the clone's history")
+    return problems
+
+
 def check_command(pr, spec, ctx):
     if not ctx.get("cwd"):
         return False, "needs --cwd"
-    out = subprocess.run(spec["run"], shell=True, cwd=ctx["cwd"], capture_output=True, text=True)
+    env = {**os.environ, "AF_REPO": ctx.get("repo") or "", "AF_PR": str(pr.get("number") or ""),
+           "AF_TASK": str(ctx.get("task") or ""), "AF_TASK_DIR": ctx.get("task_dir") or "",
+           "AF_BASE": pr.get("baseRefName") or "", "AF_BASE_SHA": pr.get("baseRefOid") or "",
+           "AF_HEAD": pr.get("headRefOid") or ""}
+    if spec.get("from_base"):
+        script, why = base_script(ctx["cwd"], pr.get("baseRefOid"), spec["from_base"])
+        if script is None:
+            return False, why
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".script", delete=False) as f:
+            f.write(script)
+        os.chmod(f.name, 0o700)
+        argv = [f.name] if script.startswith("#!") else ["sh", f.name]
+        try:
+            out = subprocess.run(argv, cwd=ctx["cwd"], capture_output=True, text=True, env=env)
+        finally:
+            os.unlink(f.name)
+    else:
+        out = subprocess.run(spec["run"], shell=True, cwd=ctx["cwd"], capture_output=True, text=True, env=env)
     tail = (out.stdout + out.stderr).strip().splitlines()[-3:]
     return out.returncode == 0, f"exit {out.returncode}: {' | '.join(tail)}"
 
@@ -359,17 +559,21 @@ CHECKS = {"pr-open": check_pr_open, "loop-file": check_loop_file, "steps": check
 
 def check_name(spec):
     """How a check is named in --skip and in the report: `verdict:<role>` for
-    a verdict, its check name otherwise."""
-    return f"verdict:{spec['role']}" if spec["check"] == "verdict" else spec["check"]
+    a verdict, a command check's "name" when it has one, its check name
+    otherwise."""
+    if spec["check"] == "verdict":
+        return f"verdict:{spec['role']}"
+    return spec.get("name") or spec["check"]
 
 
 def evaluate(pr, gate, cwd=None, skip=(), task_dir=None, before_ready=False):
     results = []
+    ctx = {"cwd": cwd, "task_dir": task_dir, "repo": gate["repo"], "task": gate.get("task")}
     for spec in gate["checks"]:
         name = check_name(spec)
         if name in skip or (before_ready and (spec.get("at") == "merge" or name == "ready")):
             continue
-        ok, evidence = CHECKS[spec["check"]](pr, spec, {"cwd": cwd, "task_dir": task_dir})
+        ok, evidence = CHECKS[spec["check"]](pr, spec, ctx)
         results.append({"check": name, "ok": ok, "severity": spec.get("severity", "block"), "evidence": evidence})
     blocked = [r for r in results if not r["ok"] and r["severity"] == "block"]
     return {"repo": gate["repo"], "pr": gate["pr"], "head": pr["headRefOid"], "pass": not blocked,
@@ -388,15 +592,73 @@ def validate_gate(gate):
             problems.append(f"gate: check {i + 1} is {name!r}; known: {', '.join(CHECKS)}")
         elif name == "verdict" and not spec.get("role"):
             problems.append(f"gate: verdict check {i + 1} needs a role")
-        elif name == "command" and not spec.get("run"):
-            problems.append(f"gate: command check {i + 1} needs run")
+        elif name == "command" and bool(spec.get("run")) == bool(spec.get("from_base")):
+            problems.append(f"gate: command check {i + 1} needs run or from_base, not both")
         elif name == "loop-file" and not spec.get("sha256"):
             problems.append(f"gate: loop-file check {i + 1} needs sha256")
         if isinstance(spec, dict) and spec.get("severity", "block") not in ("block", "warn"):
             problems.append(f"gate: check {i + 1} severity must be block or warn")
+        if isinstance(spec, dict) and spec.get("at", "merge") != "merge":
+            problems.append(f"gate: check {i + 1} at must be merge, or left out")
+    problems += _name_problems([s for s in gate.get("checks", []) if isinstance(s, dict) and "name" in s], "gate")
     if not gate.get("checks"):
         problems.append("gate: no checks")
     return problems
+
+
+def _name_problems(specs, where):
+    """Named checks: command checks only, each name a word of lower-case
+    letters, digits and '-', used once, and not the name of a standard check."""
+    problems, seen = [], set()
+    for spec in specs:
+        name = spec.get("name")
+        if not isinstance(name, str):
+            problems.append(f"{where}: check name {name!r} must be lower-case letters, digits and '-'")
+            continue
+        if spec.get("check") != "command":
+            problems.append(f"{where}: only a command check takes a name, not {spec.get('check')!r}")
+        elif not CHECK_NAME.match(name):
+            problems.append(f"{where}: check name {name!r} must be lower-case letters, digits and '-'")
+        elif name in CHECKS or name == "gate-file" or name.startswith("verdict"):
+            problems.append(f"{where}: check name {name!r} is taken by a standard check")
+        elif name in seen:
+            problems.append(f"{where}: check name {name!r} is used twice")
+        seen.add(name)
+    return problems
+
+
+def project_check_problems(checks):
+    """Problems in a project's own gate checks (`gate` in project.json): a
+    list of command checks, each with a name and a command, and optionally a
+    severity and "at": "merge"."""
+    if not isinstance(checks, list):
+        return ["gate: must be a list of checks"]
+    problems = []
+    for i, spec in enumerate(checks):
+        if not isinstance(spec, dict):
+            problems.append(f"gate: check {i + 1} must be an object")
+            continue
+        extra = sorted(set(spec) - PROJECT_CHECK_KEYS)
+        if extra:
+            problems.append(f"gate: check {i + 1} has unknown key(s) {', '.join(extra)}")
+        if spec.get("check") != "command":
+            problems.append(f"gate: check {i + 1} must be a command check (\"check\": \"command\")")
+        if "name" not in spec:
+            problems.append(f"gate: check {i + 1} needs a name")
+        has_run = isinstance(spec.get("run"), str) and bool(spec["run"].strip())
+        base = spec.get("from_base")
+        if base is not None and not (isinstance(base, str) and base.strip() and not base.startswith("/")
+                                     and ".." not in base.split("/")):
+            problems.append(f"gate: check {i + 1} from_base must be a path inside the repository")
+        elif has_run == (base is not None):
+            problems.append(f"gate: check {i + 1} needs run (a command) or from_base (a script on the base), "
+                            f"one of them")
+        if spec.get("severity", "block") not in ("block", "warn"):
+            problems.append(f"gate: check {i + 1} severity must be block or warn")
+        if spec.get("at", "merge") != "merge":
+            problems.append(f"gate: check {i + 1} at must be merge, or left out")
+    named = [s for s in checks if isinstance(s, dict) and s.get("check") == "command" and "name" in s]
+    return problems + _name_problems(named, "gate")
 
 
 def template(task_loop, loop_sha=None, pr=None):
@@ -404,7 +666,8 @@ def template(task_loop, loop_sha=None, pr=None):
     the steps the lead must end before finalize, the task folder's records,
     one verdict check per judging role that runs (the build session's before
     ready, the verification session's at merge), each refusing the lead's
-    profile, the full tests, and the standing checks."""
+    profile, the full tests, the project's own checks, and the standing
+    checks."""
     lead = task_loop.get("lead_profile")
     roles = task_loop.get("roles", {})
     work = task_loop["work"]
@@ -423,6 +686,7 @@ def template(task_loop, loop_sha=None, pr=None):
             checks.append(spec)
     if task_loop.get("tests_full"):
         checks.append({"check": "command", "run": task_loop["tests_full"]})
+    checks += [dict(spec) for spec in task_loop.get("gate") or []]
     checks += [{"check": "tests-weakened", "allow": []},
                {"check": "size", "max_lines": task_loop.get("max_lines", 400), "severity": "warn"},
                {"check": "ready"}]
@@ -432,7 +696,8 @@ def template(task_loop, loop_sha=None, pr=None):
 
 def main(argv):
     ap = argparse.ArgumentParser(prog="gate.py", description="agent-foreman pass conditions")
-    ap.add_argument("command", choices=["template", "hash", "run"])
+    ap.add_argument("command", choices=["template", "hash", "run", "record"])
+    ap.add_argument("--step", help="record: the step that ended")
     ap.add_argument("gate", nargs="?")
     ap.add_argument("--loop", metavar="LOOP.json", help="template: the task's loop.json")
     ap.add_argument("--pr", type=int)
@@ -458,6 +723,21 @@ def main(argv):
         print(json.dumps(gate, indent=2))
         return 0
 
+    if args.command == "record":
+        if not (args.step and args.task_dir):
+            print("gate.py: record needs --step and --task-dir", file=sys.stderr)
+            return 2
+        task_dir = os.path.abspath(os.path.expanduser(args.task_dir))
+        try:
+            with open(os.path.join(task_dir, "loop.json"), encoding="utf-8") as f:
+                report = record_checks(json.load(f), args.step, task_dir,
+                                       os.path.expanduser(args.cwd) if args.cwd else None)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            print(f"gate.py: {e}", file=sys.stderr)
+            return 2
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0 if report["ok"] else EXIT_GATE_FAILED
+
     if not args.gate:
         print(f"gate.py: {args.command} needs a gate file", file=sys.stderr)
         return 2
@@ -482,16 +762,37 @@ def main(argv):
     if "verdict" in skip:
         print("gate.py: --skip names a verdict check with its role, such as verdict:qa", file=sys.stderr)
         return 2
-    if args.sha and sha256_file(path) != args.sha.strip().lower():
-        print(json.dumps({"repo": gate["repo"], "pr": gate["pr"], "pass": False, "blocked": ["gate-file"],
-                          "checks": [{"check": "gate-file", "ok": False, "severity": "block",
-                                      "evidence": "the gate file changed after the brief"}]}, indent=2))
-        return EXIT_GATE_FAILED
     task_dir = os.path.abspath(os.path.expanduser(args.task_dir)) if args.task_dir else None
+    if args.sha and sha256_file(path) != args.sha.strip().lower():
+        report = {"repo": gate["repo"], "pr": gate["pr"], "head": None, "pass": False, "blocked": ["gate-file"],
+                  "checks": [{"check": "gate-file", "ok": False, "severity": "block",
+                              "evidence": "the gate file changed after the brief"}]}
+        print(json.dumps(report, indent=2))
+        if task_dir:
+            record(task_dir, report, args.before_ready, skip, True)
+        return EXIT_GATE_FAILED
     cwd = os.path.expanduser(args.cwd) if args.cwd else None
     report = evaluate(fetch(gate["repo"], gate["pr"]), gate, cwd, skip, task_dir, args.before_ready)
     print(json.dumps(report, indent=2, ensure_ascii=False))
+    if task_dir:
+        record(task_dir, report, args.before_ready, skip, bool(args.sha))
     return 0 if report["pass"] else EXIT_GATE_FAILED
+
+
+def record(task_dir, report, before_ready, skip=(), sha_checked=False):
+    """Append one run's summary to the task folder's gates.jsonl. A failed
+    write is said on stderr and changes nothing about the result."""
+    import datetime
+    row = {"time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "head": report["head"], "before_ready": before_ready, "pass": report["pass"],
+           "blocked": report["blocked"],
+           "warned": [r["check"] for r in report["checks"] if not r["ok"] and r["severity"] == "warn"],
+           "skipped": sorted(skip), "sha_checked": sha_checked}
+    try:
+        with open(os.path.join(task_dir, "gates.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError as e:
+        print(f"gate.py: could not record the run in {task_dir}/gates.jsonl: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

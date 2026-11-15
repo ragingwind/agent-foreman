@@ -1,0 +1,105 @@
+{
+  "form": "Spans: one project skill goes from the issue to an open pull request, with its own reviewer agent that fixes and pushes; it never merges.",
+  "settings": {
+    "tests": {
+      "full": "python3 -m unittest -q"
+    },
+    "loop": {
+      "work": [
+        {
+          "id": "build",
+          "does": "Run carry-issue for the task's issue up to its stop before merge, with no questions. Then mark each plan.md row done with the commit that holds it. Write a progress line while its agents work.",
+          "skills": [
+            "carry-issue",
+            "tdd",
+            "unit",
+            "commit",
+            "commit-style"
+          ]
+        }
+      ],
+      "check": [
+        {
+          "id": "test",
+          "skills": [
+            "full",
+            "cross-check",
+            "try-it"
+          ]
+        }
+      ]
+    },
+    "gate": [
+      {
+        "check": "command",
+        "name": "commit-kinds",
+        "from_base": "scripts/check-commits.sh",
+        "at": "merge"
+      }
+    ]
+  },
+  "expect": {
+    "sources": {
+      "carry-issue": [
+        "project",
+        "carry-issue"
+      ],
+      "commit-style": [
+        "project",
+        "commit-style"
+      ],
+      "try-it": [
+        "project",
+        "try-it"
+      ]
+    },
+    "steps": {
+      "build": [
+        "carry-issue",
+        "foreman-kit:tdd",
+        "foreman-kit:unit",
+        "foreman-kit:commit",
+        "commit-style"
+      ],
+      "test": [
+        "foreman-kit:full",
+        "foreman-kit:cross-check",
+        "try-it"
+      ]
+    },
+    "unbound": [
+      "proof-reader"
+    ],
+    "gate": {
+      "ok": [],
+      "merge_ok": [
+        "commit-kinds"
+      ]
+    },
+    "gate_fail": {
+      "commit": "update the readme",
+      "blocked": [
+        "commit-kinds"
+      ]
+    }
+  },
+  "setup": {
+    "levels": {
+      "carry-issue": "runs the build step",
+      "commit-style": "added to build",
+      "try-it": "a project command, added to QA's test step"
+    },
+    "flags": {
+      "carry-issue": [
+        "starts its own reviewer (proof-reader)",
+        "pushes fixes before the pair's review",
+        "opens a pull request that is not a draft"
+      ]
+    },
+    "overlaps": [
+      "proof-reader and the pair's review",
+      "carry-issue's pull request and finalize"
+    ],
+    "open": []
+  }
+}

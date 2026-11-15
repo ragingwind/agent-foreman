@@ -1,0 +1,36 @@
+{
+  "form": "Bare: code and tests only; the person picks one of their own skills for one step.",
+  "settings": {
+    "tests": {
+      "full": "sh test.sh"
+    },
+    "skills": {
+      "simplify": "tidy-up"
+    }
+  },
+  "expect": {
+    "sources": {
+      "simplify": [
+        "bundle",
+        "tidy-up"
+      ]
+    },
+    "steps": {
+      "simplify": [
+        "foreman-kit:tidy-up (flow and record: foreman-kit:simplify)"
+      ]
+    },
+    "copied": [
+      "tidy-up"
+    ],
+    "gate": {
+      "ok": []
+    }
+  },
+  "setup": {
+    "levels": {
+      "tidy-up": "the person's skill, chosen after the search; replaces simplify's action"
+    },
+    "open": []
+  }
+}

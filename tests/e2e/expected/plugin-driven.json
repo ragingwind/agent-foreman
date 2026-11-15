@@ -1,0 +1,69 @@
+{
+  "form": "Plugin-driven: no skills in the repository; the guide says to work with a plugin, whose skills use its own agent and script.",
+  "settings": {
+    "tests": {
+      "full": "python3 -m unittest -q"
+    },
+    "plugin_dirs": [
+      "{plugins}/flowkit"
+    ],
+    "skills": {
+      "commit": "flowkit:commit"
+    },
+    "loop": {
+      "work": [
+        {
+          "id": "build",
+          "does": "Run carry for the task's issue up to the pull request, with no questions. Then mark each plan.md row done with its commit.",
+          "skills": [
+            "carry",
+            "tdd",
+            "unit",
+            "commit"
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "sources": {
+      "carry": [
+        "plugin",
+        "flowkit:carry"
+      ],
+      "commit": [
+        "plugin",
+        "flowkit:commit"
+      ]
+    },
+    "steps": {
+      "build": [
+        "flowkit:carry",
+        "foreman-kit:tdd",
+        "foreman-kit:unit",
+        "flowkit:commit (flow and record: foreman-kit:commit)"
+      ]
+    },
+    "unbound": [
+      "ship-it"
+    ],
+    "gate": {
+      "ok": []
+    },
+    "plugins": [
+      "flowkit"
+    ]
+  },
+  "setup": {
+    "levels": {
+      "flowkit:carry": "runs the build step",
+      "flowkit:commit": "replaces commit's action"
+    },
+    "flags": {
+      "flowkit:ship-it": [
+        "merges: bound to no step"
+      ]
+    },
+    "open": []
+  }
+}

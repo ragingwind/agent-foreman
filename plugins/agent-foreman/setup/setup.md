@@ -23,7 +23,7 @@ scripts with `python3`.
 | --- | --- | --- |
 | Models | `models.md` | Providers, their models and the low, mid and high tiers, in `providers.json`, which the person edits |
 | Project | `project.md` | The repository, the machines, the checkout path on each, the full test command |
-| Loop | `loop.md` | The skill each step uses (the project's and the person's skills matched to the default ones), stages, steps, what a difficulty runs |
+| Loop | `loop.md` | The skill each step uses (the project's and the person's skills fitted to each step), stages, steps, what a difficulty runs, the project's own gate checks |
 | Other | `other.md` | Launch, permissions, tab labels, the report, check and stall times, disk, merge steps, difficulty thresholds, bundled skills |
 
 **`setup`, and a failed check, run every part**, in this order: models,
@@ -40,7 +40,9 @@ part.
 Every question about a setting that already has a value offers that value
 first, as `Keep: <value>`, marked recommended. A person who wants nothing
 changed answers each part with its first options. A part whose answers keep
-every value saves nothing.
+every value saves nothing. One exception: in the loop part, a project's or
+the person's skill that fits a step is recommended over a default skill
+nobody chose for it (`loop.md` "2. Fit each step").
 
 ## 3. Do each part
 

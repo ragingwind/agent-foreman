@@ -1,0 +1,48 @@
+{
+  "form": "Straddles: one skill does the work of two default skills (the plan and the scenario).",
+  "settings": {
+    "tests": {
+      "full": "sh test.sh"
+    },
+    "skills": {
+      "work-breakdown": "plan-and-proof",
+      "cross-check": "plan-and-proof"
+    }
+  },
+  "expect": {
+    "sources": {
+      "work-breakdown": [
+        "project",
+        "plan-and-proof"
+      ],
+      "cross-check": [
+        "project",
+        "plan-and-proof"
+      ]
+    },
+    "steps": {
+      "plan": [
+        "plan-and-proof (flow and record: foreman-kit:work-breakdown)",
+        "plan-and-proof (flow and record: foreman-kit:cross-check)"
+      ],
+      "verify": [
+        "foreman-kit:unit",
+        "foreman-kit:smoke",
+        "plan-and-proof (flow and record: foreman-kit:cross-check)"
+      ],
+      "test": [
+        "foreman-kit:full",
+        "plan-and-proof (flow and record: foreman-kit:cross-check)"
+      ]
+    },
+    "gate": {
+      "ok": []
+    }
+  },
+  "setup": {
+    "levels": {
+      "plan-and-proof": "replaces the actions of work-breakdown and cross-check"
+    },
+    "open": []
+  }
+}

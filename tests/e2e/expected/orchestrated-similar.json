@@ -1,0 +1,94 @@
+{
+  "form": "Similar: skills whose names or descriptions look like default skills but do other work, and one name two plugins share.",
+  "needs": [
+    "node"
+  ],
+  "settings": {
+    "tests": {
+      "full": "node --test"
+    },
+    "plugin_dirs": [
+      "{plugins}/flowkit",
+      "{plugins}/otherkit"
+    ],
+    "skills": {
+      "smoke": "smoke-run"
+    },
+    "loop": {
+      "work": [
+        {
+          "id": "build",
+          "skills": [
+            "tdd",
+            "unit",
+            "commit",
+            "commit-rules"
+          ]
+        },
+        {
+          "id": "finalize",
+          "skills": [
+            "handoff",
+            "changelog"
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "sources": {
+      "smoke": [
+        "project",
+        "smoke-run"
+      ],
+      "commit-rules": [
+        "project",
+        "commit-rules"
+      ],
+      "changelog": [
+        "missing",
+        "matches flowkit:changelog, otherkit:changelog"
+      ]
+    },
+    "steps": {
+      "build": [
+        "foreman-kit:tdd",
+        "foreman-kit:unit",
+        "foreman-kit:commit",
+        "commit-rules"
+      ],
+      "verify": [
+        "foreman-kit:unit",
+        "smoke-run (flow and record: foreman-kit:smoke)",
+        "foreman-kit:cross-check"
+      ],
+      "finalize": [
+        "foreman-kit:handoff"
+      ]
+    },
+    "unbound": [
+      "review-and-patch"
+    ],
+    "missing": [
+      "changelog"
+    ],
+    "gate": {
+      "ok": []
+    },
+    "plugins": []
+  },
+  "setup": {
+    "levels": {
+      "smoke-run": "replaces smoke's action",
+      "commit-rules": "added to build (rules only; it commits nothing)"
+    },
+    "flags": {
+      "review-and-patch": [
+        "looks like review but edits and pushes: not the pair's skill"
+      ]
+    },
+    "open": [
+      "changelog: flowkit's and otherkit's share the name; ask which, and save the full plugin:skill"
+    ]
+  }
+}

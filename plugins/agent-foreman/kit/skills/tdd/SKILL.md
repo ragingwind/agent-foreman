@@ -33,6 +33,8 @@ description: >-
 
 ## Record
 
+**Evidence** for the step's `end` line, with commit's: `tdd, commit: W1 <sha>, W2 <sha>`.
+
 - This skill writes no file of its own. Its record is the item's one commit (`commit`). That commit holds the tests and the code together, and the commits follow the row order of plan.md.
 - A change to the plan (a split row, an added file) is written in plan.md: the row, and one line under `## Decisions`.
 

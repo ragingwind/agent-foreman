@@ -23,7 +23,7 @@ The foreman writes no code and reviews no code itself.
 | Pair | Another model that reviews the lead's work inside the build session |
 | Red team, QA | Agents on other models in the verification session. The red team tries to break the change; QA runs the full tests and the user scenario test |
 | Task folder | One folder per task that holds every record: the task, the plan, the scenario, the handoff, every review and the status |
-| Default skill | What one loop action is, shipped with agent-foreman. A project or local skill can replace how it is done |
+| Default skill | What one loop action is, shipped with agent-foreman. A project or local skill can replace how it is done, add to a step, or run a whole step |
 | Difficulty | Low, mid or high. It picks the models and who merges |
 | Gate | Checks in code that must pass before ready and before merge |
 
@@ -37,7 +37,9 @@ The foreman writes no code and reviews no code itself.
    │                │ brief      loop.json            │
    │                │            gate.json + sha256   │
    │                │ launch ────────────────────────▶│ work loop, round 1
-   │                │ watch, coordinate               │ review, recheck ─▶ PAIR
+   │                │ watch      ◀── evidence ───────│ each step's end line
+   │                │            gate.py record       │
+   │                │ coordinate                      │ review, recheck ─▶ PAIR
    │                │◀────────────────── REPORT ready │
    │                │ verify-session ─────────────────────────────────────▶ RED TEAM ∥ QA
    │                │◀──────────────────────────────────────────── verdicts
@@ -67,6 +69,12 @@ Where a task goes back, and who decides:
 | verification | redteam-review | Try to break it: done-when, correctness, tests, structure, security | `redteam-review` |
 | | test | The full tests, then the user scenario test without reading the diff | `full`, `cross-check` |
 
+- **Evidence at every step.** No agent's word is taken that a step is done.
+  The lead ends every step with its evidence: the skills it ran and where
+  their record is. The foreman checks that record before the task goes on
+  and sends the step back when it falls short. The pair, the red team and QA
+  hand in answers with the evidence of each finding. At high difficulty the
+  foreman checks the plan against the task before any code is built.
 - **Other models check the work.** The pair, the red team and QA never run
   on the lead's profile. The gate refuses a verdict from the lead's model.
 - **One place for records.** Everything about a task is in its task folder.
@@ -82,11 +90,13 @@ work is done is asked by the skills and guides.
 
 | Held by a script | Asked by a prompt |
 | --- | --- |
-| Each step's end line names one of its outcomes, and the script prints the next step (`status.py note`) | How to split the work, which tests to write, one commit per work item |
+| Each step's end line names one of its outcomes and carries its evidence, and the script prints the next step (`status.py note`) | How to split the work, which tests to write, one commit per work item |
+| The foreman checks each step's evidence against its records (`gate.py record`): the plan's rows, a commit for each done row, the Checks, the answers | Whether the plan covers every done-when (the foreman's own judgment, at high difficulty) |
 | The gate blocks until every step before finalize has ended and every record is filled in | What to look for in a review, what to clean up |
 | Verdicts count only from `reviews/`, from a model other than the lead's, at the head commit | QA follows the scenario without reading the diff |
 | Role prompts and launch commands come from the task's `loop.json` (`loop.py prompt`) | The three-round limit and the report line |
-| The gate blocks when the gate file or `loop.json` changed after the brief | The lead never merges; high difficulty is yours to merge |
+| The gate blocks when the gate file or `loop.json` changed after the brief | High difficulty is yours to merge |
+| Every agent the foreman starts is denied `gh pr merge`, and a merge that did not pass the foreman's gate is reported to you; the project's own gate checks run with the standard ones | What a retro proposes; you decide each change |
 
 Known limit: the lead can write in its own task folder, so no script stops
 it from writing a fake answer file into `reviews/`.
@@ -122,9 +132,11 @@ it from writing a fake answer file into `reviews/`.
    - **Project**: the repository, the machines and their checkout paths, and
      the full test command (it proposes the one in `CLAUDE.md` or your CI
      files).
-   - **Loop**: matches the project's skills and yours to the default skill of
-     each step, then asks what else to change, such as what each difficulty
-     runs.
+   - **Loop**: fits the project's skills and commands to each step, and
+     yours where the project has none; shows where they overlap and asks
+     which one does the work; adds the project's own gate checks; then asks
+     what else to change, such as what each difficulty runs. A step it
+     cannot fit yet keeps the default skill, and the retro comes back to it.
    - **Other**: launch, tab labels, the report, check times, disk, merge
      steps.
 
@@ -142,6 +154,12 @@ it from writing a fake answer file into `reviews/`.
    You can close it at any time; the leads keep working in their tabs.
    Start it again the same way, and it opens with the last exchanges of the
    project's earlier foreman and picks up from there.
+
+   After a batch of tasks merges, the foreman offers a retro: it reads what
+   the finished tasks show (the steps they went back to, the findings, the
+   gate blocks, the stalls) and proposes changes to the loop, each with its
+   evidence. You pick which ones to keep; the next retro checks whether they
+   helped.
 
 Agents start with `--dangerously-skip-permissions`, so they do not stop for
 permission prompts. To have them ask, set `launch.permission` to `default`

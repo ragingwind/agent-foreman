@@ -183,7 +183,23 @@
           "cross-check"
         ],
         "next": {
-          "done": "build"
+          "done": "plan-check"
+        }
+      },
+      {
+        "id": "plan-check",
+        "stage": "plan",
+        "actor": "foreman",
+        "does": "The foreman reads plan.md and scenario.md against task.md's done-when and the plan step's evidence. The lead waits for its word: go on to build, or back to plan with what is missing.",
+        "skills": [],
+        "next": {
+          "back": "plan",
+          "go": "build"
+        },
+        "run": {
+          "low": "never",
+          "mid": "never",
+          "high": "always"
         }
       },
       {

@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import re
+import shutil
 import subprocess
 import unittest
 from unittest import mock
@@ -11,7 +12,7 @@ from helpers import SCRIPTS, TempHome, run, task_loop
 import config
 import loop
 
-WORK = ["plan", "build", "verify", "review", "simplify", "fix", "recheck", "finalize"]
+WORK = ["plan", "plan-check", "build", "verify", "review", "simplify", "fix", "recheck", "finalize"]
 STAGES = ["plan", "build", "verify", "review", "finalize"]
 CHECK = ["redteam-review", "test"]
 
@@ -106,9 +107,14 @@ class Plan(unittest.TestCase):
         return [s["id"] for s in loop.plan(self.loop, difficulty, trivial, which)]
 
     def test_every_difficulty_runs_the_whole_build_session(self):
-        for level in loop.LEVELS:
-            self.assertEqual(self.ids(level), WORK)
+        for level in loop.LEVELS:  # the foreman checks the plan before build at high only
+            self.assertEqual(self.ids(level), WORK if level == "high" else [s for s in WORK if s != "plan-check"])
             self.assertEqual(self.ids(level, which="check"), CHECK)
+        plan = {s["id"]: s for s in loop.plan(self.loop, "mid")}["plan"]
+        self.assertEqual(plan["next"], {"done": "build"})  # past the skipped check
+        high = {s["id"]: s for s in loop.plan(self.loop, "high")}
+        self.assertEqual((high["plan"]["next"], high["plan-check"]["actor"], high["plan-check"]["next"]),
+                         ({"done": "plan-check"}, "foreman", {"back": "plan", "go": "build"}))
 
     def test_trivial_task_skips_the_review_stage(self):
         trivial = {s["id"]: s for s in loop.plan(self.loop, "mid", trivial=True)}
@@ -160,13 +166,51 @@ class Skills(unittest.TestCase):
         self.assertEqual(loop.resolve("smoke", [], self.LOCAL, {"smoke": "ghost"})[0], "missing")
         self.assertEqual(loop.resolve("tidy", [], self.LOCAL), ("bundle", "local-skills:tidy"))  # not a default skill
 
+    def test_a_plugin_dir_skill_goes_with_its_plugin(self):
+        local = {**self.LOCAL, "flow:impl": "/p/skills/impl", "flow:pr": "/p/skills/pr"}
+        self.assertEqual(loop.resolve_skill("impl", [], local, whole={"flow"}), ("plugin", "flow:impl"))
+        self.assertEqual(loop.resolve_skill("impl", [], local), ("bundle", "flow:impl"))  # not loaded whole: copied
+        self.assertEqual(loop.resolve_skill("impl", ["impl"], local, whole={"flow"}), ("project", "impl"))
+        self.assertEqual(loop.resolve_skill("tidy", [], local, whole={"flow"}), ("bundle", "local-skills:tidy"))
+        resolved = loop.resolve_all({"work": [{"skills": ["handoff", "impl"]}]}, [], local, overrides={"handoff": "pr"},
+                                    whole={"flow"})
+        self.assertEqual(resolved, {"handoff": ("plugin", "flow:pr"), "impl": ("plugin", "flow:impl")})
+        name = lambda src, v: v if src in ("project", "plugin") else "foreman-kit:" + v
+        self.assertEqual(loop.shown("handoff", resolved, name, {"handoff": "pr"}),
+                         "flow:pr (flow and record: foreman-kit:handoff)")
+        self.assertEqual(loop.shown("impl", resolved, name, {"handoff": "pr"}), "flow:impl")
+        self.assertEqual(loop.shown("review", {"review": ("kit", "review")}, name, {}), "foreman-kit:review")
+
     def test_project_skill_names_local(self):
         home = TempHome()
         try:
             home.write("repo/.claude/skills/scenario/SKILL.md", "x")
             home.write("repo/.claude/skills/notes/README.md", "x")
             self.assertEqual(loop.project_skill_names("local", os.path.join(home.root, "repo")), ["scenario"])
+            home.write("repo/.claude/commands/impl.md", "x")  # a project command is called by its name too
+            home.write("repo/.claude/commands/notes.txt", "x")
+            home.write("repo/.claude/commands/scenario.md", "x")
+            self.assertEqual(loop.project_skill_names("local", os.path.join(home.root, "repo")), ["impl", "scenario"])
             self.assertEqual(loop.project_skill_names("local", os.path.join(home.root, "none")), [])
+        finally:
+            home.close()
+
+    def test_project_skill_names_remote_under_a_zsh_login_shell(self):
+        zsh = shutil.which("zsh")
+        if not zsh:
+            self.skipTest("no zsh here")
+        home = TempHome()
+        try:
+            home.write("repo/.claude/skills/scenario/SKILL.md", "x")  # skills, and no commands folder
+            home.write("other/.claude/commands/my cmd.md", "x")  # commands only, a name with a space
+            real = subprocess.run
+
+            def over_ssh(argv, **kw):  # a login shell that is zsh, where a glob with no match is an error
+                return real([zsh, "-c", argv[-1]], env={**os.environ, "HOME": home.root}, **kw)
+
+            with mock.patch.object(loop.subprocess, "run", over_ssh):
+                self.assertEqual(loop.project_skill_names("m", "~/repo", {"m": {"target": "host"}}), ["scenario"])
+                self.assertEqual(loop.project_skill_names("m", "~/other", {"m": {"target": "host"}}), ["my cmd"])
         finally:
             home.close()
 
@@ -175,6 +219,8 @@ class Skills(unittest.TestCase):
         try:
             home.write("repo/.claude/skills/scenario/SKILL.md", "x")
             home.write("a b/.claude/skills/notes/SKILL.md", "x")
+            home.write("a b/.claude/commands/impl.md", "x")
+            home.write("a b/.claude/commands/notes.md", "x")
             real = subprocess.run
 
             def over_ssh(argv, **kw):  # the remote shell, played by sh with HOME at the temporary folder
@@ -182,7 +228,7 @@ class Skills(unittest.TestCase):
 
             saved = {"m": {"target": "host"}}
             with mock.patch.object(loop.subprocess, "run", over_ssh):
-                for path, want in [("~/repo", ["scenario"]), ("~/a b", ["notes"]),
+                for path, want in [("~/repo", ["scenario"]), ("~/a b", ["impl", "notes"]),
                                    (os.path.join(home.root, "repo"), ["scenario"]), ("~/none", [])]:
                     self.assertEqual(loop.project_skill_names("m", path, saved), want, path)
         finally:
@@ -199,6 +245,7 @@ class Render(unittest.TestCase):
         self.cfg = copy.deepcopy(config.load("o/r"))
         self.resolved = {n: ("kit", n) for n in loop.KIT}
         self.resolved["simplify"] = ("bundle", "local-skills:tidy")
+        self.cfg["skills"] = {"simplify": "tidy"}
         self.profiles = {"pair": ["sonnet", "opus"], "redteam": ["opus", "sonnet"], "qa": ["opus"]}
 
     def tearDown(self):
@@ -213,7 +260,8 @@ class Render(unittest.TestCase):
         self.assertIn("| 1 | plan | `634 plan` | plan | lead |", out)
         self.assertIn("| foreman-kit:work-breakdown, foreman-kit:cross-check | done → build (build) |", out)
         self.assertIn("| 4 | review | `634 review <N>` | review | pair |", out)
-        self.assertIn("| foreman-kit:tidy | done → fix |", out)  # a replaced default skill
+        # a replaced default skill, with the default whose flow and record still apply
+        self.assertIn("| foreman-kit:tidy (flow and record: foreman-kit:simplify) | done → fix |", out)
         self.assertIn("changes → fix; approved → finalize (finalize)", out)
         self.assertIn("| pair | prompt | sonnet | opus |", out)
         self.assertIn("`loop.py prompt --step <step>`", out)
@@ -234,10 +282,31 @@ class Render(unittest.TestCase):
         self.assertIn("script → verify (build session)", out)
         self.assertIn("| qa | prompt | opus |", out)
 
+    def test_a_missing_replacement_keeps_the_default(self):
+        self.cfg["skills"]["handoff"] = "pr-gone"
+        self.resolved["handoff"] = ("missing", "pr-gone is neither a project skill there nor a skill on this machine")
+        data = loop.as_data(self.cfg, "634", "mid", False, self.resolved, kit_name, "o/r", "main", "sonnet",
+                            self.profiles)
+        self.assertEqual(next(s for s in data["work"] if s["id"] == "finalize")["skills"], ["foreman-kit:handoff"])
+        out = self.render("mid")
+        self.assertIn("| foreman-kit:handoff | conflict → build", out)
+        self.assertIn("- pr-gone is neither a project skill", out)  # still named as missing
+
+    def test_as_data_carries_the_project_gate_and_the_contracts(self):
+        self.cfg["gate"] = [{"check": "command", "name": "pr-body", "run": "x"}]
+        data = loop.as_data(self.cfg, "634", "mid", False, self.resolved, kit_name, "o/r", "main", "sonnet",
+                            self.profiles)
+        self.assertEqual(data["gate"], [{"check": "command", "name": "pr-body", "run": "x"}])
+        simplify = next(s for s in data["work"] if s["id"] == "simplify")
+        self.assertEqual(simplify["skills"], ["foreman-kit:tidy (flow and record: foreman-kit:simplify)"])
+        del self.cfg["gate"]
+        self.assertEqual(loop.as_data(self.cfg, "634", "mid", False, self.resolved, kit_name, "o/r", "main", "sonnet",
+                                      self.profiles)["gate"], [])
+
     def test_as_data(self):
         data = loop.as_data(self.cfg, "634", "mid", False, self.resolved, kit_name, "o/r", "main", "sonnet",
                             self.profiles)
-        self.assertEqual([s["id"] for s in data["work"]], WORK)
+        self.assertEqual([s["id"] for s in data["work"]], [s for s in WORK if s != "plan-check"])  # high only
         self.assertEqual([s["id"] for s in data["check"]], CHECK)
         self.assertEqual((data["repo"], data["base"], data["lead_profile"], data["max_lines"]), ("o/r", "main", "sonnet", 400))
         recheck = next(s for s in data["work"] if s["id"] == "recheck")
@@ -282,7 +351,8 @@ class Cli(unittest.TestCase):
                         {"repo": "o/r", "machines": {"local": repo}, "skills": {"cross-check": "scenario"}})
         r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "high", "--machine", "local")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("| foreman-kit:work-breakdown, scenario |", r.stdout)  # the project's skill replaces cross-check
+        # the project's skill replaces cross-check; cross-check's flow and record still apply
+        self.assertIn("| foreman-kit:work-breakdown, scenario (flow and record: foreman-kit:cross-check) |", r.stdout)
         self.assertIn("| pair | prompt | sonnet | - |", r.stdout)  # high: never the lead's opus
         self.assertNotIn("opus |", r.stdout.split("| Role |")[1])
         r = run("loop.py", "render", "--project", "o/r", "--task", "9", "--difficulty", "high", "--machine", "local",
@@ -319,6 +389,14 @@ class Prompt(unittest.TestCase):
 
     def prompt(self, *args, env=None, workdir=None):
         return run("loop.py", "prompt", *args, env=env, workdir=workdir or self.clone)
+
+    def test_a_role_reads_skill_names_without_the_lead_s_notation(self):
+        data = task_loop(difficulty="mid", lead="sonnet")
+        review = next(s for s in data["work"] if s["id"] == "review")
+        review["skills"] = ["code-check (flow and record: foreman-kit:review)"]
+        found = loop.role_run(data, self.task, "review", None, self.head, "launch.py")
+        self.assertIn("the skill code-check says", found["text"])
+        self.assertNotIn("flow and record", found["text"])
 
     def test_writes_the_filled_prompt_and_prints_the_commands(self):
         r = self.prompt("--step", "review", env={"AF_TASK_DIR": self.task})

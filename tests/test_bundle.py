@@ -117,6 +117,25 @@ class Bundle(unittest.TestCase):
         self.assertEqual((skills.count("foreman-kit:tidy"), warnings), (1, []))
         self.assertIn("skills/cross-check/SKILL.md", files)  # the default stays in the bundle for the flow and record
 
+    def test_a_plugin_dir_skill_goes_with_its_plugin_not_as_a_copy(self):
+        flow = os.path.dirname(os.path.dirname(self.home.write("flow/.claude-plugin/plugin.json", {"name": "flow"})))
+        self.home.write("flow/skills/impl/SKILL.md", "---\nname: impl\n---\n")
+        self.home.write("config/agent-foreman/config.json",
+                        {"plugin_dirs": [flow], "loop": {"work": [{"id": "build", "skills": ["tdd", "impl"]}]}})
+        plugins = [{"id": "flow@inline", "scope": "session", "enabled": True, "installPath": flow}]
+        with mock.patch.object(bundle, "plugin_list", return_value=plugins), \
+                mock.patch.object(bundle, "local_skills",
+                                  return_value={"p:tidy": self.skill, "flow:impl": os.path.join(flow, "skills", "impl")}):
+            h1, files, skills, warnings = bundle.build("o/r", [])
+        self.assertEqual((skills[-1], warnings), ("flow:impl", []))
+        self.assertFalse(any(rel.startswith("skills/impl/") for rel in files))  # not a copy among foreman-kit's
+        self.assertIn("plugins/flow/skills/impl/SKILL.md", files)  # but the whole plugin, carried along
+        self.assertIn("plugins/flow/.claude-plugin/plugin.json", files)
+        self.assertEqual(json.loads(files["config.json"])["plugins"], ["flow"])
+        h2, files, _, _ = bundle.build("o/r", [])  # without the plugin listed: nothing carried
+        self.assertEqual(json.loads(files["config.json"])["plugins"], [])
+        self.assertNotEqual(h1, h2)
+
     def test_a_missing_default_skill_is_a_warning(self):
         os.remove(os.path.join(self.home.root, "kit", "skills", "smoke", "SKILL.md"))
         _, _, skills, warnings = bundle.build("o/r", [])

@@ -31,6 +31,8 @@ description: >-
 
 ## Record
 
+**Evidence** for the step's `end` line: `simplify: <n> Simplify commits <sha>, ...`, or `simplify: none kept`.
+
 - Each kept change is its own commit, apart from the feature commits. Its subject starts with `Simplify`. It holds no test file and no feature code.
 - No row of plan.md changes.
 - A large clean-up goes in `$AF_TASK_DIR/handoff.md` under `## Follow-ups`, as one line: `- <where> — <what to clean up> — <why it is not done here>`. Create the file with that heading if it does not exist yet. The handoff skill keeps the line.

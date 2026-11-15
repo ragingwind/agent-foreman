@@ -10,9 +10,15 @@ for each step it runs, `progress` lines during a long one, and a `stop` line
 at a stop point that no step leads to (a decision, blocked). The foreman
 writes the verification session's lines with --file.
 
+Every `end` line carries its evidence in --done: the skills the step ran and
+where their record is (`plan.md 4 rows; scenario.md 6 steps`, the commits).
+`note` refuses an `end` line without it; the foreman checks the evidence
+against the records (gate.py record) before the task goes on.
+
 When the task folder holds `loop.json` (loop.py render --json), `note` refuses
 a stage or step that is not in the task's loop, and an `end` line without an
---outcome that the step has. It prints what to do next: at `start`, the step
+--outcome that the step has. When the next step is the foreman's, it says to
+stop there and wait. It prints what to do next: at `start`, the step
 itself; at `end`, the step the outcome leads to, which it also records as
 `to`. An `end` line whose outcome leads to `stop` is a stop point. At a
 `start` line written to AF_STATUS_FILE, it renames the agent's herdr tab to
@@ -214,6 +220,11 @@ def main(argv):
         if args.outcome and args.event != "end":
             print("status.py: --outcome goes with --event end", file=sys.stderr)
             return 2
+        if args.event == "end" and not args.done.strip():
+            print("status.py: --event end needs --done, the step's evidence: the skills it ran and where their "
+                  "record is, such as \"work-breakdown: plan.md 4 rows; cross-check: scenario.md 6 steps\" "
+                  "(loop.md, Evidence)", file=sys.stderr)
+            return 2
         path = os.path.expanduser(path)
         task_loop = load_loop(path)
         entry, target = None, None
@@ -242,8 +253,15 @@ def main(argv):
                     rename_tab(entry.get("label", "").replace("<N>", str(args.round or 1)))
                 print("now: " + describe(task_loop, entry["id"]))
             elif args.event == "end":
-                print("next: " + ("stop: no step follows; this is a stop point." if target == STOP
-                                  else describe(task_loop, target)))
+                after = next((s for s in task_loop.get("work", []) + task_loop.get("check", [])
+                              if s["id"] == target), None)
+                if target == STOP:
+                    print("next: stop: no step follows; this is a stop point.")
+                elif after is not None and after["actor"] == "foreman" and not args.file:
+                    print("next: " + describe(task_loop, target) + " This step is the foreman's: write a stop "
+                          "line and report waiting (loop.md, Stop points); the foreman tells you where to go on.")
+                else:
+                    print("next: " + describe(task_loop, target))
         return 0
 
     if not args.project:

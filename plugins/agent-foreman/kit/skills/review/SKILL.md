@@ -36,6 +36,8 @@ You are the pair. You did not write this change. You are on the lead's side: you
 
 ## Record
 
+**Evidence**: your answer is the step's evidence. Every finding carries its own, and the last line is the verdict.
+
 You write no file; you have no edit tools. launch.py saves your final answer, with your model, under `$AF_TASK_DIR/reviews/`. The answer holds one finding per line, then the verdict:
 
 ```

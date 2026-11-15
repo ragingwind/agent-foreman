@@ -18,7 +18,11 @@ Settings shape (`loop` in the settings):
 A step's "skills" name what it uses. A default skill (KIT) is the one
 agent-foreman ships in the bundle, unless the settings' `skills` map names a
 project or local skill that replaces it; the replacement changes only how
-the action is done, never the flow or the record.
+the action is done, never the flow or the record. The brief and loop.json
+show it as `<replacement> (flow and record: <default skill>)`, so the agent
+knows both. A project's skills are its checkout's `.claude/skills/*` and
+`.claude/commands/*.md`; a skill of a plugin in the settings' plugin_dirs is
+called `plugin:skill` and its plugin is loaded whole.
 
 A loop is a list of steps. A step: {"id", "stage", "actor", "does",
 "skills": [...], "next": {outcome: step id or "stop"}, and optionally "run":
@@ -56,7 +60,7 @@ AF_TASK_DIR, --agent to `<role>-1`. A step that follows an earlier step of the
 same role (the pair's recheck) gets only the diff since that agent's last
 answer.
 
-Exit codes: 2 = bad arguments, 3 = setup needed.
+Exit codes: 1 = a machine could not be read, 2 = bad arguments, 3 = setup needed.
 """
 import argparse
 import glob
@@ -242,59 +246,79 @@ def shell_path(path):
 
 
 def project_skill_names(label, path, saved=None):
-    """Skills the project's own checkout has on a machine (`.claude/skills/*`)."""
+    """Skills and commands the project's own checkout has on a machine
+    (`.claude/skills/*` and `.claude/commands/*.md`): an agent calls either
+    by its name."""
     if label == "local":
-        root = os.path.join(os.path.expanduser(path), ".claude", "skills")
-        if not os.path.isdir(root):
-            return []
-        return sorted(e for e in os.listdir(root) if os.path.isfile(os.path.join(root, e, "SKILL.md")))
+        claude = os.path.join(os.path.expanduser(path), ".claude")
+        skills, commands = os.path.join(claude, "skills"), os.path.join(claude, "commands")
+        names = {e for e in (os.listdir(skills) if os.path.isdir(skills) else [])
+                 if os.path.isfile(os.path.join(skills, e, "SKILL.md"))}
+        names |= {e[:-3] for e in (os.listdir(commands) if os.path.isdir(commands) else [])
+                  if e.endswith(".md") and os.path.isfile(os.path.join(commands, e))}
+        return sorted(names)
     if saved is None:
         from config import herdr_machines
         saved = herdr_machines()
     if label not in saved:
         raise ValueError(f"{label} is not a saved herdr machine")
-    probe = f"cd {shell_path(path)}/.claude/skills 2>/dev/null && for d in */; do test -f \"$d/SKILL.md\" && echo \"${{d%/}}\"; done; true"
-    out = subprocess.run(["ssh", "-o", "BatchMode=yes", saved[label]["target"], probe],
+    probe = (f"cd {shell_path(path)}/.claude 2>/dev/null && "
+             f"{{ for d in skills/*/; do test -f \"$d/SKILL.md\" && basename \"$d\"; done; "
+             f"for f in commands/*.md; do test -f \"$f\" && basename \"$f\" .md; done; }}; true")
+    # Under sh, whatever the login shell is: zsh stops at a pattern that matches nothing.
+    out = subprocess.run(["ssh", "-o", "BatchMode=yes", saved[label]["target"], "sh -c " + shlex.quote(probe)],
                          capture_output=True, text=True)
     if out.returncode != 0:
         raise RuntimeError(f"{label}: {out.stderr.strip()[:300]}")
-    return sorted(x for x in out.stdout.split() if x)
+    return sorted({x for x in out.stdout.splitlines() if x.strip()})
 
 
-def resolve_skill(name, project_names, local):
-    """Where one stage skill comes from: ("project", name), ("bundle", local ref)
-    or ("missing", reason). A project skill wins over a user skill."""
+def resolve_skill(name, project_names, local, whole=()):
+    """Where one stage skill comes from: ("project", name), ("plugin", ref) for
+    a skill of a plugin in `whole` (loaded into the agent whole), ("bundle",
+    local ref) or ("missing", reason). A project skill wins over a user skill."""
     short = name.split(":")[-1]
     if ":" not in name and short in project_names:
         return "project", short
-    if name in local:
-        return "bundle", name
-    matches = [ref for ref in local if ref.split(":")[-1] == short]
-    if len(matches) == 1:
-        return "bundle", matches[0]
+    matches = [name] if name in local else [ref for ref in local if ref.split(":")[-1] == short]
     if len(matches) > 1:
         return "missing", f"{name} matches {', '.join(matches)}; name one of them"
-    return "missing", f"{name} is neither a project skill there nor a skill on this machine"
+    if not matches:
+        return "missing", f"{name} is neither a project skill there nor a skill on this machine"
+    ref = matches[0]
+    return ("plugin" if ":" in ref and ref.split(":")[0] in whole else "bundle"), ref
 
 
-def resolve(name, project_names, local, overrides=None):
+def resolve(name, project_names, local, overrides=None, whole=()):
     """Where one step skill comes from. A default skill is ("kit", name) unless
     `overrides` (the settings' `skills`) names a skill that replaces it; any
     other name is looked up as resolve_skill does."""
     if name in KIT:
         replacement = (overrides or {}).get(name)
-        return resolve_skill(replacement, project_names, local) if replacement else ("kit", name)
-    return resolve_skill(name, project_names, local)
+        return resolve_skill(replacement, project_names, local, whole) if replacement else ("kit", name)
+    return resolve_skill(name, project_names, local, whole)
 
 
-def resolve_all(loop, project_names, local, which=LOOPS, overrides=None):
+def resolve_all(loop, project_names, local, which=LOOPS, overrides=None, whole=()):
     """Every step skill of the given loops: name -> (source, value)."""
     out = {}
     for w in which:
         for s in loop.get(w, []):
             for name in s.get("skills", []):
-                out.setdefault(name, resolve(name, project_names, local, overrides))
+                out.setdefault(name, resolve(name, project_names, local, overrides, whole))
     return out
+
+
+def shown(name, resolved, call_name, overrides=None):
+    """A step skill as the agent reads it: its call name, and for a default
+    skill another skill replaces, the default whose flow and record still
+    apply. A default whose replacement is missing stays the default."""
+    if resolved[name][0] == "missing" and name in KIT:
+        return call_name("kit", name)
+    text = call_name(*resolved[name])
+    if name in KIT and (overrides or {}).get(name) and resolved[name][0] != "kit":
+        text += f" (flow and record: {call_name('kit', name)})"
+    return text
 
 
 def has_rounds(steps, stage):
@@ -325,13 +349,16 @@ def as_data(cfg, task, difficulty, trivial, resolved, call_name, repo, base, lea
     loop = cfg["loop"]
     out = {"repo": repo, "task": task, "base": base, "difficulty": difficulty, "trivial": trivial,
            "lead_profile": lead, "tests_full": cfg.get("tests", {}).get("full"),
+           "gate": [dict(c) for c in cfg.get("gate", [])],
            "max_lines": cfg["difficulty"]["lines"], "roles": {}}
+    overrides = cfg.get("skills", {})
     for which in ("work", "check"):
         steps = plan(loop, difficulty, trivial, which)
         labels = stage_labels(cfg, task, steps)
         out[which] = [{"id": s["id"], "stage": s["stage"], "label": labels[s["stage"]], "actor": s["actor"],
                        "does": s["does"],
-                       "skills": [call_name(*resolved[n]) for n in s.get("skills", []) if resolved[n][0] != "missing"],
+                       "skills": [shown(n, resolved, call_name, overrides) for n in s.get("skills", [])
+                                  if resolved[n][0] != "missing" or n in KIT],
                        "next": s["next"]} for s in steps]
         for s in steps:
             r = s["actor"]
@@ -390,8 +417,9 @@ def role_run(task_loop, task_dir, step_id, agent, head, launch):
             raise ValueError(f"{agent} has no earlier answer to check against; run step {earlier[-1]} first")
         diff = (f"from {found[0].get('head')} to HEAD: only the fixes and the clean-up since your last review, "
                 f"whose answer is {found[1]}")
+    skills = ", ".join(re.sub(r" \(flow and record: [^)]*\)$", "", s) for s in step["skills"])  # lead's notation
     values = {"task": task_loop["task"], "repo": task_loop["repo"], "base": base, "head": head, "diff": diff,
-              "task folder": task_dir, "skill": ", ".join(step["skills"]), "skills": ", ".join(step["skills"]),
+              "task folder": task_dir, "skill": skills, "skills": skills,
               "full test command": task_loop.get("tests_full") or "none is set; write `not run: no full test command`",
               "trivial": "yes" if task_loop.get("trivial") else "no"}
     text = role["prompt"]
@@ -431,7 +459,8 @@ def render(cfg, task, difficulty, trivial, resolved, profiles, call_name, which=
               f"{ops['stall_minutes']} minutes without a line counts as a stall.", ""]
     missing = sorted({v for src, v in resolved.values() if src == "missing"})
     if missing:
-        lines += ["**Missing skills** (go on without them and say so in your report):", ""]
+        lines += ["**Missing skills** (go on without them, or with the default skill the table shows in a "
+                  "replacement's place, and say so in your report):", ""]
         lines += [f"- {m}" for m in missing] + [""]
     lines += ["| # | Stage | Tab label | Step | Actor | Does | Skills | Next |",
               "| --- | --- | --- | --- | --- | --- | --- | --- |"]
@@ -439,7 +468,8 @@ def render(cfg, task, difficulty, trivial, resolved, profiles, call_name, which=
         st = s["stage"]
         first = i == 1 or steps[i - 2]["stage"] != st
         tab = f"`{labels[st]}`" if first else ""
-        skills = ", ".join(call_name(*resolved[n]) for n in s.get("skills", []) if resolved[n][0] != "missing") or "-"
+        skills = ", ".join(shown(n, resolved, call_name, cfg.get("skills", {})) for n in s.get("skills", [])
+                           if resolved[n][0] != "missing" or n in KIT) or "-"
         nxt = "; ".join(f"{k} → {v}" + (f" ({stage[v]})" if v in stage and stage[v] != st else "")
                         + (" (build session)" if v != STOP and v not in stage else "")
                         for k, v in s["next"].items())
@@ -508,7 +538,7 @@ def _cli(argv):
 
     import adapters
     from config import (EXIT_SETUP_NEEDED, REPO, herdr_machines, lead_profile, load, local_skills, plugin_dirs,
-                        plugin_list, role_candidates)
+                        plugin_list, role_candidates, whole_plugins)
     kind = args.agent or adapters.DEFAULT
     if kind not in adapters.KINDS:
         print(f"loop.py: --agent must be one of {', '.join(adapters.KINDS)} for {args.command}", file=sys.stderr)
@@ -541,10 +571,16 @@ def _cli(argv):
         print(f"loop.py: {args.machine} is not one of the project's machines ({', '.join(machines) or 'none'})",
               file=sys.stderr)
         return EXIT_SETUP_NEEDED
-    project_names = project_skill_names(args.machine, machines[args.machine],
-                                        None if args.machine == "local" else herdr_machines())
-    local = local_skills(plugin_list(plugin_dirs(cfg)))
-    resolved = resolve_all(cfg["loop"], project_names, local, overrides=cfg.get("skills", {}))
+    try:
+        project_names = project_skill_names(args.machine, machines[args.machine],
+                                            None if args.machine == "local" else herdr_machines())
+    except (ValueError, RuntimeError) as e:
+        print(f"loop.py: cannot list the project's skills on {args.machine}: {e}", file=sys.stderr)
+        return 1
+    plugins = plugin_list(plugin_dirs(cfg))
+    local = local_skills(plugins)
+    resolved = resolve_all(cfg["loop"], project_names, local, overrides=cfg.get("skills", {}),
+                           whole=whole_plugins(cfg, plugins))
     if args.command == "skills":
         print(json.dumps({"machine": args.machine, "project_skills": project_names,
                           "skills": {k: {"source": v[0], "value": v[1]} for k, v in resolved.items()}}, indent=2))
@@ -564,7 +600,7 @@ def _cli(argv):
     profiles = {r: role_candidates(cfg, args.difficulty, r, lead=lead) for r in cfg["loop"]["roles"]}
 
     def call_name(source, value):
-        return value if source == "project" else adapter.skill_name(value)
+        return value if source in ("project", "plugin") else adapter.skill_name(value)
 
     if args.json:
         print(json.dumps(as_data(cfg, args.task, args.difficulty, args.trivial, resolved, call_name, args.project,

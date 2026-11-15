@@ -11,6 +11,9 @@ EXECUTABLE = "claude"
 PLUGIN = "foreman-kit"
 ROLES = ["opus", "sonnet", "haiku"]
 HEARTBEAT = 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/heartbeat.py"'
+# Tools no agent gets, whatever else it may do: the foreman merges, after the
+# gate. A guard against a skill that merges on its own, not a sandbox.
+NEVER = ["Bash(gh pr merge:*)"]
 
 # Variables a gateway may set. They are cleared first, so a value inherited
 # from the parent shell never leaks into another gateway's agent.
@@ -49,11 +52,13 @@ def gateway_env(gateway, profile, environ):
 
 
 def command(cfg, profile_name, name=None, session_id=None, bundle=None, environ=None,
-            print_mode=False, disallowed=(), resume=None):
+            print_mode=False, disallowed=(), resume=None, plugin_dirs=()):
     """Return (argv, variables to set, variable names to clear). In print mode
     the agent answers one prompt read from stdin and prints JSON (`claude -p`).
     Either way it runs in the folder it is started in, its own clone. `resume`
-    continues an earlier session with its conversation, in the folder it ran in."""
+    continues an earlier session with its conversation, in the folder it ran in.
+    `plugin_dirs` are loaded whole after the bundle, so a plugin's skills keep
+    their agents and scripts. The tools in NEVER are always denied."""
     profile = cfg["profiles"][profile_name]
     gateway = cfg["gateways"][profile["gateway"]]
     env, clear = gateway_env(gateway, profile, os.environ if environ is None else environ)
@@ -72,8 +77,9 @@ def command(cfg, profile_name, name=None, session_id=None, bundle=None, environ=
         argv.append("--dangerously-skip-permissions")
     if bundle:
         argv += ["--plugin-dir", bundle]
-    if disallowed:
-        argv += ["--disallowedTools", ",".join(disallowed)]
+    for d in plugin_dirs:
+        argv += ["--plugin-dir", d]
+    argv += ["--disallowedTools", ",".join(dict.fromkeys([*disallowed, *NEVER]))]
     return argv, env, clear
 
 

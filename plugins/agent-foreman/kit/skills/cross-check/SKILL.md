@@ -49,6 +49,8 @@ One script, run twice. The lead's run shows that the script is right and the pro
 
 ## Record
 
+**Evidence** for the step's `end` line: in plan, `cross-check: scenario.md <n> steps`; in verify, `cross-check: scenario.md run, Verdict: <pass or fail>`.
+
 The plan and verify steps write `$AF_TASK_DIR/scenario.md` in this shape:
 
 ````markdown

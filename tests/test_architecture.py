@@ -61,10 +61,17 @@ class LoopPictures(unittest.TestCase):
         self.check_loop("check")
 
     def test_trivial_steps(self):
-        ids = {s["id"] for s in self.std["work"]}
-        skipped = {d: ids - {s["id"] for s in loop.plan(self.std, d, trivial=True)} for d in loop.LEVELS}
+        ran = lambda d, trivial: {s["id"] for s in loop.plan(self.std, d, trivial=trivial)}
+        skipped = {d: ran(d, False) - ran(d, True) for d in loop.LEVELS}
         self.assertEqual(len({frozenset(v) for v in skipped.values()}), 1, skipped)  # one picture fits all
         self.assertEqual(drawn("work")[3], skipped["mid"])
+
+    def test_difficulty_steps(self):
+        ids = {s["id"] for s in self.std["work"]}
+        listed = set(re.search(r"^ low and mid skip: (.*)$", block("WORK LOOP"), re.M).group(1).split(", "))
+        for d in ("low", "mid"):
+            self.assertEqual(ids - {s["id"] for s in loop.plan(self.std, d)}, listed)
+        self.assertEqual({s["id"] for s in loop.plan(self.std, "high")}, ids)
 
 
 class WhoDoesWhat(unittest.TestCase):
@@ -120,16 +127,23 @@ class StepPicture(unittest.TestCase):
         self.assertEqual(r.returncode, code, r.stderr)
         self.assertEqual(self.rows(), [])
 
+    def test_an_end_without_evidence(self):
+        self.assertIn("--done holds the evidence", self.text)
+        r = self.note("--event", "end", "--outcome", "done")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("needs --done", r.stderr)
+        self.assertEqual(self.rows(), [])
+
     def test_a_right_outcome(self):
         self.assertIn('prints "next: Y"', self.text)
         for outcome, to in self.verify["next"].items():
-            r = self.note("--event", "end", "--outcome", outcome)
+            r = self.note("--event", "end", "--outcome", outcome, "--done", "unit: plan.md Checks 2 entries")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertTrue(r.stdout.startswith(f"next: {to}"), r.stdout)
             self.assertEqual((self.rows()[-1]["outcome"], self.rows()[-1]["to"]), (outcome, to))
         finalize = next(s for s in task_loop()["work"] if s["id"] == "finalize")
         r = run("status.py", "note", "--file", self.status, "--stage", finalize["stage"], "--step", "finalize",
-                "--event", "end", "--outcome", "done")
+                "--event", "end", "--outcome", "done", "--done", "handoff: handoff.md; pull request #7 ready")
         self.assertIn("(Y = stop: a stop point)", self.text)
         self.assertTrue(r.stdout.startswith("next: stop"), r.stdout)
 

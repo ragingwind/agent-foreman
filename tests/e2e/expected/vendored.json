@@ -1,0 +1,50 @@
+{
+  "form": "Vendored: the project keeps its own changed copy of a plugin skill under the same name, and uses another skill of that plugin.",
+  "settings": {
+    "tests": {
+      "full": "python3 -m unittest -q"
+    },
+    "plugin_dirs": [
+      "{plugins}/flowkit"
+    ],
+    "skills": {
+      "commit": "commit",
+      "handoff": "pr-draft"
+    }
+  },
+  "expect": {
+    "sources": {
+      "commit": [
+        "project",
+        "commit"
+      ],
+      "handoff": [
+        "plugin",
+        "flowkit:pr-draft"
+      ]
+    },
+    "steps": {
+      "build": [
+        "foreman-kit:tdd",
+        "foreman-kit:unit",
+        "commit (flow and record: foreman-kit:commit)"
+      ],
+      "finalize": [
+        "flowkit:pr-draft (flow and record: foreman-kit:handoff)"
+      ]
+    },
+    "gate": {
+      "ok": []
+    },
+    "plugins": [
+      "flowkit"
+    ]
+  },
+  "setup": {
+    "levels": {
+      "commit": "replaces commit's action with the project's copy, not flowkit's",
+      "flowkit:pr-draft": "replaces handoff's action"
+    },
+    "open": []
+  }
+}

@@ -15,6 +15,7 @@ is not a sandbox). A marker in `.git` records that agent-foreman made it.
 Usage:
   clone.py make --project OWNER/REPO --task TASK --agent AGENT --ref REF
                 [--from PATH] [--machine MACHINE] [--no-push] [--fresh] [--force]
+                [--instructions-from SHA]
   clone.py check PATH [--machine MACHINE]
   clone.py remove --project OWNER/REPO --task TASK [--agent AGENT] [--machine MACHINE] [--force]
   clone.py archive --project OWNER/REPO --task TASK [--machine MACHINE]
@@ -23,6 +24,12 @@ make: --from defaults to the project's checkout on that machine (its
 settings); --ref is what to check out (detached), such as `origin/main` or a
 head SHA. An existing clone of the same agent is kept (status `exists`);
 --fresh removes it first, under the same rules as remove.
+--instructions-from SHA, for a judging agent: the files an agent reads as
+instructions (`.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, at any
+depth) are put back as commit SHA has them (the base branch's head on GitHub,
+fetched from origin when the clone lacks it), so a change to them under
+review cannot steer the agent that reviews it. The diff it reviews is the
+commits', unchanged. A SHA it cannot get is an error.
 
 check: whether PATH is a clone agent-foreman made under the work root. Only
 such a folder's trust question may be answered for the person.
@@ -46,6 +53,7 @@ Exit codes: 1 = refused or git failed, 2 = bad arguments, 3 = setup needed.
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -56,6 +64,7 @@ WORK = "~/.cache/agent-foreman/work"
 TASKS = "~/.local/state/agent-foreman/tasks"
 MARK = "agent-foreman.json"
 NO_PUSH = "no-push-from-this-clone"
+INSTRUCTIONS = [":(glob)**/.claude/**", ":(glob)**/CLAUDE.md", ":(glob)**/CLAUDE.local.md", ":(glob)**/AGENTS.md"]
 
 
 # --- runs on the agent's machine; standard library only ---------------------
@@ -90,9 +99,10 @@ def _unsafe(path, push=True):
     """Why removing a clone would lose work, or "". A clone that cannot push
     (--no-push) holds a judging agent's checkout of commits that live in the
     lead's clone, so only its tracked-file changes count."""
-    changed = _git("diff", "--name-only", "HEAD", cwd=path)
+    restored = set(check(path).get("restored", []))
+    changed = [f for f in _git("diff", "--name-only", "HEAD", cwd=path).splitlines() if f not in restored]
     if changed:
-        return "changes to tracked files: " + ", ".join(changed.splitlines()[:5])
+        return "changes to tracked files: " + ", ".join(changed[:5])
     if not push:
         return ""
     local = _git("rev-list", "--max-count=5", "HEAD", "--branches", "--not", "--remotes", cwd=path)
@@ -137,7 +147,23 @@ def remove(key, task, agent=None, force=False):
     return {"removed": removed, "refused": refused}
 
 
-def make(key, task, agent, source, ref, fresh=False, force=False, no_push=False):
+def restore_instructions(dest, sha):
+    """Put the agent-instruction files back as commit `sha` has them. Returns
+    the paths it changed."""
+    if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=dest, capture_output=True).returncode:
+        _git("fetch", "--quiet", "origin", sha, cwd=dest)
+    restored = []
+    for line in _git("diff", "--name-status", "--no-renames", sha, "HEAD", "--", *INSTRUCTIONS, cwd=dest).splitlines():
+        status, path = line.split("\t", 1)
+        if status == "A":
+            os.remove(os.path.join(dest, path))
+        else:
+            _git("checkout", "--quiet", sha, "--", path, cwd=dest)
+        restored.append(path)
+    return restored
+
+
+def make(key, task, agent, source, ref, fresh=False, force=False, no_push=False, instructions_from=None):
     dest = clone_path(key, task, agent)
     if os.path.exists(dest):
         if not fresh:
@@ -166,14 +192,16 @@ def make(key, task, agent, source, ref, fresh=False, force=False, no_push=False)
         # The branch `git clone` made is the source's, not the agent's; the agent cuts its own.
         for branch in _git("for-each-ref", "--format=%(refname:short)", "refs/heads/", cwd=dest).split():
             _git("branch", "--quiet", "-D", branch, cwd=dest)
+        restored = restore_instructions(dest, instructions_from) if instructions_from else []
         with open(os.path.join(dest, ".git", MARK), "w", encoding="utf-8") as f:
             json.dump({"project": key, "task": task, "agent": agent, "source": source, "ref": ref, "push": not no_push,
-                       "made": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, f)
+                       "restored": restored, "made": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, f)
         head = _git("rev-parse", "HEAD", cwd=dest)
     except RuntimeError as e:
         shutil.rmtree(dest, ignore_errors=True)
         return {"error": str(e)}
-    return {"path": dest, "status": "made", "origin": origin, "push": not no_push, "head": head}
+    return {"path": dest, "status": "made", "origin": origin, "push": not no_push, "head": head,
+            "restored": restored}
 
 
 def run(request):
@@ -258,6 +286,8 @@ def main(argv):
     ap.add_argument("--no-push", action="store_true")
     ap.add_argument("--fresh", action="store_true")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--instructions-from", metavar="SHA",
+                    help="make: put the agent-instruction files back as this commit has them")
     args = ap.parse_args(argv)
 
     def bad(message):
@@ -295,8 +325,11 @@ def main(argv):
                 print(f"clone.py: no --from, and project {args.project} names no checkout on {args.machine}",
                       file=sys.stderr)
                 return EXIT_SETUP_NEEDED
+            if args.instructions_from and not re.fullmatch(r"[0-9a-f]{7,64}", args.instructions_from):
+                return bad("--instructions-from takes a commit SHA, such as the base branch's head on GitHub")
             request = {"op": "make", "key": key, "task": args.task, "agent": args.agent, "source": source,
-                       "ref": args.ref, "fresh": args.fresh, "force": args.force, "no_push": args.no_push}
+                       "ref": args.ref, "fresh": args.fresh, "force": args.force, "no_push": args.no_push,
+                       "instructions_from": args.instructions_from}
     try:
         out = on_machine(args.machine, request)
     except (ValueError, RuntimeError) as e:

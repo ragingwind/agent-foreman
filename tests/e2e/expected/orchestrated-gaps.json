@@ -1,0 +1,71 @@
+{
+  "form": "Has gaps: an implement-and-open skill only (no plan, review or QA skill), naming an agent, a script and a skill the project does not have.",
+  "settings": {
+    "tests": {
+      "full": "python3 -m unittest -q"
+    },
+    "loop": {
+      "work": [
+        {
+          "id": "build",
+          "does": "Run patch-and-pr for the task's issue up to the pull request, with no questions; skip its fixer-bot and stamp steps, which this project lacks. Then mark each plan.md row done with its commit.",
+          "skills": [
+            "patch-and-pr",
+            "tdd",
+            "unit",
+            "commit"
+          ]
+        },
+        {
+          "id": "finalize",
+          "skills": [
+            "handoff",
+            "release-notes"
+          ]
+        }
+      ]
+    }
+  },
+  "expect": {
+    "sources": {
+      "patch-and-pr": [
+        "project",
+        "patch-and-pr"
+      ],
+      "release-notes": [
+        "missing",
+        "release-notes"
+      ]
+    },
+    "steps": {
+      "build": [
+        "patch-and-pr",
+        "foreman-kit:tdd",
+        "foreman-kit:unit",
+        "foreman-kit:commit"
+      ],
+      "finalize": [
+        "foreman-kit:handoff"
+      ]
+    },
+    "missing": [
+      "release-notes"
+    ],
+    "gate": {
+      "ok": []
+    }
+  },
+  "setup": {
+    "levels": {
+      "patch-and-pr": "runs the build step"
+    },
+    "open": [
+      "plan: no project skill, the default",
+      "review: no project review, the pair's default",
+      "test: no project QA, the default",
+      "patch-and-pr names the fixer-bot agent, which the project lacks",
+      "patch-and-pr calls ~/.claude/skills/patch-and-pr/scripts/stamp.sh, which no machine has",
+      "release-notes: named by patch-and-pr, found nowhere"
+    ]
+  }
+}

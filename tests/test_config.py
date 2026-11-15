@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import subprocess
@@ -113,6 +114,15 @@ class Problems(unittest.TestCase):
                       self.problems({**base, "tests": {"full": " "}}, project=True))
         self.assertIn("project: tests may only name full, the project's full test command",
                       self.problems({**base, "tests": {"unit": "x"}}, project=True))
+
+    def test_project_gate(self):
+        base = {"repo": "o/r", "workspace": "r", "machines": {"local": "/r"}}
+        good = [{"check": "command", "name": "closing-keyword", "run": "x", "at": "merge"}]
+        self.assertEqual(self.problems({**base, "gate": good}, project=True), [])
+        p = self.problems({**base, "gate": [{"check": "command", "run": "x"}]}, project=True)
+        self.assertIn("project: gate: check 1 needs a name", p)
+        self.assertIn("project: gate: must be a list of checks", self.problems({**base, "gate": {}}, project=True))
+        self.assertIn("unknown setting 'gate'", self.problems({"gate": good}))  # a project's setting only
 
 
 TF = {"id": "tf", "base_url": "https://tf.example", "auth": "bearer", "token_env": "TF_API_TOKEN",
@@ -239,11 +249,13 @@ class MergeById(unittest.TestCase):
         home = TempHome()
         try:
             full = config.load()
-            full["loop"]["work"][4]["skills"] = ["deep-clean-code"]
+            simplify = [s["id"] for s in full["loop"]["work"]].index("simplify")
+            full["loop"]["work"][simplify]["skills"] = ["deep-clean-code"]
             _, written, problems = config.save("user", full, saved={}, skills={"deep-clean-code": "/x"})
             self.assertEqual(problems, [])
             self.assertEqual(written, {"loop": {"work": [{"id": "simplify", "skills": ["deep-clean-code"]}]}})
-            self.assertEqual(config.load()["loop"]["work"][4]["does"], config.standard()["loop"]["work"][4]["does"])
+            self.assertEqual(config.load()["loop"]["work"][simplify]["does"],
+                             config.standard()["loop"]["work"][simplify]["does"])
         finally:
             home.close()
 
@@ -369,7 +381,7 @@ class SaveAStep(unittest.TestCase):
         _, written, problems = config.save("user", full)
         self.assertEqual(problems, [])
         self.assertEqual([s for s in written["loop"]["work"] if s["id"] == "lint"][0]["after"], "build")
-        self.assertEqual([s["id"] for s in config.load()["loop"]["work"]][:3], ["plan", "build", "lint"])
+        self.assertEqual([s["id"] for s in config.load()["loop"]["work"]][:4], ["plan", "plan-check", "build", "lint"])
 
 
 class Skills(unittest.TestCase):
@@ -437,6 +449,28 @@ class Skills(unittest.TestCase):
         self.assertIn("plugin_dirs must be a list of directory paths",
                       config.validate(config.merge(cfg, {"plugin_dirs": "/a"})))
         self.assertEqual(config.plugin_dirs({"plugin_dirs": [plug, "/no/such/dir"]}), [plug])
+
+    def test_whole_plugins_are_the_plugin_dirs_ones(self):
+        flow = os.path.dirname(os.path.dirname(self.home.write("flow/.claude-plugin/plugin.json", {"name": "flow"})))
+        other = os.path.dirname(os.path.dirname(self.home.write("other/.claude-plugin/plugin.json", {"name": "o"})))
+        self.home.write("flow/skills/impl/SKILL.md", "x")
+        self.home.write("other/skills/tidy/SKILL.md", "x")
+        self.home.write("market/skills/ship/SKILL.md", "x")
+        plugins = [{"id": "flow@inline", "scope": "session", "enabled": True, "installPath": flow},
+                   {"id": "other@inline", "scope": "session", "enabled": True, "installPath": other},
+                   {"id": "market@m", "scope": "user", "enabled": True,
+                    "installPath": os.path.join(self.home.root, "market")}]
+        cfg = config.merge(config.load(), {"plugin_dirs": [flow, other],
+                                           "loop": {"work": [{"id": "build", "skills": ["tdd", "impl", "ship"]}]}})
+        self.assertEqual(config.whole_plugins(cfg, plugins), {"flow": flow, "other": other})
+        self.assertEqual(config.whole_plugins(cfg, plugins[2:]), {})  # an installed plugin is not loaded whole
+
+    def test_plugins_installed_for_another_folder_are_candidates(self):
+        plugins = [{"id": "flow@market", "enabled": False, "scope": "project", "installPath": "/cache/flow"},
+                   {"id": "pstack@market", "enabled": True, "scope": "user", "installPath": "/cache/pstack"},
+                   {"id": "pstack@old", "enabled": False, "scope": "user", "installPath": "/cache/old-pstack"},
+                   {"id": "agent-foreman@x", "enabled": False, "installPath": config.SELF_DIR}]
+        self.assertEqual(config.installed_elsewhere(plugins), [("flow@market", "/cache/flow")])
 
     def test_project_skills_order_without_repeats(self):
         cfg = {"bundle": {"skills": ["a"]}, "loop": {"work": [{"skills": ["b", "a"]}], "check": [{"skills": ["d"]}]}}
@@ -516,8 +550,8 @@ class Cli(unittest.TestCase):
         with open(path, "w") as f:
             f.write("#!/usr/bin/env python3\nimport json, os, sys\na = sys.argv[1:]\n"
                     "dirs = [a[i + 1] for i, x in enumerate(a) if x == '--plugin-dir']\n"
-                    "print(json.dumps([{'id': os.path.basename(d) + '@inline', 'enabled': True, 'installPath': d}"
-                    " for d in dirs]))\n")
+                    "print(json.dumps([{'id': os.path.basename(d) + '@inline', 'scope': 'session', 'enabled': True,"
+                    " 'installPath': d} for d in dirs]))\n")
         os.chmod(path, 0o755)
         gh = os.path.join(bindir, "gh")  # the machine check looks for it on PATH
         with open(gh, "w") as f:
@@ -548,6 +582,15 @@ class Cli(unittest.TestCase):
         r = run("config.py", "check-machine", "local", os.path.join(self.home.root, "nope"), "--project", "o/r", env=env)
         self.assertEqual(json.loads(r.stdout)["problems"][0], f"no git checkout at {os.path.join(self.home.root, 'nope')}")
         self.assertEqual(run("config.py", "check-machine", "local", repo).returncode, 2)
+
+    def test_plugin_dir_candidates_are_bare_paths(self):
+        with mock.patch.object(config, "session_plugin_dirs", return_value=["/p/kit"]), \
+                mock.patch.object(config, "installed_elsewhere", return_value=[("flow@m", "/cache/flow/1.0")]), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out, \
+                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(config._cli(["plugin-dir-candidates"]), 0)
+        self.assertEqual(out.getvalue().splitlines(), ["/p/kit", "/cache/flow/1.0"])  # each one fits --plugin-dir
+        self.assertIn("flow@m, installed but not enabled here", err.getvalue())
 
     def test_skills_with_an_unsaved_plugin_dir(self):
         plugin = os.path.join(self.home.root, "kit")

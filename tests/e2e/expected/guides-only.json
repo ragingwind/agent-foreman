@@ -1,0 +1,60 @@
+{
+  "form": "Guides only: rules in the guide, CI, a Makefile and a pull request template; no skills.",
+  "settings": {
+    "tests": {
+      "full": "make test"
+    },
+    "loop": {
+      "work": [
+        {
+          "id": "build",
+          "does": "For each work item in plan.md that is not done: build it the way its test column says (test-first or test-after), run its tests, commit it once, and mark it done. Work sent back to build is a new row. Do not start the next item while a test of this item fails. Branch: topic/<issue>-<slug>. End each commit body with Refs #<issue>."
+        }
+      ]
+    },
+    "gate": [
+      {
+        "check": "command",
+        "name": "lint-check",
+        "run": "make lint-check"
+      },
+      {
+        "check": "command",
+        "name": "refs-issue",
+        "run": "range=$(git log --format=%H \"$AF_BASE_SHA..$AF_HEAD\") && [ -n \"$range\" ] && for c in $range; do git log -1 --format=%B \"$c\" | grep -q 'Refs #' || exit 1; done"
+      }
+    ]
+  },
+  "expect": {
+    "steps": {
+      "build": [
+        "foreman-kit:tdd",
+        "foreman-kit:unit",
+        "foreman-kit:commit"
+      ]
+    },
+    "gate": {
+      "ok": [
+        "lint-check",
+        "refs-issue"
+      ],
+      "merge_ok": [
+        "lint-check",
+        "refs-issue"
+      ]
+    },
+    "gate_fail": {
+      "commit": "change: round the mean",
+      "blocked": [
+        "refs-issue"
+      ]
+    }
+  },
+  "setup": {
+    "levels": {},
+    "memory": [
+      "a change to what summary returns needs the person: such tasks are high"
+    ],
+    "open": []
+  }
+}

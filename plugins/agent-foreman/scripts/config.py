@@ -36,7 +36,8 @@ Usage:
   config.py check [--project OWNER/REPO]
   config.py save user|project [--project OWNER/REPO] [--dry-run]   (full settings as JSON on stdin)
   config.py check-machine MACHINE PATH --project OWNER/REPO   (is the machine ready for the project's agents)
-  config.py plugin-dir-candidates   (this session's --plugin-dir directories, agent-foreman left out)
+  config.py plugin-dir-candidates   (this session's --plugin-dir directories, agent-foreman left out, then
+      plugins installed on this machine but not enabled here; one directory a line, what each is on stderr)
   config.py skills [--plugin-dir DIR ...]   (skills with these directories added, nothing saved)
   config.py tier --difficulty low|mid|high --role ROLE [--skip PROFILE,...]
       (a role other than the lead gets its tier and higher ones, never the lead's profile)
@@ -44,7 +45,10 @@ Usage:
 
 `plugin_dirs` in the settings lists plugin directories the person loads with
 `--plugin-dir` (often through a `claude` shell wrapper). Skill lookups pass
-them to `claude plugin list`, so their skills count as available.
+them to `claude plugin list`, so their skills count as available. A plugin
+whose skill the loops use goes to the agents whole: the bundle carries its
+directory. `plugin-dir-candidates` also lists plugins installed on this
+machine but not enabled here, whose directory can go in plugin_dirs.
 """
 import argparse
 import copy
@@ -58,6 +62,7 @@ import sys
 import tempfile
 
 import adapters
+import gate as gates
 import loop as loops
 
 APP = "agent-foreman"
@@ -73,7 +78,7 @@ LABEL_EVENTS = ["blocked", "exited", "owner-decision"]
 PLACEHOLDERS = ["task", "stage", "round", "machine", "profile", "project"]
 SECTIONS = ["plugin_dirs", "gateways", "profiles", "tiers", "difficulty", "launch", "bundle", "skills", "loop", "labels",
             "report", "ops"]
-PROJECT_KEYS = ["repo", "workspace", "machines", "tests"]
+PROJECT_KEYS = ["repo", "workspace", "machines", "tests", "gate"]
 MODEL_KEYS = ["gateways", "profiles", "tiers"]  # from providers.json, never from config.json or project.json
 PROVIDER_KEYS = ["id", "name", "base_url", "auth", "token_env", "models"]
 MODEL_ENTRY_KEYS = ["id", "name", "context", "roles", "agent"]
@@ -619,6 +624,7 @@ def validate(cfg, saved=None, skills=None, project=False):
             problems.append("project: tests may only name full, the project's full test command")
         elif "full" in tests and not (isinstance(tests["full"], str) and tests["full"].strip()):
             problems.append("project: tests.full must be a command")
+        problems += [f"project: {p}" for p in gates.project_check_problems(cfg.get("gate", []))]
         if not REPO.match(str(cfg.get("repo", ""))):
             problems.append("project: repo must look like owner/name")
         if not str(cfg.get("workspace", "")).strip():
@@ -796,6 +802,29 @@ def local_skills(plugins=None, user_skills_dir=None):
             if os.path.isfile(os.path.join(path, "SKILL.md")) and entry != SELF and path != os.path.realpath(SELF_DIR):
                 found[entry] = path
     return found
+
+
+def whole_plugins(cfg, plugins=None):
+    """Plugin name -> its entry in the settings' plugin_dirs, for each plugin
+    loaded from there: its skills go to the agents with the plugin whole."""
+    entries = {os.path.realpath(os.path.expanduser(d)): d for d in plugin_dirs(cfg)}
+    plugins = plugin_list(plugin_dirs(cfg)) if plugins is None else plugins
+    out = {}
+    for p in plugins:
+        entry = entries.get(os.path.realpath(p.get("installPath") or ""))
+        if p.get("scope") == "session" and p.get("enabled") and entry:
+            out[p["id"].split("@", 1)[0]] = entry
+    return out
+
+
+def installed_elsewhere(plugins=None):
+    """(plugin id, directory) of each plugin installed on this machine but not
+    enabled for this folder, such as one installed for another project."""
+    plugins = plugin_list() if plugins is None else plugins
+    enabled = {p["id"].split("@", 1)[0] for p in plugins if p.get("enabled")}
+    return [(p["id"], p["installPath"]) for p in plugins
+            if not p.get("enabled") and p.get("installPath") and p["id"].split("@", 1)[0] not in enabled
+            and not is_self(p["installPath"])]
 
 
 def project_skills(cfg, extra=()):
@@ -1025,6 +1054,10 @@ def _cli(argv):
     elif args.command == "plugin-dir-candidates":
         for d in session_plugin_dirs():
             print(d)
+        for plugin_id, d in installed_elsewhere():
+            print(d)
+            print(f"config.py: {d} is {plugin_id}, installed but not enabled here; a cache path like it changes "
+                  f"when the plugin updates", file=sys.stderr)
     elif args.command == "skills":
         dirs = plugin_dirs(load(args.project)) + [os.path.abspath(os.path.expanduser(d)) for d in args.plugin_dir]
         for ref, path in local_skills(plugin_list(dirs)).items():

@@ -73,9 +73,9 @@ class Walk(unittest.TestCase):
         return subprocess.run([sys.executable, os.path.join(SCRIPTS, script), *args], capture_output=True,
                               text=True, env=full, cwd=self.repo)
 
-    def brief(self, *flags):
+    def brief(self, *flags, difficulty="mid"):
         """What the foreman writes into the task folder before the lead starts."""
-        r = self.sh("loop.py", "render", "--project", "o/r", "--task", "7", "--difficulty", "mid", "--machine",
+        r = self.sh("loop.py", "render", "--project", "o/r", "--task", "7", "--difficulty", difficulty, "--machine",
                     "local", "--base", "main", "--json", *flags, lead=False)
         self.assertEqual(r.returncode, 0, r.stderr)
         with open(os.path.join(self.task, "loop.json"), "w") as f:
@@ -108,7 +108,7 @@ class Walk(unittest.TestCase):
     def note(self, step, event, outcome=None, round=1, lead=True):
         s = next(x for w in ("work", "check") for x in self.loop[w] if x["id"] == step)
         args = ["note", "--stage", s["stage"], "--step", step, "--event", event, "--round", str(round)]
-        args += ["--outcome", outcome] if outcome else []
+        args += ["--outcome", outcome, "--done", f"{step}: its record in the task folder"] if outcome else []
         args += [] if lead else ["--file", self.status]
         r = self.sh("status.py", *args, lead=lead)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -187,6 +187,24 @@ class Walk(unittest.TestCase):
         edges = [(r["step"], r["outcome"], r["to"]) for r in rows if r["event"] == "end"]
         self.assertIn(("redteam-review", "changes", "build"), edges)
         self.assertEqual([r["step"] for r in rows if r["event"] == "start" and r["round"] == 2][0], "build")
+
+    def test_high_waits_for_the_foreman_after_plan(self):
+        self.brief("--lead", "opus", difficulty="high")
+        self.records()
+        self.note("plan", "start")
+        s = next(x for x in self.loop["work"] if x["id"] == "plan")
+        r = self.sh("status.py", "note", "--stage", s["stage"], "--step", "plan", "--event", "end", "--outcome", "done",
+                    "--done", "work-breakdown: plan.md 1 row; cross-check: scenario.md 1 step")
+        self.assertIn("next: plan-check", r.stdout)
+        self.assertIn("This step is the foreman's: write a stop line and report waiting", r.stdout)
+        # The foreman checks the plan, sends it back once, then lets it go on.
+        self.note("plan-check", "start", lead=False)
+        self.assertEqual(self.note("plan-check", "end", "back", lead=False), "plan")
+        self.note("plan", "start")
+        self.note("plan", "end", "done")
+        self.assertEqual(self.note("plan-check", "end", "go", lead=False), "build")
+        rows = self.summary()
+        self.assertEqual(rows["step"], "plan-check")
 
     def test_trivial_loop(self):
         self.brief("--trivial")

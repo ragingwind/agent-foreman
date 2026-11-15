@@ -27,6 +27,8 @@ description: >-
 
 ## Record
 
+**Evidence** for the verify step's `end` line: `unit: plan.md Checks <n> entries, <all pass or what failed>`.
+
 - In the build step it records nothing while it passes. The commit skill marks the row `done`.
 - In the verify step, add one entry under `## Checks` in `$AF_TASK_DIR/plan.md` (the task folder) for each command, in exactly this shape:
 

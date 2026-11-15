@@ -1,0 +1,93 @@
+{
+  "form": "Spans to the merge: one skill takes an issue to main and merges; a batch runner makes worktrees and merges; their parts are separate skills.",
+  "needs": [
+    "node"
+  ],
+  "labels": [],
+  "settings": {
+    "tests": {
+      "full": "node --test"
+    },
+    "skills": {
+      "handoff": "pr-open"
+    },
+    "loop": {
+      "work": [
+        {
+          "id": "build",
+          "skills": [
+            "tdd",
+            "unit",
+            "commit",
+            "build-piece"
+          ]
+        }
+      ]
+    },
+    "gate": [
+      {
+        "check": "command",
+        "name": "done-label",
+        "run": "gh pr view \"$AF_PR\" --json labels | grep -q state:done",
+        "severity": "warn"
+      }
+    ]
+  },
+  "expect": {
+    "sources": {
+      "build-piece": [
+        "project",
+        "build-piece"
+      ],
+      "handoff": [
+        "project",
+        "pr-open"
+      ]
+    },
+    "steps": {
+      "build": [
+        "foreman-kit:tdd",
+        "foreman-kit:unit",
+        "foreman-kit:commit",
+        "build-piece"
+      ],
+      "finalize": [
+        "pr-open (flow and record: foreman-kit:handoff)"
+      ]
+    },
+    "unbound": [
+      "land-issue",
+      "wave-batch"
+    ],
+    "gate": {
+      "ok": [],
+      "warned": [
+        "done-label"
+      ],
+      "merge_ok": [
+        "done-label"
+      ]
+    }
+  },
+  "setup": {
+    "levels": {
+      "build-piece": "added to build",
+      "pr-open": "replaces handoff's action"
+    },
+    "flags": {
+      "land-issue": [
+        "merges: bound to no step"
+      ],
+      "wave-batch": [
+        "makes worktrees and merges: bound to no step"
+      ]
+    },
+    "memory": [
+      "merge method: squash, delete the branch"
+    ],
+    "open": []
+  },
+  "labels_at_merge": [
+    "state:done"
+  ]
+}

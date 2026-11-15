@@ -43,6 +43,23 @@ class Launch(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(f"command: claude --model opus --plugin-dir {root}", r.stdout)
 
+    def test_bundle_loads_its_plugin_dirs_whole(self):
+        root = os.path.join(self.home.root, "bundle")
+        shutil.copytree(SCRIPTS, os.path.join(root, "scripts"))
+        self.home.write("bundle/plugins/flow/.claude-plugin/plugin.json", {"name": "flow"})
+        self.home.write("bundle/bundle.json", {"agent": "claude"})
+        settings = {"gateways": {"anthropic": {"kind": "anthropic"}},
+                    "profiles": {"opus": {"gateway": "anthropic", "model": "opus"}},
+                    "launch": {"permission": "default"}, "plugins": ["flow"]}
+        self.home.write("bundle/config.json", settings)
+        r = run("launch.py", "opus", "--dry-run", cwd=os.path.join(root, "scripts"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"--plugin-dir {root} --plugin-dir {root}/plugins/flow --disallowedTools", r.stdout)
+        self.home.write("bundle/config.json", {**settings, "plugins": ["flow", "gone"]})
+        r = run("launch.py", "opus", "--dry-run", cwd=os.path.join(root, "scripts"))
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("the bundle lacks the plugin", r.stderr)
+
     def test_profile_for_another_agent_than_the_bundle_is_setup(self):
         root = os.path.join(self.home.root, "bundle")
         shutil.copytree(SCRIPTS, os.path.join(root, "scripts"))
@@ -81,8 +98,9 @@ class Launch(unittest.TestCase):
     def test_disallowed_tools(self):
         r = run("launch.py", "opus", "--disallow", "Edit, Write,NotebookEdit", "--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("--disallowedTools Edit,Write,NotebookEdit", r.stdout)
-        self.assertNotIn("--disallowedTools", run("launch.py", "opus", "--dry-run").stdout)
+        self.assertIn("--disallowedTools 'Edit,Write,NotebookEdit,Bash(gh pr merge:*)'", r.stdout)
+        # no agent may merge: the foreman does, after the gate
+        self.assertIn("--disallowedTools 'Bash(gh pr merge:*)'", run("launch.py", "opus", "--dry-run").stdout)
 
     def test_unknown_profile_is_setup(self):
         self.assertEqual(run("launch.py", "nope", "--dry-run").returncode, 3)
@@ -158,7 +176,8 @@ class PromptMode(unittest.TestCase):
                          (True, "s-1", 0.01, self.out))
         prompt, argv, base = json.load(open(self.out))["result"].split("|")
         self.assertEqual(prompt, "review #7")
-        self.assertEqual(argv, "-p --output-format json --session-id abc --model opus --dangerously-skip-permissions")
+        self.assertEqual(argv, "-p --output-format json --session-id abc --model opus --dangerously-skip-permissions "
+                               "--disallowedTools Bash(gh pr merge:*)")
         self.assertEqual(base, "-")  # an inherited gateway variable never reaches an Anthropic agent
 
     def test_gateway_profile_reaches_the_agent(self):

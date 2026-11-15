@@ -39,13 +39,21 @@ class Claude(unittest.TestCase):
         argv, env, clear = claude.command(self.cfg, "sonnet", name="issue-1", session_id="abc", bundle="/b",
                                           environ={})
         self.assertEqual(argv, ["claude", "--name", "issue-1", "--session-id", "abc",
-                                "--model", "sonnet", "--dangerously-skip-permissions", "--plugin-dir", "/b"])
+                                "--model", "sonnet", "--dangerously-skip-permissions", "--plugin-dir", "/b",
+                                "--disallowedTools", "Bash(gh pr merge:*)"])
         self.assertEqual(env, {})
         self.assertIn("ANTHROPIC_BASE_URL", clear)
         argv, _, _ = claude.command(self.cfg, "opus", print_mode=True, environ={},
                                     disallowed=["Edit", "Write"])
         self.assertEqual(argv, ["claude", "-p", "--output-format", "json", "--model", "opus",
-                                "--dangerously-skip-permissions", "--disallowedTools", "Edit,Write"])
+                                "--dangerously-skip-permissions", "--disallowedTools", "Edit,Write,Bash(gh pr merge:*)"])
+
+    def test_plugin_dirs_load_whole_after_the_bundle(self):
+        argv, _, _ = claude.command(self.cfg, "sonnet", bundle="/b", environ={}, plugin_dirs=["/p1", "/p2"],
+                                    disallowed=["Bash(gh pr merge:*)"])
+        self.assertEqual(argv[argv.index("--plugin-dir"):], ["--plugin-dir", "/b", "--plugin-dir", "/p1",
+                                                            "--plugin-dir", "/p2", "--disallowedTools",
+                                                            "Bash(gh pr merge:*)"])  # the deny is named once
 
     def test_token_missing(self):
         cfg = config.merge(self.cfg, {
