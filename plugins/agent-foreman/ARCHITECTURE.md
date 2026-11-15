@@ -81,8 +81,8 @@ transcript, checkout readiness, screen rules). Only `claude` exists.
 
 | Scope | What | File | Written by |
 | --- | --- | --- | --- |
-| Global | Model pool: gateways (token variable names only) and tiers | `~/.config/agent-foreman/config.json` | setup: models |
-| Global | Standard loop: stages and steps, skills per step, variants per difficulty | same file | setup: loop |
+| Global | Models: providers (token variable names only), their models and the tiers | `~/.config/agent-foreman/providers.json` | the person, after setup: models makes it |
+| Global | Standard loop: stages and steps, skills per step, variants per difficulty | `~/.config/agent-foreman/config.json` | setup: loop |
 | Project | Machines (SSH devices) and the project path on each; loop changes for this project | `~/.local/state/agent-foreman/projects/<owner>-<repo>/project.json` | setup: project |
 | Project | Memory: values only this project has (tag format, docs steps, disk floor, labels) | `.../projects/<owner>-<repo>/memory.md` | the foreman |
 
@@ -91,13 +91,18 @@ standard values.
 
 ## 4. Models
 
-- **Tiers.** `high`, `mid`, `low` (상·중·하). Each tier is an ordered list of
-  profiles.
+- **Providers.** `providers.json` lists each provider (Anthropic, or an
+  anthropic-compatible endpoint with its URL, auth and token variable name)
+  and its models. A model's `name` (default: its `id`) is its **profile**:
+  the name tiers, `loop.json` and `launch.py` use. Scripts turn the file
+  into the gateways and profiles they run on (`config.py`).
+- **Tiers.** `high`, `mid`, `low` (상·중·하), in the same file. Each tier is an
+  ordered list of profiles.
 - **Standard tiers** are the harness's own models: for Claude Code, low =
   `haiku`, mid = `sonnet`, high = `opus` then `sonnet`. `fable` is never in a
   standard tier.
-- **Other models** (`fable`, token-factory models, any other gateway) enter a
-  tier only when the person puts them there in setup (models).
+- **Other models** (`fable`, token-factory models, any other provider) enter
+  a tier only when the person puts them there in `providers.json`.
 - **The lead.** The task's difficulty gives the lead's tier; the lead runs on
   its first profile, and on a usage limit on the next one.
 - **A role** takes the difficulty's tier raised by the role's `step` in the
@@ -109,7 +114,9 @@ standard values.
   next one runs.
 - `config.py check` reports a difficulty whose lead has no profile, or whose
   role has no profile but the lead's.
-- **No settings** means the standard tiers above: the harness's own models.
+- **No `providers.json`** means the standard tiers above: the harness's own
+  models. `config.py providers --init` copies `providers.json.sample`, which
+  holds them, into the file to edit.
 
 ## 5. Difficulty
 
@@ -470,8 +477,9 @@ into `~/.claude/skills/agent-foreman` as a user skill.
 | Path | Holds |
 | --- | --- |
 | `SKILL.md` | The foreman, and the entry to setup |
-| `setup/` | Setup: `setup.md` picks the parts; `project.md`, `models.md`, `loop.md`, `other.md` |
+| `setup/` | Setup: `setup.md` runs the parts in order; `models.md`, `project.md`, `loop.md`, `other.md` |
 | `loop.md` | The lead's guide to its loop; every bundle carries it |
 | `kit/skills/` | The default skills, one per loop action; every bundle carries them as `foreman-kit:<name>` |
 | `scripts/`, `terminals/`, `adapters/`, `defaults.json` | The scripts, the terminal layer, the agent kinds, the standard settings |
+| `providers.json.sample` | The standard models by provider; setup copies it to `~/.config/agent-foreman/providers.json` for the person to edit |
 | `agents/agent-foreman.md` | `claude --agent agent-foreman`; only with the plugin installed |

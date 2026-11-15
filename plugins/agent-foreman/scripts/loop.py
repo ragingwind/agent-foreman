@@ -312,7 +312,7 @@ def assign(candidates, count):
         return [], "no profile for this role"
     picks = [candidates[i] if i < len(candidates) else candidates[-1] for i in range(count)]
     short = len(set(picks)) < count
-    return picks, (f"only {len(set(picks))} different profile(s) for {count} agents; add a model with /agent-foreman:agent-foreman setup models"
+    return picks, (f"only {len(set(picks))} different profile(s) for {count} agents; add a model with /agent-foreman:agent-foreman setup"
                    if short else "")
 
 
@@ -391,7 +391,7 @@ def role_run(task_loop, task_dir, step_id, agent, head, launch):
         raise ValueError(f"--agent may hold letters, digits, '.', '_' and '-' only, not {agent!r}")
     candidates = role.get("profiles", [])
     if not candidates:
-        raise ValueError(f"role {r} has no profile other than the lead's; add one with setup models")
+        raise ValueError(f"role {r} has no profile other than the lead's; add one with /agent-foreman:agent-foreman setup")
     base = task_loop["base"]
     diff = f"from origin/{base} to HEAD"
     earlier = [s["id"] for s in steps[:steps.index(step)] if s["actor"] == r]

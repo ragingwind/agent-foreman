@@ -5,9 +5,10 @@ and the project's full test command. Saved at the project's level.
 
 ## 1. Detect
 
-- The repository and this machine's checkout, from the current directory:
-  `gh repo view --json nameWithOwner -q .nameWithOwner` and `git rev-parse
-  --show-toplevel`. Outside a checkout, there is no guess.
+- The repository and this machine's checkout: a repository the words after
+  `setup` name, else the current directory's (`gh repo view --json
+  nameWithOwner -q .nameWithOwner` and `git rev-parse --show-toplevel`).
+  Outside a checkout and with no name, there is no guess.
 - The saved herdr machines: `python3 <skill>/scripts/config.py machines`.
 - Whether the project exists (`config.py projects`); if it does, its
   settings: `python3 <skill>/scripts/config.py show --project <repo>`.
@@ -27,13 +28,15 @@ in one call:
 
 - **Repository**: the detected one (recommended), or the person types
   `owner/name`.
-- **Machines** (multi-select): `local` with its path, and each enabled herdr
-  machine with its guessed path when the guess passed. Mark the machines an
-  existing project already has as current.
-- **Full test command**: the one found first (recommended), the others found,
-  or none. The project's own file comes before any guess: when `CLAUDE.md`
-  names one, recommend it. QA runs it in the verification session, and the
-  gate runs it before merge.
+- **Machines**: for a saved project, `Keep: <its machines and paths>`
+  (recommended) or change them. To change, or for a new project
+  (multi-select): `local` with its path, and each enabled herdr machine with
+  its guessed path when the guess passed.
+- **Full test command**: for a saved project with one, `Keep: <it>`
+  (recommended). Otherwise the one found first (recommended), the others
+  found, or none. The project's own file comes before any guess: when
+  `CLAUDE.md` names one, recommend it. QA runs it in the verification
+  session, and the gate runs it before merge.
 
 For a chosen machine with no passing path, ask for its path in one more
 call, one question per machine.

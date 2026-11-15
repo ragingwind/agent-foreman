@@ -104,16 +104,24 @@ it from writing a fake answer file into `reviews/`.
    ```
 
 2. **Set up**, in a checkout of the repository:
-   `/agent-foreman:agent-foreman setup`. It asks which parts to set up:
+   `/agent-foreman:agent-foreman setup`. It goes through every part in this
+   order, and each question offers the value already set first (`Keep`), so
+   running it again changes only what you pick:
+   - **Models**: it copies `providers.json.sample` to
+     `~/.config/agent-foreman/providers.json`, with Claude's own models
+     (`haiku`, `sonnet`, and `opus` then `sonnet`), and asks you to edit it: add a provider such as a token factory, and the
+     models each difficulty uses. Each difficulty needs a model other than
+     its lead's for the agents that check the work.
    - **Project**: the repository, the machines and their checkout paths, and
      the full test command (it proposes the one in `CLAUDE.md` or your CI
-     files). Needed once per repository.
-   - **Models** (optional): gateways and the profiles for each difficulty.
-     Each difficulty needs a profile other than its lead's for the agents
-     that check the work. Without it: `haiku`, `sonnet`, and `opus` then
-     `sonnet`.
-   - **Loop** (optional): replace a default skill with your own, or change
-     what each difficulty runs.
+     files).
+   - **Loop**: matches the project's skills and yours to the default skill of
+     each step, then asks what else to change, such as what each difficulty
+     runs.
+   - **Other**: launch, tab labels, the report, check times, disk, merge
+     steps.
+
+   To change one setting later, say it in words: "add machine build-02".
 
 3. **Start the foreman:**
 

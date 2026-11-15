@@ -8,11 +8,12 @@ description: >-
   and QA on other models), relays the person's decisions, runs the gate
   before merge, merges or hands the merge to the person, archives the task
   folder, cleans up and reports. Writes no code and reviews no diff itself. Also sets itself up: a project (repository,
-  machines, paths, checked), models (gateways such as a token factory,
-  tiers), the loop and other settings. Use when the session was started
+  machines, paths, checked), models (providers such as a token factory,
+  tiers, in providers.json), the loop and other settings. Use when the session was started
   with `claude --agent agent-foreman`, when the person asks this session to
   run, watch or coordinate agents on herdr machines, or to set up or change
-  its settings (`/agent-foreman:agent-foreman setup [part]`).
+  its settings (`/agent-foreman:agent-foreman setup`).
+argument-hint: "[setup]"
 ---
 
 # agent-foreman
@@ -29,7 +30,7 @@ reviews no diff.
 
 | File | What it does |
 | --- | --- |
-| `scripts/config.py` | Settings: `check`, `show`, `paths`, `save`, `check-machine`, `machines`, `projects`, `profiles`, `tier`, `skills` |
+| `scripts/config.py` | Settings: `providers` (the models file; `--init` makes it), `check`, `show`, `paths`, `save`, `check-machine`, `machines`, `projects`, `profiles`, `tier`, `skills` |
 | `scripts/score.py` | A task's difficulty: `estimate` from an issue, `diff` from a change (only goes up) |
 | `scripts/loop.py` | Loops: `show` the stages and steps, `render` one task's loop (`--json` for `loop.json`), `prompt` a role agent's prompt and launch commands from `loop.json` |
 | `scripts/gate.py` | Pass conditions as code: `template` writes a task's gate file from its `loop.json`, `hash` its hash for the ledger, `run` checks it |
@@ -44,8 +45,9 @@ reviews no diff.
 | `adapters/<kind>.md` | What differs per agent kind: start errors, trust question, input line, exit. Only `claude` today |
 | `loop.md` | The lead's guide to its build session; every bundle carries it |
 | `kit/skills/` | The default skills, one per loop action; every bundle carries them as `foreman-kit:<name>` |
-| `setup/` | Setting up: `setup.md` picks the parts; `project.md`, `models.md`, `loop.md`, `other.md` hold each part |
+| `setup/` | Setting up: `setup.md` runs the parts in order; `models.md`, `project.md`, `loop.md`, `other.md` hold each part |
 | `defaults.json` | The standard settings |
+| `providers.json.sample` | The standard models by provider; `config.py providers --init` copies it for the person to edit |
 
 ## Words
 
@@ -87,16 +89,17 @@ conversation is summarized.
 
 ## Setup
 
-When the person asks to set something up or change a setting (`setup`, a
-part such as `setup models`, or in words such as "add machine build-02"),
-or a check below fails, read `setup/setup.md` and follow it first.
+When the person runs `setup`, or a check below fails, read `setup/setup.md`
+and follow it first: it runs every part, and each question offers the value
+already set first. A request in words to change one setting ("add machine
+build-02") goes only to the part that holds it.
 
 ## Preflight, per project
 
 1. **Project**: the person names the repository as `owner/name`; inside a
    checkout, `gh repo view --json nameWithOwner -q .nameWithOwner`.
-2. **Check**: `config.py check --project <repo>`. Exit 3: "Setup", for the
-   part the problem names, then continue.
+2. **Check**: `config.py check --project <repo>`. Exit 3: "Setup" (every
+   part), then continue.
 3. **Settings and memory**: `config.py show --project <repo>`; read
    `memory.md` and the ledger (create the ledger from "Ledger" when missing).
 4. **Machines**: for each, `config.py check-machine <machine> <path>

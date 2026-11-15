@@ -30,21 +30,37 @@ stage; tab labels, status lines and reports follow the stages.
     skills, before anything is saved: `python3 <skill>/scripts/config.py skills
     --plugin-dir <dir>` (repeat the option for each). Scripts start a bare
     `claude`, so they find those skills only through `plugin_dirs`.
+- What each candidate does: its `SKILL.md` description, a project skill's at
+  `<checkout>/.claude/skills/<name>/SKILL.md` on that machine, a person's at
+  the path `config.py skills` prints.
 
-## 2. Show and ask once
+## 2. Match the default skills
 
-Show the work loop's table. Ask with AskUserQuestion, two questions in one
-call:
+Always, also when no one asked for it. For each step's default skill, its
+candidates are the project's and the person's skills that do the same
+action: the same name, or a description of the same work (a project's
+`commit` for `commit`, an end-to-end test skill for `smoke`). Show one
+table: each step, its default skill, what it uses now (the `skills` entry, or
+the default), and the candidates with where each comes from.
 
-- **Scope**: the standard for every project (the person's settings), or this
-  project only.
-- **What to change** (multi-select): stage names and which steps each
-  holds; skills per step; steps (add or remove); what each difficulty runs;
-  a role's mode or prompt.
+Then ask with AskUserQuestion, one question per default skill that has a
+candidate, up to four questions per call: `Keep: <what it uses now>`
+(recommended) first, then each candidate. A default skill with no candidate
+is not asked. Save the choices at the project's level when this setup has a
+project, else at the person's.
+
+## 3. Ask about the rest once
+
+Show the work loop's table. Ask with AskUserQuestion (multi-select): `Keep:
+the loop as shown` (recommended); stages and steps (names, which steps a
+stage holds, add or remove a step); skills a step uses besides its default
+one; what each difficulty runs and the roles (mode, prompt). When the person
+changes anything here, ask the scope too: this project only (recommended when
+this setup has a project), or the standard for every project.
 
 Go into the chosen parts only.
 
-## 3. Change
+## 4. Change
 
 - **Stages**: show the steps in order with what each does, and let the
   person type each stage's name and the steps it holds (as
@@ -52,13 +68,12 @@ Go into the chosen parts only.
   steps' `stage`. A stage's steps stay together, and a stage may not take the
   name of a step in another stage; step ids stay as they are. Labels per
   stage (`labels.events`) move to the new names.
-- **Replace a default skill**: for each default skill the person picks,
-  offer the project's skills first, then the person's, and save the choice in
-  `skills` (`"<default name>": "<skill>"`). Remove the entry to go back to the
+- **Replace a default skill** (step 2): save the choice in `skills`
+  (`"<default name>": "<skill>"`). Remove the entry to go back to the
   default.
 - **Skills per step**: an extra skill a step uses besides its default one.
-  For each step the person picks, offer the project's skills first, then the
-  person's. Save the bare name (`scenario-check`);
+  For each step the person picks, `Keep: <its skills now>` first, then the
+  project's skills, then the person's. Save the bare name (`scenario-check`);
   where it comes from is decided per machine when a task starts. Save the full
   `plugin:skill` only when the bare name matches more than one of the
   person's skills. A skill from a plugin directory found in step 1 adds
@@ -81,9 +96,9 @@ Go into the chosen parts only.
   outcome of the role's steps: the gate reads the last one in the answer that
   `launch.py --role` saves in the task folder.
 
-## 4. Save
+## 5. Save
 
-At the scope the person chose (`SKILL.md` "Save"); `written` shows each
+At the scope from steps 2 and 3 (`SKILL.md` "Save"); `written` shows each
 changed step by its `id`. Then show `loop.py show` again and one task's loop:
 `python3 <skill>/scripts/loop.py render --project <repo> --task <N> --difficulty
 mid --machine <label>`. For each skill it lists as missing:

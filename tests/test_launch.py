@@ -5,13 +5,11 @@ import stat
 import subprocess
 import unittest
 
-from helpers import SCRIPTS, TempHome, run
+from helpers import SCRIPTS, TempHome, providers, run
 
-GATEWAY = {
-    "kind": "anthropic-compatible", "base_url": "https://gw.example/anthropic", "token_env": "HF_TEST_TOKEN",
-    "auth": "bearer", "models": {"m": {"id": "model-1", "context": 100000}},
-}
-PROFILE = {"gateway": "gw", "model": "m", "roles": {"opus": "m", "sonnet": "m", "haiku": "m"}}
+# A token-factory provider whose one model is named p.
+GATEWAY = providers({"id": "gw", "base_url": "https://gw.example/anthropic", "auth": "bearer",
+                     "token_env": "HF_TEST_TOKEN", "models": [{"id": "model-1", "name": "p", "context": 100000}]})
 
 
 class Launch(unittest.TestCase):
@@ -57,7 +55,7 @@ class Launch(unittest.TestCase):
         self.assertIn("this bundle is for elsewhere", r.stderr)
 
     def test_unknown_agent_kind_is_setup(self):
-        self.home.write("config/agent-foreman/config.json", {"profiles": {"sonnet": {"agent": "nope"}}})
+        self.home.write("config/agent-foreman/providers.json", providers(sonnet={"agent": "nope"}))
         r = run("launch.py", "--dry-run")
         self.assertEqual(r.returncode, 3)
         self.assertIn("agent 'nope' is not supported", r.stderr)
@@ -78,7 +76,7 @@ class Launch(unittest.TestCase):
         self.assertIn("permission", r.stderr)
 
     def test_gateway_token_missing_then_set_without_printing_it(self):
-        self.home.write("config/agent-foreman/config.json", {"gateways": {"gw": GATEWAY}, "profiles": {"p": PROFILE}})
+        self.home.write("config/agent-foreman/providers.json", GATEWAY)
         env = {"HF_TEST_TOKEN": ""}
         r = run("launch.py", "p", "--dry-run", env=env)
         self.assertEqual(r.returncode, 4)
@@ -143,7 +141,7 @@ class PromptMode(unittest.TestCase):
         self.assertEqual(base, "-")  # an inherited gateway variable never reaches an Anthropic agent
 
     def test_gateway_profile_reaches_the_agent(self):
-        self.home.write("config/agent-foreman/config.json", {"gateways": {"gw": GATEWAY}, "profiles": {"p": PROFILE}})
+        self.home.write("config/agent-foreman/providers.json", GATEWAY)
         r = self.launch("p", HF_TEST_TOKEN="secret-value-xyz")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.load(open(self.out))["result"].split("|")[2], "https://gw.example/anthropic")
@@ -177,14 +175,14 @@ class PromptMode(unittest.TestCase):
         task = os.path.join(self.home.root, "task")
         out = os.path.join(task, "reviews", "pair-1-1.json")
         clone, head = self.git_checkout()
-        self.home.write("config/agent-foreman/config.json", {"gateways": {"gw": GATEWAY}, "profiles": {"p": PROFILE}})
+        self.home.write("config/agent-foreman/providers.json", GATEWAY)
         r = run("launch.py", "p", "--print", "--prompt-file", self.prompt, "--out", out, "--role", "pair",
                 "--name", "pair-1", "--task-dir", task, env={**self.env, "HF_TEST_TOKEN": "t"}, workdir=clone)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.load(open(out))["status"], [os.path.join(task, "status.jsonl"), "pair-1"])
         meta = json.load(open(out[:-5] + ".meta.json"))
         self.assertEqual((meta["role"], meta["agent"], meta["profile"], meta["gateway"], meta["model"], meta["head"],
-                          meta["ok"], meta["session_id"]), ("pair", "pair-1", "p", "gw", "m", head, True, "s-1"))
+                          meta["ok"], meta["session_id"]), ("pair", "pair-1", "p", "gw", "p", head, True, "s-1"))
         self.assertTrue(meta["started"] <= meta["ended"])
         self.assertRegex(meta["ended"], r"\.\d{6}Z$")  # to the microsecond, so runs in one second still sort
         r = self.launch("opus", FAKE_MODE="error")

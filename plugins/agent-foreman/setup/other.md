@@ -17,15 +17,17 @@ at the person's level (every project) or a project's.
 
 Show the sections above with their current values, one line each
 (`python3 <skill>/scripts/config.py show [--project <repo>]`). Ask with
-AskUserQuestion, two questions in one call:
+AskUserQuestion: `Keep: every value as shown` (recommended), or change some.
+To change, ask in one call:
 
 - **Scope**: every project (the person's settings), or one project.
-- **Sections** (multi-select): the ones to change.
+- **Sections** (multi-select): the ones to change. A question holds at most
+  four options, so split the six sections over two questions.
 
 ## 2. Change
 
-For each chosen section, ask for the keys the person wants to change, the
-current value first. Notes:
+For each chosen section, ask for the keys the person wants to change, each
+with `Keep: <its value now>` first. Notes:
 
 - `permission: default` makes agents stop at permission prompts; the person
   answers them in the agent's tab, never the foreman.

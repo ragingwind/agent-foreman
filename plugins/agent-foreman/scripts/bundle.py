@@ -34,7 +34,7 @@ import zipfile
 import adapters
 import loop as loops
 from config import (EXIT_SETUP_NEEDED, LOCAL, REPO, SKILL_DIR, cache_dir, project_path, project_skills,
-                    herdr_machines, load, local_skills, plugin_list, plugin_dirs, validate)
+                    herdr_machines, load, local_skills, plugin_list, plugin_dirs, settings_problems)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KIT_DIR = os.path.join(SKILL_DIR, "kit", "skills")
@@ -168,7 +168,7 @@ def build(repo, extra, kind=adapters.DEFAULT, project_names=()):
     if not os.path.exists(project_path(repo)):
         fail(EXIT_SETUP_NEEDED, f"project {repo} has no settings yet; run /agent-foreman:agent-foreman setup")
     cfg = load(repo)
-    problems = validate(cfg, project=True)
+    problems = settings_problems(cfg, repo=repo, project=True)
     if problems:
         fail(EXIT_SETUP_NEEDED, f"project {repo}: {problems[0]}")
     names = project_skills(cfg, extra)
@@ -194,7 +194,7 @@ def build(repo, extra, kind=adapters.DEFAULT, project_names=()):
             if name in required:
                 fail(EXIT_SETUP_NEEDED, f"skill not available on this machine: {value} (config.py skills lists the "
                                         f"ones that are; a plugin loaded with --plugin-dir goes in plugin_dirs: "
-                                        f"/agent-foreman:agent-foreman setup loop)")
+                                        f"/agent-foreman:agent-foreman setup)")
             warnings.append(value)
     shorts = [r.split(":")[-1] for r in refs] + list(kit)
     if len(set(shorts)) != len(shorts):

@@ -52,6 +52,14 @@ def task_loop(cfg=None, difficulty="mid", trivial=False, lead=None, repo="o/r", 
                         lead, profiles)
 
 
+def providers(*extra, tiers=None, **anthropic):
+    """A providers.json: Claude's own models (each with the keys given by its
+    name, `sonnet={"agent": "x"}`), then the `extra` providers."""
+    claude = [{"id": m, **anthropic.get(m, {})} for m in ("opus", "sonnet", "haiku")]
+    return {"providers": [{"id": "anthropic", "models": claude}, *extra],
+            "tiers": tiers or {"low": ["haiku"], "mid": ["sonnet"], "high": ["opus", "sonnet"]}}
+
+
 def run(script, *args, env=None, stdin=None, cwd=None, workdir=None):
     """Run a script from `cwd` (default: the plugin's scripts) in the
     directory `workdir` (default: this one)."""

@@ -1,0 +1,17 @@
+{
+  "providers": [
+    {
+      "id": "anthropic",
+      "models": [
+        {"id": "opus"},
+        {"id": "sonnet"},
+        {"id": "haiku"}
+      ]
+    }
+  ],
+  "tiers": {
+    "low": ["haiku"],
+    "mid": ["sonnet"],
+    "high": ["opus", "sonnet"]
+  }
+}

@@ -4,7 +4,7 @@ import subprocess
 import unittest
 from unittest import mock
 
-from helpers import TempHome, run
+from helpers import TempHome, providers, run
 
 import config
 
@@ -113,6 +113,94 @@ class Problems(unittest.TestCase):
                       self.problems({**base, "tests": {"full": " "}}, project=True))
         self.assertIn("project: tests may only name full, the project's full test command",
                       self.problems({**base, "tests": {"unit": "x"}}, project=True))
+
+
+TF = {"id": "tf", "base_url": "https://tf.example", "auth": "bearer", "token_env": "TF_API_TOKEN",
+      "models": [{"id": "zai-org/GLM-5.3-Flash", "name": "glm", "context": 200000},
+                 {"id": "zai-org/GLM-5.3-Air", "name": "glm-air", "context": 128000, "roles": {"haiku": "glm"}}]}
+TF_TIERS = {"low": ["glm", "haiku"], "mid": ["glm", "sonnet"], "high": ["opus", "sonnet"]}
+
+
+class Providers(unittest.TestCase):
+    """The models file the person edits, by provider."""
+
+    def setUp(self):
+        self.home = TempHome()
+
+    def tearDown(self):
+        self.home.close()
+
+    def write(self, data):
+        self.home.write("config/agent-foreman/providers.json", data)
+
+    def test_init_writes_the_standard_once(self):
+        r = run("config.py", "providers", "--init")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual((out["path"], out["created"], out["problems"]), (config.providers_path(), True, []))
+        with open(config.providers_path()) as f, open(config.providers_sample_path()) as sample:
+            self.assertEqual(f.read(), sample.read())  # copied as written, for the person to edit
+        std = config.standard()
+        self.assertEqual({k: config.load()[k] for k in config.MODEL_KEYS}, {k: std[k] for k in config.MODEL_KEYS})
+        self.write(providers(tiers={"low": ["haiku"], "mid": ["haiku"], "high": ["opus", "sonnet"]}))
+        self.assertFalse(json.loads(run("config.py", "providers", "--init").stdout)["created"])  # an edited file stays
+        self.assertEqual(config.load()["tiers"]["mid"], ["haiku"])
+
+    def test_the_sample_holds_the_standard_models(self):
+        with open(config.providers_sample_path()) as f:
+            sample = json.load(f)
+        self.assertEqual(config.providers_problems(sample), [])
+        self.assertEqual(sample, providers())  # Claude's own models, opus first
+        std = config.standard()
+        self.assertEqual(config.from_providers(sample), {k: std[k] for k in config.MODEL_KEYS})
+
+    def test_a_compatible_provider(self):
+        self.write(providers(TF, tiers=TF_TIERS))
+        cfg = config.load()
+        self.assertEqual(cfg["gateways"]["tf"], {"kind": "anthropic-compatible", "base_url": "https://tf.example",
+                                                 "auth": "bearer", "token_env": "TF_API_TOKEN",
+                                                 "models": {"glm": {"id": "zai-org/GLM-5.3-Flash", "context": 200000},
+                                                            "glm-air": {"id": "zai-org/GLM-5.3-Air", "context": 128000}}})
+        self.assertEqual(cfg["profiles"]["glm"]["roles"], {"opus": "glm", "sonnet": "glm", "haiku": "glm"})
+        self.assertEqual(cfg["profiles"]["glm-air"]["roles"], {"opus": "glm-air", "sonnet": "glm-air", "haiku": "glm"})
+        self.assertEqual(cfg["profiles"]["opus"], {"gateway": "anthropic", "model": "opus"})
+        self.assertEqual(config.validate(cfg), [])
+        self.assertEqual(config.token_names(cfg), ["TF_API_TOKEN"])
+        self.assertEqual(config.role_candidates(cfg, "mid", "pair", lead="glm"), ["sonnet", "opus"])
+
+    def test_problems_in_the_file_s_own_terms(self):
+        bad = providers({"id": "tf", "base_url": "ftp://x", "auth": "basic", "token_env": "sk-123 secret",
+                         "models": [{"id": "zai-org/GLM"}, {"id": "m", "roles": {"opus": "ghost", "huge": "m"}},
+                                    {"id": "sonnet", "context": 9}]},
+                        {"id": "anthropic", "auth": "bearer", "models": [{"id": "opus[1m]", "context": 1}]},
+                        tiers={"low": ["nope"], "mid": [], "huge": ["opus"]})
+        bad["extra"] = 1
+        p = config.providers_problems(bad)
+        for want in ("unknown key 'extra'", "provider tf: base_url must start", "provider tf: auth must be",
+                     "provider tf: token_env must name", "model zai-org/GLM: needs a name",
+                     "model zai-org/GLM: context must be", "roles: opus names 'ghost'", "roles: 'huge' is not",
+                     "model sonnet: the name sonnet is taken", "another provider has the same id",
+                     "provider anthropic: auth applies only", "context and roles apply only",
+                     "tiers: low names 'nope'", "tiers: mid must list", "unknown tier 'huge'", "tiers: high is missing"):
+            self.assertTrue(any(want in x for x in p), want)
+        self.write(bad)
+        r = run("config.py", "check")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("provider tf: auth must be", r.stdout)
+        self.assertNotIn("gateway tf", r.stdout)  # named once, in the file's terms
+        self.assertEqual(json.loads(run("config.py", "providers").stdout)["problems"], p)
+
+    def test_models_outside_the_file_are_named_and_never_used(self):
+        self.home.write("config/agent-foreman/config.json", {"tiers": {"mid": ["haiku"]}, "ops": {"batch": 2}})
+        cfg = config.load()
+        self.assertEqual((cfg["tiers"]["mid"], cfg["ops"]["batch"]), (["sonnet"], 2))
+        r = run("config.py", "check")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn(f"tiers belong in {config.providers_path()}", r.stdout)
+        self.home.write("config/agent-foreman/config.json", {})
+        full = config.merge(config.load(), {"tiers": {"mid": ["haiku"]}})
+        _, written, problems = config.save("user", full, dry_run=True)
+        self.assertTrue(any("models are set in" in x for x in problems), problems)
 
 
 class MergeById(unittest.TestCase):
@@ -382,13 +470,11 @@ class Cli(unittest.TestCase):
         repo = os.path.join(self.home.root, "repo")
         subprocess.run(["git", "init", "-q", repo], check=True)
         subprocess.run(["git", "-C", repo, "remote", "add", "origin", "git@github.com:o/r.git"], check=True)
-        self.home.write("config/agent-foreman/config.json",
-                        {"gateways": {"tf": {"kind": "anthropic-compatible", "base_url": "https://tf.example",
-                                             "token_env": "HF_TEST_TF_TOKEN", "auth": "bearer",
-                                             "models": {"m": {"id": "m-1", "context": 1000}}}},
-                         "profiles": {"tf-m": {"gateway": "tf", "model": "m",
-                                               "roles": {"opus": "m", "sonnet": "m", "haiku": "m"}}},
-                         "tiers": {"low": ["tf-m", "haiku"]}})
+        self.home.write("config/agent-foreman/providers.json",
+                        providers({"id": "tf", "base_url": "https://tf.example", "auth": "bearer",
+                                   "token_env": "HF_TEST_TF_TOKEN", "models": [{"id": "m-1", "name": "tf-m",
+                                                                                "context": 1000}]},
+                                  tiers={"low": ["tf-m", "haiku"], "mid": ["sonnet"], "high": ["opus", "sonnet"]}))
         env = {**self.fake_claude(), "HF_TEST_TF_TOKEN": "secret-value-xyz"}
         r = run("config.py", "check-machine", "local", repo, "--project", "o/r", env=env)
         state = json.loads(r.stdout)

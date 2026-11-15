@@ -11,8 +11,27 @@ The user and project files hold only the values that differ from the level
 below; a missing key falls back. Settings hold token variable names only,
 never token values.
 
+The models are in one file the person edits, by provider:
+$XDG_CONFIG_HOME/agent-foreman/providers.json. When it exists, it replaces
+the standard gateways, profiles and tiers whole; `providers --init` copies
+providers.json.sample, which holds the standard's models, when it is missing. A provider without `base_url` is Anthropic (Claude
+Code's own login); one with it is anthropic-compatible and needs `auth`,
+`token_env` (the variable's name) and each model's `context`:
+
+  {"providers": [
+     {"id": "anthropic", "models": [{"id": "opus"}, {"id": "sonnet"}, {"id": "haiku"}]},
+     {"id": "tf", "base_url": "https://...", "auth": "bearer", "token_env": "TF_API_TOKEN",
+      "models": [{"id": "zai-org/GLM-5.3-Flash", "name": "glm", "context": 200000}]}],
+   "tiers": {"low": ["haiku"], "mid": ["glm", "sonnet"], "high": ["opus", "sonnet"]}}
+
+A model's `name` (default: its `id`) is its profile name, the one tiers use.
+`roles` maps a subagent's opus, sonnet and haiku to models of the same
+provider (default: the model itself); `agent` names the agent kind (default
+claude).
+
 Usage:
   config.py paths [--project OWNER/REPO]
+  config.py providers [--init]   (the models file: its path and problems; --init copies the sample when missing)
   config.py show [--project OWNER/REPO]
   config.py check [--project OWNER/REPO]
   config.py save user|project [--project OWNER/REPO] [--dry-run]   (full settings as JSON on stdin)
@@ -32,6 +51,7 @@ import copy
 import json
 import os
 import re
+import shutil
 import string
 import subprocess
 import sys
@@ -54,6 +74,9 @@ PLACEHOLDERS = ["task", "stage", "round", "machine", "profile", "project"]
 SECTIONS = ["plugin_dirs", "gateways", "profiles", "tiers", "difficulty", "launch", "bundle", "skills", "loop", "labels",
             "report", "ops"]
 PROJECT_KEYS = ["repo", "workspace", "machines", "tests"]
+MODEL_KEYS = ["gateways", "profiles", "tiers"]  # from providers.json, never from config.json or project.json
+PROVIDER_KEYS = ["id", "name", "base_url", "auth", "token_env", "models"]
+MODEL_ENTRY_KEYS = ["id", "name", "context", "roles", "agent"]
 # Model tiers, lowest first. The red team and QA take one tier above the lead.
 TIERS = loops.LEVELS
 ROLE_STEP = {"redteam": 1, "qa": 1}  # when the settings' loop.roles do not say
@@ -85,6 +108,15 @@ def defaults_path():
 
 def user_path():
     return os.path.join(_xdg("XDG_CONFIG_HOME", ".config"), APP, "config.json")
+
+
+def providers_path():
+    return os.path.join(_xdg("XDG_CONFIG_HOME", ".config"), APP, "providers.json")
+
+
+def providers_sample_path():
+    """The models file to start from: the standard's models, by provider."""
+    return os.path.join(SKILL_DIR, "providers.json.sample")
 
 
 def state_dir():
@@ -216,11 +248,163 @@ def standard():
     return read_json(defaults_path())
 
 
+def _entries(value):
+    """The dict items of a list, so a broken entry is skipped here and named
+    by providers_problems()."""
+    return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
+
+
+def from_providers(data):
+    """providers.json as the gateways, profiles and tiers the scripts use."""
+    gateways, profiles = {}, {}
+    for p in _entries(data.get("providers")):
+        if not isinstance(p.get("id"), str):
+            continue
+        models = [m for m in _entries(p.get("models")) if isinstance(m.get("id"), str)]
+        names = {m["id"]: m.get("name") or m["id"] for m in models}
+        if not p.get("base_url"):
+            gateways[p["id"]] = {"kind": "anthropic"}
+        else:
+            gateways[p["id"]] = {"kind": "anthropic-compatible", "base_url": p["base_url"], "auth": p.get("auth"),
+                                 "token_env": p.get("token_env"),
+                                 "models": {names[m["id"]]: {"id": m["id"], "context": m.get("context")}
+                                            for m in models}}
+        for m in models:
+            name = names[m["id"]]
+            profile = {"gateway": p["id"], "model": m["id"] if not p.get("base_url") else name}
+            if p.get("base_url"):
+                roles = m.get("roles") if isinstance(m.get("roles"), dict) else {}
+                profile["roles"] = {r: roles.get(r, name) for r in ROLES}
+            if "agent" in m:
+                profile["agent"] = m["agent"]
+            profiles[name] = profile
+    tiers = data.get("tiers") if isinstance(data.get("tiers"), dict) else {}
+    return {"gateways": gateways, "profiles": profiles, "tiers": copy.deepcopy(tiers)}
+
+
+def providers_problems(data):
+    """Problems in providers.json, in its own terms."""
+    if not isinstance(data, dict):
+        return ["providers.json must be an object with providers and tiers"]
+    problems = [f"providers.json: unknown key {k!r}; it holds providers and tiers" for k in data
+                if k not in ("providers", "tiers")]
+    providers = data.get("providers")
+    if not isinstance(providers, list) or not providers:
+        problems.append("providers.json: providers must list at least one provider")
+        providers = []
+    ids, names = set(), set()
+    for i, p in enumerate(providers, 1):
+        if not isinstance(p, dict) or not isinstance(p.get("id"), str) or not NAME.match(p["id"]):
+            problems.append(f"provider {i}: needs an id of letters, digits, '.', '_' and '-'")
+            continue
+        where = f"provider {p['id']}"
+        if p["id"] in ids:
+            problems.append(f"{where}: another provider has the same id")
+        ids.add(p["id"])
+        problems += [f"{where}: unknown key {k!r}" for k in p if k not in PROVIDER_KEYS]
+        compatible = bool(p.get("base_url"))
+        if compatible:
+            if not str(p["base_url"]).startswith(("http://", "https://")):
+                problems.append(f"{where}: base_url must start with http:// or https://")
+            if p.get("auth") not in AUTHS:
+                problems.append(f"{where}: auth must be one of {', '.join(AUTHS)}")
+            if not ENV_NAME.match(str(p.get("token_env", ""))):
+                problems.append(f"{where}: token_env must name the environment variable that holds the key "
+                                f"(the name only, never the key)")
+        else:
+            problems += [f"{where}: {k} applies only to a provider with base_url" for k in ("auth", "token_env")
+                         if k in p]
+        models = p.get("models")
+        if not isinstance(models, list) or not models:
+            problems.append(f"{where}: models must list at least one model")
+            continue
+        own = {m.get("name") or m.get("id") for m in models if isinstance(m, dict)}
+        for j, m in enumerate(models, 1):
+            if not isinstance(m, dict) or not isinstance(m.get("id"), str) or not m["id"].strip():
+                problems.append(f"{where}: model {j} needs an id, the model the provider knows")
+                continue
+            name = m.get("name") or m["id"]
+            mwhere = f"{where}: model {m['id']}"
+            problems += [f"{mwhere}: unknown key {k!r}" for k in m if k not in MODEL_ENTRY_KEYS]
+            if not NAME.match(str(name)):
+                problems.append(f"{mwhere}: needs a name of letters, digits, '.', '_' and '-'; tiers use it")
+            elif name in names:
+                problems.append(f"{mwhere}: the name {name} is taken by another model")
+            names.add(name)
+            if compatible:
+                if not isinstance(m.get("context"), int) or isinstance(m["context"], bool) or m["context"] <= 0:
+                    problems.append(f"{mwhere}: context must be the model's context size in tokens")
+            elif "context" in m or "roles" in m:
+                problems.append(f"{mwhere}: context and roles apply only to a provider with base_url")
+            roles = m.get("roles", {})
+            if not isinstance(roles, dict):
+                problems.append(f"{mwhere}: roles must map opus, sonnet and haiku to models of {p['id']}")
+                continue
+            for role, target in roles.items():
+                if role not in ROLES:
+                    problems.append(f"{mwhere}: roles: {role!r} is not one of {', '.join(ROLES)}")
+                elif target not in own:
+                    problems.append(f"{mwhere}: roles: {role} names {target!r}, which is not a model of {p['id']}")
+    tiers = data.get("tiers")
+    if not isinstance(tiers, dict):
+        problems.append(f"providers.json: tiers must map {', '.join(TIERS)} to lists of model names")
+        tiers = {}
+    for tier in TIERS:
+        if tier not in tiers:
+            problems.append(f"providers.json: tiers: {tier} is missing")
+    for tier, listed in tiers.items():
+        if tier not in TIERS:
+            problems.append(f"providers.json: tiers: unknown tier {tier!r}; use {', '.join(TIERS)}")
+        elif not isinstance(listed, list) or not listed:
+            problems.append(f"providers.json: tiers: {tier} must list at least one model")
+        else:
+            problems += [f"providers.json: tiers: {tier} names {n!r}, which no provider has" for n in listed
+                         if n not in names]
+    return problems
+
+
+def with_providers(cfg):
+    """`cfg` with the models of providers.json, when the file exists."""
+    if not os.path.exists(providers_path()):
+        return cfg
+    return {**cfg, **from_providers(read_json(providers_path()))}
+
+
+def models_file_problems(repo=None):
+    """Problems in providers.json, and model settings left in config.json or
+    the project's file, where they would never be read."""
+    problems = []
+    if os.path.exists(providers_path()):
+        problems += providers_problems(read_json(providers_path()))
+    for path in [user_path()] + ([project_path(repo)] if repo else []):
+        held = [k for k in MODEL_KEYS if k in read_json(path)]
+        if held:
+            problems.append(f"{path}: {', '.join(held)} belong in {providers_path()}; remove them here")
+    return problems
+
+
+def settings_problems(cfg, repo=None, saved=None, skills=None, project=False):
+    """validate(), with the models file's own problems first. While that file
+    has problems, the rest is checked against the standard models, so each
+    model problem is named once, in the file's terms."""
+    file_problems = models_file_problems(repo)
+    if file_problems:
+        std = standard()
+        cfg = {**cfg, **{k: std[k] for k in MODEL_KEYS}}
+    return file_problems + validate(cfg, saved=saved, skills=skills, project=project)
+
+
+def _without_models(settings):
+    """A user or project file without model settings, which only providers.json holds."""
+    return {k: v for k, v in settings.items() if k not in MODEL_KEYS}
+
+
 def load(repo=None):
-    """Settings in effect: standard, then user, then the project's when `repo` is given."""
-    cfg = merge(standard(), read_json(user_path()))
+    """Settings in effect: standard, then user, then the project's when `repo`
+    is given; the models from providers.json."""
+    cfg = with_providers(merge(standard(), _without_models(read_json(user_path()))))
     if repo:
-        cfg = merge(cfg, read_json(project_path(repo)))
+        cfg = merge(cfg, _without_models(read_json(project_path(repo))))
         cfg.setdefault("repo", repo)
         cfg.setdefault("workspace", repo.split("/", 1)[1])
     return cfg
@@ -668,19 +852,25 @@ def label(cfg, event, **values):
 
 def save(level, full, repo=None, saved=None, skills=None, dry_run=False):
     """Write the part of `full` (settings as they should be in effect at that
-    level) that differs from the level below. Returns (path, written, problems)."""
+    level) that differs from the level below. Returns (path, written, problems).
+    The models are never written here: they live in providers.json."""
     base = standard()
     if level == "project":
-        base = merge(base, read_json(user_path()))
+        base = merge(base, _without_models(read_json(user_path())))
         path = project_path(repo)
     else:
         path = user_path()
+    base = with_providers(base)
     effective = merge(base, full)
     if level == "project":
         effective.setdefault("repo", repo)
         effective.setdefault("workspace", repo.split("/", 1)[1])
-    problems = validate(effective, saved=saved, skills=skills, project=level == "project")
+    problems = settings_problems(effective, repo=repo if level == "project" else None, saved=saved, skills=skills,
+                                 project=level == "project")
     written = diff(base, full)
+    held = [k for k in MODEL_KEYS if k in written]
+    if held:
+        problems.append(f"{', '.join(held)}: models are set in {providers_path()}, not saved here")
     if level == "project":
         written["repo"] = repo
     if not problems and not dry_run:
@@ -699,8 +889,9 @@ def plugin_dirs(cfg):
 
 def _cli(argv):
     ap = argparse.ArgumentParser(prog="config.py", description="agent-foreman settings")
-    ap.add_argument("command", choices=["paths", "show", "check", "save", "check-machine", "profiles",
+    ap.add_argument("command", choices=["paths", "providers", "show", "check", "save", "check-machine", "profiles",
                                         "projects", "machines", "skills", "plugin-dir-candidates", "tier"])
+    ap.add_argument("--init", action="store_true", help="providers: write the file from the standard when missing")
     ap.add_argument("rest", nargs="*", help="save: user or project; check-machine: MACHINE PATH")
     ap.add_argument("--plugin-dir", action="append", default=[], help="skills: a plugin directory to add")
     ap.add_argument("--project", metavar="OWNER/REPO")
@@ -717,17 +908,29 @@ def _cli(argv):
         return 2
 
     if args.command == "paths":
-        info = {"standard": defaults_path(), "user": user_path(), "state": state_dir(), "cache": cache_dir()}
+        info = {"standard": defaults_path(), "user": user_path(), "providers": providers_path(), "state": state_dir(),
+                "cache": cache_dir()}
         if args.project:
             info.update(project=project_path(args.project), ledger=ledger_path(args.project),
                         log=log_path(args.project), memory=memory_path(args.project))
         print(json.dumps(info, indent=2))
+    elif args.command == "providers":
+        path, created = providers_path(), False
+        if args.init and not os.path.exists(path):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            shutil.copyfile(providers_sample_path(), path)
+            created = True
+        problems = providers_problems(read_json(path)) if os.path.exists(path) else []
+        print(json.dumps({"path": path, "exists": os.path.exists(path), "created": created, "problems": problems},
+                         indent=2, ensure_ascii=False))
+        if problems:
+            return EXIT_SETUP_NEEDED
     elif args.command == "show":
         print(json.dumps(load(args.project), indent=2, ensure_ascii=False))
     elif args.command == "check":
         cfg = load(args.project)
-        problems = validate(cfg, saved=herdr_machines(), project=bool(args.project),
-                            skills=local_skills(plugin_list(plugin_dirs(cfg))))
+        problems = settings_problems(cfg, repo=args.project, saved=herdr_machines(), project=bool(args.project),
+                                     skills=local_skills(plugin_list(plugin_dirs(cfg))))
         if args.project and not os.path.exists(project_path(args.project)):
             problems.insert(0, f"project {args.project} has no settings yet ({project_path(args.project)})")
         for p in problems:

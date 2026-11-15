@@ -6,13 +6,13 @@
     }
   },
   "profiles": {
-    "sonnet": {
-      "gateway": "anthropic",
-      "model": "sonnet"
-    },
     "opus": {
       "gateway": "anthropic",
       "model": "opus"
+    },
+    "sonnet": {
+      "gateway": "anthropic",
+      "model": "sonnet"
     },
     "haiku": {
       "gateway": "anthropic",
