@@ -257,7 +257,8 @@ class Run:
         before = len([r for r in rows(status) if r.get("step") == "plan-check" and r.get("event") == "end"])
         prompt = (f"You are the foreman of agent-foreman for project {REPO}. Read {PLUGIN}/SKILL.md, the section "
                   f"\"Evidence at every step\", and do the plan-check for task {task} now: its lead is waiting. The "
-                  f"task folder is {task_dir}. Run the scripts with python3 from {SCRIPTS}. Write plan-check's end line "
+                  f"task folder is {task_dir}, and the lead's clone is {rec['clone']}. Run the scripts with python3 "
+                  f"from {SCRIPTS}. Write plan-check's end line "
                   f"with `status.py note --file {task_dir}/status.jsonl` as that section says. Start no agent and "
                   f"message none. End with one line: `PLAN-CHECK: go — <why>` or `PLAN-CHECK: back — <what is "
                   f"missing>`.")
@@ -275,7 +276,7 @@ class Run:
         ends = [row for row in rows(status) if row.get("step") == "plan-check" and row.get("event") == "end"]
         new = ends[-1] if len(ends) > before else None
         rec.setdefault("plan_check", []).append({"line": line, "cost": data.get("total_cost_usd"), "end_line": new,
-                                                 "error": None if new else str(data.get("result", ""))[-500:]})
+                                                 "answer": str(data.get("result", ""))[-2000:]})
         say(f"task {task}: {line or 'no PLAN-CHECK line'}")
         if new is None:
             return None
@@ -397,6 +398,10 @@ class Run:
         if getattr(self, "branch", None):
             self.sh(["git", "--git-dir", self.origin, "branch", "-D", self.branch], check=False)
             self.branch = None
+        try:
+            os.rmdir(os.path.dirname(rec["task_dir"]))
+        except (KeyError, OSError):
+            pass
         say(f"task {task}: {rec.get('result')}")
 
     def write_report(self):
@@ -430,7 +435,9 @@ class Run:
             if rec.get("pair_cost") is not None:
                 md.append(f"- The pair's runs cost ${round(rec['pair_cost'], 4)}")
             for pc in rec.get("plan_check", []):
-                md.append(f"- plan-check: {pc['line'] or 'no line'}; end line: {(pc['end_line'] or {}).get('outcome')}")
+                last = next((l.strip() for l in reversed(pc["answer"].splitlines()) if l.strip()), "")
+                line = pc["line"] or f"no PLAN-CHECK line (the answer's last line: {last[:200]})"
+                md.append(f"- plan-check: {line}; end line: {(pc['end_line'] or {}).get('outcome')}")
             for r in rec["roles"]:
                 md.append(f"- Round {r['round']}: " + "; ".join(
                     f"{k} {v['verdict'] or 'no verdict'}" + (f" ({v['error']})" if v.get("error") else "")

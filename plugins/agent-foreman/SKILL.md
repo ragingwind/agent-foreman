@@ -61,11 +61,12 @@ When a step ends ("stage" under "Watch"):
 Read `task.md`, `plan.md`, `scenario.md` and the plan step's evidence. Check
 two things. First, every done-when of `task.md` has a work item and a
 scenario step that would show it. Second, the plan stays inside the task's
-scope. Then write the step's `end` line yourself:
+scope. Then write the step's `end` line yourself. `<N>` is the round on the
+plan step's `end` line:
 
 ```bash
 python3 <skill>/scripts/status.py note --file <task folder>/status.jsonl --stage plan \
-  --step plan-check --event end --outcome <go or back> \
+  --step plan-check --event end --outcome <go or back> --round <N> \
   --done "<what you checked, and what is missing for back>"
 ```
 
