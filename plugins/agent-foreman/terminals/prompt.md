@@ -67,7 +67,7 @@ exit code and the end of its stderr; the gate reads both.
 
 | Code | Meaning | Next |
 | --- | --- | --- |
-| 0 | `ok` | Read the result. An empty `verdict` and no `Verdict` anywhere in the answer: the agent stopped before its end; run the next command once, as for 5 |
+| 0 | `ok` | Read the result. An answer that shows `fulltest.py: not run`: the disk was under the floor; free space and start the role again. Else an empty `verdict` and no `Verdict` anywhere in the answer: the agent stopped before its end; run the next command once, as for 5 |
 | 5 | The run failed: a usage limit, a gateway error, no result | Run the next command `loop.py prompt` printed; with none left, ask the person |
 | 3 | Setup needed | `config.py check --project <repo>` names it; setup (`/agent-foreman:agent-foreman setup`) fixes it |
 | 4 | The gateway's token variable is not set on that machine | Tell the person the variable and the machine |

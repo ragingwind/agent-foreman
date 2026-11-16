@@ -4,7 +4,7 @@ in fixture/repo, against a local stand-in for GitHub (fixture/bin/gh), and
 report whether every step left its evidence.
 
 Usage:
-  python3 fixture/run.py [--task 1|2|all] [--dir DIR] [--rounds N] [--dry-run]
+  python3 fixture/run.py [--task 1|2|all] [--dir DIR] [--rounds N] [--scenario NAME,...] [--dry-run]
 
 This script plays the foreman's scripted part, as SKILL.md has it: the task
 folder, loop.json, the gate and its hash, the brief, the lead's clone, the
@@ -28,6 +28,11 @@ The report (DIR/report.md and DIR/report.json): per task, each step's
 evidence line and `gate.py record` result, plan-check's word, the verdicts,
 the gate before ready and before merge, the merge, the cost of every agent
 run, and every `gh` call the stand-in did not support.
+
+--scenario (repeat it, or give a comma list, or `all`) makes the run take a
+path that agents rarely take on their own, so the foreman's handling of it
+is tried (SCENARIOS below). The report says, per scenario, whether the run
+took the path and whether it ended right.
 """
 import argparse
 import datetime
@@ -40,6 +45,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -50,6 +56,22 @@ TASKS = {"1": "mid", "2": "high"}
 LEAD_TIMEOUT = 90 * 60
 ROLE_TIMEOUT = 30 * 60
 GIT = ["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"]
+# Paths that a run takes only when the script makes it, and the task each one is made on.
+SCENARIOS = {
+    "setup-test": (None, "setup/project.md step 4: run the full test command once in a fresh clone; no model"),
+    "plan-back": ("2", "the foreman's first plan-check sends the plan back"),
+    "send-back": ("1", "the red team's first answer has a should-fix, so the task goes back to build"),
+    "no-verdict": ("1", "QA's first run stops with no Verdict, so the next profile runs once"),
+    "disk-floor": ("2", "QA's first full test and one merge gate run are under the disk floor"),
+    "lock-wait": ("1", "another holder keeps the full-test lock while the merge gate runs"),
+}
+LOCK_HOLD = 20
+PLAN_BACK = ("This run tests plan-check's send-back path: send the plan back, with at least one concrete thing to "
+             "add or change, even when the plan would pass.")
+SEND_BACK = ("This run tests the send-back path. Whatever else you find, give at least one should-fix finding: the "
+             "weakest point you find in the change, with its evidence.")
+NO_VERDICT = ("This run tests what the foreman does when a role stops early. Use no tool. Reply with exactly this "
+              "one line and nothing else: Now let me write my own probe test.")
 # Every lead run is a new session (launch.py --print takes no --resume), so each word after the first says so.
 RESTARTED = "You were restarted: read the brief, plan.md and the last lines of status.jsonl, and go on."
 
@@ -59,16 +81,19 @@ def say(text):
 
 
 class Run:
-    def __init__(self, root, dry_run):
-        self.root, self.dry_run = root, dry_run
+    def __init__(self, root, dry_run, scenarios=()):
+        self.root, self.dry_run, self.scenarios = root, dry_run, set(scenarios)
         self.env = dict(os.environ)
         self.env.update(XDG_CONFIG_HOME=os.path.join(root, "config"), XDG_STATE_HOME=os.path.join(root, "state"),
                         XDG_CACHE_HOME=os.path.join(root, "cache"), FAKE_GH_STATE=os.path.join(root, "gh.json"),
                         PATH=os.path.join(HERE, "bin") + os.pathsep + os.environ["PATH"])
         for k in ("AF_STATUS_FILE", "AF_AGENT", "AF_TASK_DIR"):
             self.env.pop(k, None)
-        self.report = {"started": now(), "root": root, "tasks": {}, "cost": 0.0}
+        self.report = {"started": now(), "root": root, "tasks": {}, "cost": 0.0, "scenarios": {}}
         self.lock = threading.Lock()
+
+    def forced(self, name, task):
+        return name in self.scenarios and SCENARIOS[name][0] == task
 
     # --- plumbing -------------------------------------------------------------
     def sh(self, argv, cwd=None, check=True, timeout=None, stdin=None):
@@ -119,9 +144,38 @@ class Run:
         with open(os.path.join(project, "project.json"), "w") as f:
             json.dump({"repo": REPO, "workspace": "repo", "machines": {"local": self.checkout},
                        "tests": {"full": "make test"}, "post_answers": True}, f)
+        if "no-verdict" in self.scenarios:  # the standard tiers give QA one profile; the rule needs a next one
+            with open(os.path.join(PLUGIN, "providers.json.sample")) as f:
+                models = json.load(f)
+            models["tiers"]["high"] = models["tiers"]["high"] + ["haiku"]
+            os.makedirs(os.path.join(self.env["XDG_CONFIG_HOME"], "agent-foreman"), exist_ok=True)
+            with open(os.path.join(self.env["XDG_CONFIG_HOME"], "agent-foreman", "providers.json"), "w") as f:
+                json.dump(models, f, indent=2)
         out = json.loads(self.script("bundle.py", "push", "local", "--project", REPO).stdout)
         self.bundle = out["path"]
         say(f"bundle {out['hash']} with {len(out['skills'])} skills")
+        if "setup-test" in self.scenarios:
+            self.setup_test()
+
+    def setup_test(self):
+        """setup/project.md "4. Run the full test command once": a clone at the default branch, the command run
+        in it, a failing command that must fail, and the clone removed."""
+        made = self.script("clone.py", "make", "--project", REPO, "--task", "setup", "--agent", "tests", "--ref",
+                           "origin/main", "--no-push", "--machine", "local", check=False)
+        if made.returncode != 0:
+            self.report["scenarios"]["setup-test"] = {"took": False, "ok": False,
+                                                      "note": f"clone.py make failed: {made.stderr.strip()[-200:]}"}
+            return
+        clone = json.loads(made.stdout)["path"]
+        good = self.script("remote.py", "local", "--cwd", clone, "--", "sh", "-c", "make test", check=False)
+        bad = self.script("remote.py", "local", "--cwd", clone, "--", "sh", "-c", "make no-such-target", check=False)
+        gone = self.script("clone.py", "remove", "--project", REPO, "--task", "setup", "--agent", "tests",
+                           "--machine", "local", check=False)
+        removed = gone.returncode == 0 and not os.path.exists(clone)
+        self.report["scenarios"]["setup-test"] = {
+            "took": True, "ok": good.returncode == 0 and bad.returncode != 0 and removed,
+            "note": f"make test exit {good.returncode}; a wrong command exit {bad.returncode}; clone removed: {removed}"}
+        say(f"scenario setup-test: {self.report['scenarios']['setup-test']['note']}")
 
     # --- one task ---------------------------------------------------------------
     def task(self, task, rounds):
@@ -192,7 +246,14 @@ class Run:
                 rec["result"] = f"the lead stopped with {out['report'] or 'no report'}"
                 return self.finish(task, rec)
 
+        if self.forced("disk-floor", task):
+            rec["gate_under_floor"] = self.gate_under_floor(gate_json, rec["pr"], clone, task_dir)
+        held = self.hold_lock(LOCK_HOLD) if self.forced("lock-wait", task) else None
+        started = time.time()
         merge = self.gate(gate_json, rec["pr"], clone, task_dir, sha, before_ready=False)
+        if held:
+            held.join()
+            rec["lock_wait"] = {"held_seconds": LOCK_HOLD, "gate_seconds": round(time.time() - started, 1)}
         rec["gate_merge"] = merge
         unmatched = self.plan_check_unmatched(task, task_dir)
         if unmatched:
@@ -230,6 +291,8 @@ class Run:
                 "--prompt-file", prompt, "--out", out, "--name", task, "--task-dir", task_dir]
 
     def lead(self, task, profile, task_dir, clone, word, n):
+        status = os.path.join(task_dir, "status.jsonl")
+        before = len(rows(status))
         prompt = self.prompt(task_dir, str(n))
         with open(prompt, "w") as f:
             f.write(word + "\n")
@@ -248,10 +311,14 @@ class Run:
         except (OSError, ValueError):
             pass
         report = next((l.strip() for l in reversed(text.splitlines()) if l.strip().startswith("REPORT:")), "")
+        source = "answer"
+        if not report:  # SKILL.md "Watch": the stop line's done holds the report
+            report, source = report_from_status(rows(status)[before:]), "status"
         entry = {"run": n, "word": word, "ok": summary.get("ok"), "cost": self.add_cost(summary.get("cost")),
-                 "report": report, "error": summary.get("error")}
+                 "report": report, "report_from": source if report else None, "error": summary.get("error")}
         self.report["tasks"][task]["lead_runs"].append(entry)
-        say(f"task {task}: lead run {n} ended: {report or summary.get('error') or 'no report'} "
+        say(f"task {task}: lead run {n} ended: {report or summary.get('error') or 'no report'}"
+            f"{' (no REPORT line; from the status file)' if report and source == 'status' else ''} "
             f"(cost {summary.get('cost')})")
         return entry
 
@@ -261,13 +328,14 @@ class Run:
         say(f"task {task}: plan-check by the foreman")
         status = os.path.join(task_dir, "status.jsonl")
         before = len([r for r in rows(status) if r.get("step") == "plan-check" and r.get("event") == "end"])
+        force = self.forced("plan-back", task) and not rec.get("plan_check")
         prompt = (f"You are the foreman of agent-foreman for project {REPO}. Read {PLUGIN}/SKILL.md, the section "
                   f"\"Evidence at every step\", and do the plan-check for task {task} now: its lead is waiting. The "
                   f"task folder is {task_dir}, and the lead's clone is {rec['clone']}. Run the scripts with python3 "
                   f"from {SCRIPTS}. Do all that section says for plan-check, its end line with `status.py note "
                   f"--file {task_dir}/status.jsonl` and its log event included, except sending the lead its line: "
-                  f"this script sends it. Start no agent and message none. End with one line: `PLAN-CHECK: go — <why>` or `PLAN-CHECK: back — <what is "
-                  f"missing>`.")
+                  f"this script sends it. Start no agent and message none. {PLAN_BACK + ' ' if force else ''}"
+                  f"End with one line: `PLAN-CHECK: go — <why>` or `PLAN-CHECK: back — <what is missing>`.")
         # The prompt goes on stdin: --disallowedTools takes every value after it, a prompt argument too.
         r = self.sh(["claude", "-p", "--model", "opus", "--dangerously-skip-permissions", "--output-format", "json",
                      "--disallowedTools", "Bash(gh pr merge:*)"], cwd=self.root, check=False, timeout=ROLE_TIMEOUT,
@@ -282,7 +350,7 @@ class Run:
         ends = [row for row in rows(status) if row.get("step") == "plan-check" and row.get("event") == "end"]
         new = ends[-1] if len(ends) > before else None
         rec.setdefault("plan_check", []).append({"line": line, "cost": data.get("total_cost_usd"), "end_line": new,
-                                                 "answer": str(data.get("result", ""))[-2000:]})
+                                                 "answer": str(data.get("result", ""))[-2000:], "forced": force})
         say(f"task {task}: {line or 'no PLAN-CHECK line'}")
         if new is None:
             return None
@@ -331,6 +399,50 @@ class Run:
         return {"pass": out["pass"], "blocked": out["blocked"],
                 "warned": [c["check"] for c in out["checks"] if not c["ok"] and c["severity"] == "warn"]}
 
+    def gate_under_floor(self, gate_json, pr, clone, task_dir):
+        """The merge gate once with the full tests' disk floor above any disk: it must block `command` with
+        `fulltest.py: not run`. A copy of the gate file, so the task's own file and its hash stay as they are."""
+        with open(gate_json) as f:
+            data = json.load(f)
+        for c in data["checks"]:
+            if c.get("full"):
+                c["min_free_gb"] = 1000000
+        copy = os.path.join(self.root, f"gate-under-floor-{os.path.basename(os.path.dirname(gate_json))}.json")
+        with open(copy, "w") as f:
+            json.dump(data, f)
+        r = self.script("gate.py", "run", copy, "--pr", str(pr), "--cwd", clone, "--task-dir", task_dir, check=False)
+        try:
+            out = json.loads(r.stdout)
+        except ValueError:
+            return {"blocked": [], "evidence": r.stderr.strip()[-300:]}
+        evidence = next((c["evidence"] for c in out["checks"] if c["check"] == "command"), "")
+        say(f"gate under the disk floor: blocked {out['blocked']}: {evidence[:120]}")
+        return {"blocked": out["blocked"], "evidence": evidence}
+
+    def hold_lock(self, seconds):
+        """Another holder of this machine's full-test lock (fulltest.py), for `seconds`. Returns the thread, once
+        it holds the lock."""
+        import fcntl
+        path = os.path.join(self.env["XDG_CACHE_HOME"], "agent-foreman", "locks", "full-test.lock")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        held = threading.Event()
+
+        def hold():
+            with open(path, "a+") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                lock.seek(0)
+                lock.truncate()
+                lock.write(json.dumps({"task": "the lock-wait scenario"}))
+                lock.flush()
+                held.set()
+                time.sleep(seconds)
+
+        t = threading.Thread(target=hold)
+        t.start()
+        held.wait()
+        say(f"scenario lock-wait: holding the full-test lock for {seconds}s")
+        return t
+
     def verification(self, task, task_dir, clone, pr, rec, round_):
         """The red team and QA at once, as SKILL.md's verification session. Returns the work step to go back
         to, or None."""
@@ -346,7 +458,7 @@ class Run:
             except (Exception, SystemExit) as e:  # one role's failure is reported, not lost in its thread
                 results[step["id"]] = {"role": step["actor"], "verdict": "", "outcome": None, "error": str(e)[-300:]}
 
-        def run_role(step):
+        def run_role(step, earlier=()):
             role = step["actor"]
             made = json.loads(self.script("clone.py", "make", "--project", REPO, "--task", task, "--agent",
                                           f"{role}-1", "--from", clone, "--ref", head, "--fresh", "--no-push",
@@ -355,24 +467,53 @@ class Run:
                                             cwd=made["path"], where=os.path.join(self.bundle, "scripts")).stdout)
             self.script("status.py", "note", "--file", os.path.join(task_dir, "status.jsonl"), "--stage",
                         step["stage"], "--step", step["id"], "--event", "start", "--round", str(round_))
-            summary = {"ok": False}
-            for command in prompt["commands"]:
-                say(f"task {task}: {step['id']} by {role}")
-                r = self.sh(["bash", "-c", command], cwd=made["path"], check=False, timeout=ROLE_TIMEOUT)
+            with open(prompt["prompt"]) as f:
+                every = prompt_text = f.read()
+            first, forced = every, []
+            if round_ == 1 and not earlier:
+                if role == "redteam" and self.forced("send-back", task):
+                    first = every = every.rstrip() + "\n\n" + SEND_BACK + "\n"
+                    forced.append("send-back")
+                if role == "qa" and self.forced("disk-floor", task):
+                    first = every = re.sub(r"--min-free-gb \S+", "--min-free-gb 1000000", every)
+                    forced.append("disk-floor")
+                if role == "qa" and self.forced("no-verdict", task):
+                    first = NO_VERDICT + "\n"
+                    forced.append("no-verdict")
+            summary, text, attempts, i = {"ok": False}, "", list(earlier), 0
+            while i < len(prompt["commands"]):
+                with open(prompt["prompt"], "w") as f:  # the prompt file keeps what the last run got
+                    f.write(first if i == 0 else every)
+                say(f"task {task}: {step['id']} by {role}" + (f" (forced: {', '.join(forced)})" if forced and (
+                    i == 0 or every != prompt_text) else ""))
+                r = self.sh(["bash", "-c", prompt["commands"][i]], cwd=made["path"], check=False, timeout=ROLE_TIMEOUT)
                 summary = json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {"ok": False}
                 self.add_cost(summary.get("cost"))
-                if r.returncode != 5:
-                    break
+                text = ""
+                try:
+                    with open(summary.get("out", "")) as f:
+                        text = json.load(f).get("result", "")
+                except (OSError, ValueError):
+                    pass
+                attempts.append({"command": i, "exit": r.returncode, "verdict": summary.get("verdict") or "",
+                                 "stopped_early": stopped_early(r.returncode, summary.get("verdict"), text),
+                                 "disk_not_run": disk_not_run(text), "forced": forced if i == 0 else [],
+                                 "cost": summary.get("cost"), "tail": text[-300:]})
+                action = after_run(r.returncode, summary.get("verdict"), text,
+                                   any(a["stopped_early"] for a in attempts[:-1]))
+                if action == "next":
+                    if r.returncode != 5:
+                        say(f"task {task}: {step['id']}: no Verdict anywhere in the answer; the next command, once")
+                    i += 1
+                    continue
+                break
+            if disk_not_run(text) and not earlier:
+                say(f"task {task}: {step['id']}: the full tests did not run (disk floor); {role} again")
+                return run_role(step, attempts)  # SKILL.md: not QA's finding; free space and start it again
             verdict = summary.get("verdict") or ""
-            text = ""
-            try:
-                with open(summary.get("out", "")) as f:
-                    text = json.load(f).get("result", "")
-            except (OSError, ValueError):
-                pass
             outcome = outcome_of(verdict, text)
             results[step["id"]] = {"role": role, "verdict": verdict, "outcome": outcome,
-                                   "cost": summary.get("cost"), "answer": summary.get("out")}
+                                   "cost": summary.get("cost"), "answer": summary.get("out"), "attempts": attempts}
             if outcome in step["next"]:
                 self.script("status.py", "note", "--file", os.path.join(task_dir, "status.jsonl"), "--stage",
                             step["stage"], "--step", step["id"], "--event", "end", "--outcome", outcome, "--round",
@@ -413,7 +554,44 @@ class Run:
             f.write("\n".join(lines) + "\n")
         return path
 
+    def judge(self, task, rec):
+        """Per forced scenario of this task: whether the run took the path, and whether it ended right."""
+        roles = rec.get("roles") or [{}]
+        first = roles[0]
+        merged = bool(rec.get("merged"))
+        for name, (on, _) in SCENARIOS.items():
+            if not self.forced(name, task):
+                continue
+            if name == "plan-back":
+                pc = rec.get("plan_check") or [{}]
+                took = (pc[0].get("end_line") or {}).get("outcome") == "back"
+                ok, note = took and merged, " / ".join(p["line"][:80] for p in pc)
+            elif name == "send-back":
+                took = first.get("redteam-review", {}).get("verdict") == "changes"
+                ok, note = took and len(roles) >= 2 and merged, f"{len(roles)} verification round(s)"
+            elif name == "no-verdict":
+                tries = first.get("test", {}).get("attempts", [])
+                took = bool(tries) and tries[0]["stopped_early"]
+                ok = took and len(tries) >= 2 and bool(first.get("test", {}).get("verdict"))
+                note = "; ".join(f"command {a['command']}: exit {a['exit']}, verdict {a['verdict'] or 'none'}"
+                                 for a in tries) + ("" if len(tries) > 1 else "; no next command: to the person")
+            elif name == "disk-floor":
+                tries = first.get("test", {}).get("attempts", [])
+                floor = rec.get("gate_under_floor", {})
+                took = any(a["disk_not_run"] for a in tries) and floor.get("blocked") == ["command"]
+                ok = took and "fulltest.py: not run" in floor.get("evidence", "") and merged
+                note = (f"QA runs: {len(tries)}, disk not run in run "
+                        f"{[i for i, a in enumerate(tries) if a['disk_not_run']]}; gate: {floor.get('blocked')}")
+            else:  # lock-wait
+                wait = rec.get("lock_wait", {})
+                took = wait.get("gate_seconds", 0) >= LOCK_HOLD - 1
+                ok, note = took and rec.get("gate_merge", {}).get("pass", False), str(wait)
+            self.report["scenarios"][name] = {"task": task, "took": took, "ok": ok, "note": note}
+            say(f"scenario {name}: took the path: {took}; ended right: {ok}; {note}")
+
     def finish(self, task, rec):
+        if not self.dry_run:
+            self.judge(task, rec)
         self.script("clone.py", "archive", "--project", REPO, "--task", task, check=False)
         removed = self.script("clone.py", "remove", "--project", REPO, "--task", task, check=False)
         if removed.returncode != 0 or json.loads(removed.stdout or "{}").get("refused"):
@@ -476,11 +654,51 @@ class Run:
                     md.append(f"| {step} | {s['outcome']} | {s['evidence'].replace('|', '/')} | "
                               f"{'ok' if s['record_ok'] else '; '.join(s['missing']).replace('|', '/')} |")
             md.append("")
+        if self.report["scenarios"]:
+            md += ["## Scenarios", "", "| Scenario | Task | What it forces | Took the path | Ended right | Note |",
+                   "| --- | --- | --- | --- | --- | --- |"]
+            md += [f"| {n} | {r.get('task') or '-'} | {SCENARIOS[n][1]} | {r['took']} | {r['ok']} | "
+                   f"{str(r['note']).replace('|', '/')} |" for n, r in self.report["scenarios"].items()]
+            md.append("")
         md += ["## gh calls the stand-in did not support", ""]
         md += [f"- {c['agent'] or '?'}: gh {' '.join(c['argv'])}" for c in self.report["gh_unsupported"]] or ["- none"]
         with open(os.path.join(self.root, "report.md"), "w") as f:
             f.write("\n".join(md) + "\n")
         say(f"report: {os.path.join(self.root, 'report.md')}")
+
+
+def report_from_status(new_rows):
+    """The lead's report from the status lines its run wrote, for an answer with no REPORT line (SKILL.md
+    "Watch": the stop line's done holds the report). The work loop's last step ends with `to: stop`: ready."""
+    for r in reversed(new_rows):
+        if r.get("event") == "end" and r.get("to") == "stop":
+            return f"REPORT: ready — {r.get('step')} ended: {r.get('done', '')}"
+        if r.get("event") == "stop":
+            done = str(r.get("done", ""))
+            kind = next((k for k in ("ready", "decision", "blocked", "waiting") if done.lower().startswith(k)), None)
+            return f"REPORT: {kind or ('blocked' if r.get('blocked') else 'decision')} — {done}"
+    return ""
+
+
+def after_run(code, verdict, text, stopped_before):
+    """What the foreman does after one role run (SKILL.md "Verification session", step 3): "next" runs the next
+    command (exit 5, or a first early stop), "done" goes on; the disk floor goes on too, and is handled after."""
+    if code == 5:
+        return "next"
+    if disk_not_run(text):
+        return "done"
+    return "next" if stopped_early(code, verdict, text) and not stopped_before else "done"
+
+
+def stopped_early(code, verdict, text):
+    """SKILL.md "Verification session": exit 0 with no verdict and no `Verdict` anywhere in the answer means the
+    agent stopped before its end."""
+    return code == 0 and not verdict and "verdict" not in (text or "").lower()
+
+
+def disk_not_run(text):
+    """The full tests did not run because the disk was under the floor (fulltest.py exit 75)."""
+    return "fulltest.py: not run" in (text or "") or "disk under the floor" in (text or "").lower()
 
 
 def outcome_of(verdict, text):
@@ -525,13 +743,23 @@ def main(argv):
     ap.add_argument("--task", default="all", choices=["all", *TASKS])
     ap.add_argument("--dir", help="the run folder (default: a new temporary one)")
     ap.add_argument("--rounds", type=int, default=2, help="verification rounds before it gives up (default 2)")
+    ap.add_argument("--scenario", action="append", default=[], metavar="NAME,...",
+                    help=f"force a path: {', '.join(SCENARIOS)}, or all")
     ap.add_argument("--dry-run", action="store_true", help="prepare everything; call no model")
     args = ap.parse_args(argv)
+    scenarios = {n.strip() for v in args.scenario for n in v.split(",") if n.strip()}
+    scenarios = set(SCENARIOS) if "all" in scenarios else scenarios
+    unknown = sorted(scenarios - set(SCENARIOS))
+    if unknown:
+        ap.error(f"unknown scenario {', '.join(unknown)}; known: {', '.join(SCENARIOS)}, all")
+    skipped = sorted(n for n in scenarios if SCENARIOS[n][0] and args.task not in ("all", SCENARIOS[n][0]))
+    if skipped:
+        ap.error(f"{', '.join(skipped)} run on another task than --task {args.task}")
     root = os.path.abspath(args.dir) if args.dir else tempfile.mkdtemp(prefix="agent-foreman-fixture.")
     if os.path.exists(root) and os.listdir(root):
         raise SystemExit(f"run.py: {root} is not empty")
     os.makedirs(root, exist_ok=True)
-    run = Run(root, args.dry_run)
+    run = Run(root, args.dry_run, scenarios)
     run.setup()
     try:
         for task in (TASKS if args.task == "all" else [args.task]):

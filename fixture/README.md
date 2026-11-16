@@ -16,7 +16,26 @@ what real agents do.
 python3 fixture/run.py --dry-run     # prepare everything, call no model
 python3 fixture/run.py               # both tasks
 python3 fixture/run.py --task 2      # one task
+python3 fixture/run.py --scenario all --rounds 3   # every forced path below
 ```
+
+Agents rarely take some paths on their own. `--scenario` (a comma list,
+repeatable, or `all`) makes the run take them, so the foreman's handling of
+each one is tried:
+
+| Scenario | Task | What the script does | What should follow |
+| --- | --- | --- | --- |
+| `setup-test` | none | Runs setup's full test command steps: a clone at the default branch, the command, a wrong command, the removal. No model | The command passes, the wrong one fails, the clone is gone |
+| `plan-back` | 2 | Tells the foreman's first plan-check to send the plan back | The lead fixes the plan, the second plan-check says go, the task merges |
+| `send-back` | 1 | Tells the first red team run to give at least one should-fix | The lead goes back to build, a second verification round runs, the task merges |
+| `no-verdict` | 1 | Gives QA's first run a prompt that ends with no Verdict | The script runs the next profile once (`SKILL.md` "Verification session"), and QA gives a verdict |
+| `disk-floor` | 2 | Raises the disk floor in QA's first prompt, and runs one merge gate on a copy of the gate file with the floor raised | QA reports the full tests as not run and runs again; the copy's gate blocks `command` with `fulltest.py: not run`; the task merges |
+| `lock-wait` | 1 | Holds the machine's full-test lock for 20 seconds while the merge gate runs | The gate waits, then passes |
+
+The report's "Scenarios" table says, per scenario, whether the run took the
+path and whether it ended right. `send-back` uses one verification round
+for the forced finding; `--rounds 3` leaves room for one real finding after
+it.
 
 The script plays the foreman's scripted part (the task folder, the loop, the
 gate, the brief, the clones, the verification session, the merge gate, the

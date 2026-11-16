@@ -143,6 +143,29 @@ class FakeGh(unittest.TestCase):
         self.assertEqual(runner.outcome_of("fail", "mismatch (script): step 2 — x\nVerdict: fail"), "script")
         self.assertEqual(runner.outcome_of("fail", script + "\n- mismatch (product): step 3 — y"), "fail")
         self.assertEqual(runner.outcome_of("pass", script), "pass")
+        self.assertTrue(runner.stopped_early(0, "", "Now let me write my own probe test."))  # SKILL.md: once more
+        self.assertFalse(runner.stopped_early(0, "", "I posted it with **Verdict: approved**"))  # to the person
+        self.assertFalse(runner.stopped_early(5, "", "rate limited"))  # exit 5 has its own rule
+        self.assertFalse(runner.stopped_early(0, "pass", "Verdict: pass"))
+        floor = "- not run: make test — disk under the floor (fulltest.py: not run)"
+        self.assertEqual(runner.after_run(0, "", floor, False), "done")  # the disk first: no other profile
+        self.assertEqual(runner.after_run(0, "", "Now let me write my own probe test.", False), "next")
+        self.assertEqual(runner.after_run(0, "", "Now let me write my own probe test.", True), "done")  # once
+        self.assertEqual(runner.after_run(5, "", "rate limited", True), "next")
+        self.assertEqual(runner.after_run(0, "pass", "Verdict: pass", False), "done")
+        self.assertTrue(runner.disk_not_run("- not run: make test — disk under the floor"))
+        self.assertTrue(runner.disk_not_run("fulltest.py: not run: 3.1 GB free on the disk of /x"))
+        self.assertFalse(runner.disk_not_run("- not run: make e2e — needs a VM"))
+        finalize = {"event": "end", "step": "finalize", "outcome": "done", "to": "stop", "done": "handoff: handoff.md"}
+        self.assertEqual(runner.report_from_status([{"event": "heartbeat"}, finalize]),
+                         "REPORT: ready — finalize ended: handoff: handoff.md")
+        self.assertEqual(runner.report_from_status([{"event": "stop", "done": "waiting: plan-check round 1"}]),
+                         "REPORT: waiting — waiting: plan-check round 1")
+        self.assertEqual(runner.report_from_status([{"event": "stop", "done": "no disk", "blocked": "disk full"}]),
+                         "REPORT: blocked — no disk")
+        self.assertEqual(runner.report_from_status([{"event": "end", "step": "build", "to": "verify"}]), "")
+        self.assertEqual(set(runner.SCENARIOS), {"setup-test", "plan-back", "send-back", "no-verdict", "disk-floor",
+                                                 "lock-wait"})
 
     def test_what_it_does_not_know_is_refused_and_logged(self):
         for args in (["release", "list"], ["api", "-X", "PUT", "repos/o/r/pulls/1/merge"]):

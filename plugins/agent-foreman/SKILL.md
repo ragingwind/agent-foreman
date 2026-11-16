@@ -429,9 +429,11 @@ above the floor. Then, for each step of the check loop in `loop.json`
    command in the clone in
    the background (`terminals/prompt.md`). Exit 5: the next command. Exit
    0 with an empty `verdict`: read the answer (`result` in the `out` file).
-   With no `Verdict` anywhere in it, the agent stopped before its end: run
-   the next command, once per step and round. Otherwise the answer goes to
-   the person ("no verdict" below).
+   When it shows `fulltest.py: not run`, the disk was under the floor: free
+   space and start the role again (below); another profile on the same disk
+   would stop the same way. Otherwise, with no `Verdict` anywhere in it, the
+   agent stopped before its end: run the next command, once per step and
+   round. Otherwise the answer goes to the person ("no verdict" below).
 4. The summary's `verdict` is the outcome, except when QA's `fail` comes
    only from `mismatch (script)` lines: then the outcome is `script`. Write
    `status.py note --file <task folder>/status.jsonl --stage <step> --event
