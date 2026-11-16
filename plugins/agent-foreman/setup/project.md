@@ -18,7 +18,10 @@ and the project's full test command. Saved at the project's level.
 - The full test command, from the checkout: first what `CLAUDE.md` (or
   `AGENTS.md`) says runs the tests, then the commands of the CI files'
   test jobs (`.github/workflows/*.yml` and the like), then a `Makefile` or
-  `package.json` test target. Note where each one came from.
+  `package.json` test target. Note where each one came from. A CI job's
+  test step often needs what the job sets up first. Write the job's `env:`
+  values before its command as `NAME=value`, and put the steps the test
+  step needs first (install, build) before it, joined with `&&`.
 
 ## 2. Show and ask once
 
@@ -60,7 +63,27 @@ ready. Exit 3 lists the problems:
 Save a machine that has problems only when the person says so; the
 foreman's preflight checks it again.
 
-## 4. Save
+## 4. Run the full test command once
+
+A new or changed full test command runs once before it is saved. Ask with
+AskUserQuestion: `Run it once` (recommended), or `Save without running`.
+Say that a run takes the time and disk of a whole test run, and that a
+command saved without a run may fail at the first gate.
+
+To run it, take one chosen machine, with no task running there when
+possible. Make a clone at the default branch, run the command in it in the
+background, and remove the clone:
+
+```bash
+python3 <skill>/scripts/clone.py make --project <repo> --task setup --agent tests --ref origin/<default branch> --no-push --machine <label>
+python3 <skill>/scripts/remote.py <label> --cwd <clone> -- sh -c '<full test command>'
+python3 <skill>/scripts/clone.py remove --project <repo> --task setup --agent tests --machine <label>
+```
+
+Exit 0: save it. Otherwise show the last lines of the output, and ask for
+the command to save: a fixed one (it runs again), or none.
+
+## 5. Save
 
 At the project's level (`setup.md` "4. Save"). A new project's settings:
 

@@ -57,17 +57,17 @@ summary is the last line of stdout.
 | `denials` | How many tool calls the permission mode refused |
 | `out` | The file with the agent's whole JSON result |
 | `verdict` | The word on the last `Verdict:` line of the answer, or empty |
-| `error` | When not `ok`: the end of the error text |
+| `error` | When not `ok`: the end of the error text, or the exit code and the end of stderr when the agent exited with an error after its result |
 
 Next to `out`, `<out without .json>.meta.json` records the role, the agent,
-the profile and model, the commit it judged and the verdict; the gate reads
-both.
+the profile and model, the commit it judged, the verdict, and the agent's
+exit code and the end of its stderr; the gate reads both.
 
 ## Exit codes
 
 | Code | Meaning | Next |
 | --- | --- | --- |
-| 0 | `ok` | Read the result |
+| 0 | `ok` | Read the result. An empty `verdict` and no `Verdict` anywhere in the answer: the agent stopped before its end; run the next command once, as for 5 |
 | 5 | The run failed: a usage limit, a gateway error, no result | Run the next command `loop.py prompt` printed; with none left, ask the person |
 | 3 | Setup needed | `config.py check --project <repo>` names it; setup (`/agent-foreman:agent-foreman setup`) fixes it |
 | 4 | The gateway's token variable is not set on that machine | Tell the person the variable and the machine |

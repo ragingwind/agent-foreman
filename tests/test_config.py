@@ -1,7 +1,9 @@
+import http.server
 import io
 import json
 import os
 import subprocess
+import threading
 import unittest
 from unittest import mock
 
@@ -10,6 +12,73 @@ from helpers import TempHome, providers, run
 import config
 
 MACHINES = {"m1": {"target": "host-1", "enabled": True}, "off": {"target": "host-2", "enabled": False}}
+
+
+class ModelLists(unittest.TestCase):
+    """`check --models`: each provider with a base_url is asked for its model list."""
+
+    def setUp(self):
+        self.home = TempHome()
+        self.addCleanup(self.home.close)
+        seen = self.seen = []
+
+        class Provider(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append((self.path, self.headers.get("Authorization"), self.headers.get("x-api-key")))
+                if not self.path.startswith("/ok/v1/models"):
+                    self.send_error(404)
+                    return
+                if self.headers.get("Authorization") != "Bearer k-123" and self.headers.get("x-api-key") != "k-123":
+                    self.send_error(401)
+                    return
+                second = "after_id=vendor%2Fgood" in self.path
+                page = ({"data": [{"id": "vendor/other"}], "has_more": False} if second else
+                        {"data": [{"id": "vendor/good"}], "has_more": True, "last_id": "vendor/good"})
+                body = json.dumps(page).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Provider)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+        self.home.write("config/agent-foreman/providers.json", providers(
+            {"id": "gw", "base_url": f"{url}/ok", "auth": "bearer", "token_env": "GW_KEY",
+             "models": [{"id": "vendor/good", "name": "good", "context": 1000},
+                        {"id": "vendor/typo", "name": "typo", "context": 1000}]},
+            {"id": "keyed", "base_url": f"{url}/ok/", "auth": "x-api-key", "token_env": "GW_KEY",
+             "models": [{"id": "vendor/other", "name": "other", "context": 1000}]},
+            {"id": "gone", "base_url": f"{url}/missing", "auth": "bearer", "token_env": "GONE_KEY",
+             "models": [{"id": "vendor/x", "name": "x", "context": 1000}]}))
+        self.env = {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
+
+    def test_a_model_missing_from_the_list_is_a_problem(self):
+        r = run("config.py", "check", "--models", env={**self.env, "GW_KEY": "k-123", "GONE_KEY": "k-9"})
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("model good (vendor/good) at gw: listed", r.stdout)
+        self.assertIn("model other (vendor/other) at keyed: listed", r.stdout)  # the second page, by x-api-key
+        self.assertIn("model typo (vendor/typo) at gw: not listed: ", r.stdout)
+        self.assertIn("lists 2 models, not this one", r.stdout)
+        self.assertIn("model x (vendor/x) at gone: unknown: ", r.stdout)
+        self.assertIn("/missing/v1/models answered HTTP 404", r.stdout)
+        self.assertNotIn("k-123", r.stdout + r.stderr)
+        self.assertNotIn("k-9", r.stdout + r.stderr)
+        self.assertIn(("/ok/v1/models?limit=1000", None, "k-123"), self.seen)  # the slash in base_url is not doubled
+
+    def test_without_a_key_or_a_list_the_models_are_unknown(self):
+        r = run("config.py", "check", "--models", env={**self.env, "GW_KEY": "", "GONE_KEY": ""})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("model typo (vendor/typo) at gw: unknown: token variable GW_KEY is not set", r.stdout)
+        self.assertEqual(self.seen, [])  # nothing is asked without a key
+        r = run("config.py", "check", env={**self.env, "GW_KEY": "k-123"})
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "ok"))  # plain check uses no network
+        self.assertEqual(self.seen, [])
 
 
 class Levels(unittest.TestCase):

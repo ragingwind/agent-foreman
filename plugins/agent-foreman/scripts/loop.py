@@ -43,6 +43,7 @@ Usage:
   loop.py render --project OWNER/REPO --task N --difficulty low|mid|high --machine MACHINE
                  [--base BRANCH] [--lead PROFILE] [--loop work|check] [--trivial] [--agent KIND] [--json]
   loop.py prompt --step ID [--task-dir DIR] [--agent NAME]
+  loop.py post --step ID --pr N [--task-dir DIR] [--agent NAME]
 
 `render --json` prints the task's loop as data: its work and check steps,
 the base, the lead's profile (--lead, the one the lead really runs on; by
@@ -60,7 +61,17 @@ AF_TASK_DIR, --agent to `<role>-1`. A step that follows an earlier step of the
 same role (the pair's recheck) gets only the diff since that agent's last
 answer.
 
-Exit codes: 1 = a machine could not be read, 2 = bad arguments, 3 = setup needed.
+`post`, for a project with `post_answers`, posts the latest saved answer of
+the step's role (of --agent, when given) on pull request N, whole, as one
+comment (`gate.py` answer_comment). The verdict checks of the verification
+session then count an answer only when that comment is on the pull request,
+so an answer that someone else posts or changes does not count. It posts
+nothing when the same comment is already there, refuses a failed run, and
+refuses an answer longer than one comment holds. Run it on the task's
+machine: the answers are in its task folder.
+
+Exit codes: 1 = a machine could not be read, or gh failed, or nothing to
+post, 2 = bad arguments, 3 = setup needed.
 """
 import argparse
 import glob
@@ -359,6 +370,17 @@ def stage_labels(cfg, task, steps):
     return out
 
 
+def full_test_command(task_loop):
+    """The project's full test command as a role runs it: through fulltest.py, next to this file, which runs
+    one at a time on the machine and not under the disk floor."""
+    command = task_loop.get("tests_full")
+    if not command:
+        return "none is set; write `not run: no full test command`"
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fulltest.py")
+    return (f"python3 {shlex.quote(script)} --min-free-gb {task_loop.get('disk_min_free_gb', 0):g} -- "
+            f"{shlex.quote(command)}")
+
+
 def as_data(cfg, task, difficulty, trivial, resolved, call_name, repo, base, lead, profiles):
     """A task's loop as data, for `loop.json` in its task folder: the work
     and check steps that run, and what the role prompts and the gate need.
@@ -366,6 +388,8 @@ def as_data(cfg, task, difficulty, trivial, resolved, call_name, repo, base, lea
     loop = cfg["loop"]
     out = {"repo": repo, "task": task, "base": base, "difficulty": difficulty, "trivial": trivial,
            "lead_profile": lead, "tests_full": cfg.get("tests", {}).get("full"),
+           "disk_min_free_gb": cfg["ops"]["disk_min_free_gb"] if cfg["ops"].get("disk_check", True) else 0,
+           "post_answers": cfg.get("post_answers") is True,
            "gate": [dict(c) for c in cfg.get("gate", [])],
            "max_lines": cfg["difficulty"]["lines"], "roles": {}}
     overrides = cfg.get("skills", {})
@@ -436,7 +460,7 @@ def role_run(task_loop, task_dir, step_id, agent, head, launch):
     skills = ", ".join(REPLACED_NOTE.sub("", s) for s in step["skills"])
     values = {"task": task_loop["task"], "repo": task_loop["repo"], "base": base, "head": head, "diff": diff,
               "task folder": task_dir, "skill": skills, "skills": skills,
-              "full test command": task_loop.get("tests_full") or "none is set; write `not run: no full test command`",
+              "full test command": full_test_command(task_loop),
               "trivial": "yes" if task_loop.get("trivial") else "no"}
     text = role["prompt"]
     for key, value in values.items():
@@ -532,9 +556,69 @@ def prompt_cli(args):
     return 0
 
 
+COMMENT_LIMIT = 65536  # GitHub's longest comment body
+
+
+def post_cli(args):
+    import tempfile
+    from gate import answer_comment, gh_pages, last_verdict, latest_answers, same_body
+    task_dir = args.task_dir or os.environ.get("AF_TASK_DIR")
+    if not (args.step and args.pr and task_dir):
+        print("loop.py: post needs --step, --pr and a task folder (--task-dir or AF_TASK_DIR)", file=sys.stderr)
+        return 2
+    task_dir = os.path.abspath(os.path.expanduser(task_dir))
+    try:
+        with open(os.path.join(task_dir, "loop.json"), encoding="utf-8") as f:
+            task_loop = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"loop.py: no readable loop.json in {task_dir}: {e}", file=sys.stderr)
+        return 2
+    step = next((s for w in ("work", "check") for s in task_loop.get(w, []) if s["id"] == args.step), None)
+    if step is None or step["actor"] not in task_loop.get("roles", {}):
+        print(f"loop.py: {args.step} is not a step of a role agent in this task's loop", file=sys.stderr)
+        return 2
+    role, repo = step["actor"], task_loop["repo"]
+    answers = [a for a in latest_answers(task_dir, role) if args.agent in (None, a[0])]
+    if not answers:
+        print(f"loop.py: no saved {role} answer in {os.path.join(task_dir, 'reviews')}", file=sys.stderr)
+        return 1
+    agent, meta, text = max(answers, key=lambda a: str(a[1].get("ended", "")))
+    if meta.get("ok") is not True:
+        print(f"loop.py: the last run of {agent} failed; it has no answer to post", file=sys.stderr)
+        return 1
+    body = answer_comment(role, agent, args.pr, meta, text)
+    if len(body) > COMMENT_LIMIT:
+        print(f"loop.py: the answer of {agent} is {len(body)} characters; one comment holds {COMMENT_LIMIT}",
+              file=sys.stderr)
+        return 1
+    out = {"step": args.step, "agent": agent, "head": meta.get("head"), "verdict": last_verdict(text),
+           "pr": args.pr, "chars": len(body)}
+    try:
+        if any(same_body(c.get("body") or "", body)
+               for c in gh_pages("api", "--paginate", f"repos/{repo}/issues/{args.pr}/comments?per_page=100")
+               if isinstance(c, dict)):
+            print(json.dumps({"status": "posted before", **out}, indent=2))
+            return 0
+    except RuntimeError as e:
+        print(f"loop.py: {e}", file=sys.stderr)
+        return 1
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
+        f.write(body)
+    try:
+        r = subprocess.run(["gh", "pr", "comment", str(args.pr), "--repo", repo, "--body-file", f.name],
+                           capture_output=True, text=True)
+    finally:
+        os.unlink(f.name)
+    if r.returncode != 0:
+        print(f"loop.py: gh pr comment failed: {r.stderr.strip()[:300]}", file=sys.stderr)
+        return 1
+    print(json.dumps({"status": "posted", "url": (r.stdout.strip().splitlines() or [""])[-1], **out}, indent=2))
+    return 0
+
+
 def _cli(argv):
     ap = argparse.ArgumentParser(prog="loop.py", description="agent-foreman loops")
-    ap.add_argument("command", choices=["show", "skills", "render", "prompt"])
+    ap.add_argument("command", choices=["show", "skills", "render", "prompt", "post"])
     ap.add_argument("--project", metavar="OWNER/REPO")
     ap.add_argument("--loop", default="work", choices=LOOPS)
     ap.add_argument("--machine")
@@ -544,12 +628,16 @@ def _cli(argv):
     ap.add_argument("--base", help="render --json: the branch the task starts from and merges into")
     ap.add_argument("--lead", metavar="PROFILE", help="render: the profile the lead runs on")
     ap.add_argument("--json", action="store_true", help="render: the task's loop as data, for loop.json")
-    ap.add_argument("--step", help="prompt: the step a role agent runs")
-    ap.add_argument("--task-dir", help="prompt: the task folder (default: AF_TASK_DIR)")
-    ap.add_argument("--agent", help="render: the agent kind; prompt: the role agent's name (default <role>-1)")
+    ap.add_argument("--step", help="prompt, post: the step a role agent runs")
+    ap.add_argument("--task-dir", help="prompt, post: the task folder (default: AF_TASK_DIR)")
+    ap.add_argument("--agent", help="render: the agent kind; prompt: the role agent's name (default <role>-1); "
+                                    "post: only this agent's answer")
+    ap.add_argument("--pr", type=int, help="post: the pull request number")
     args = ap.parse_args(argv)
     if args.command == "prompt":
         return prompt_cli(args)
+    if args.command == "post":
+        return post_cli(args)
 
     import adapters
     from config import (EXIT_SETUP_NEEDED, REPO, herdr_machines, lead_profile, load, local_skills, plugin_dirs,

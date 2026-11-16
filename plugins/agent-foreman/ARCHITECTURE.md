@@ -427,6 +427,9 @@ Pass conditions are code, not prose (`scripts/gate.py`).
     (`launch.py --role`) ran to the end with a `Verdict:` the role accepts,
     at the head commit (with `--cwd`, also at an earlier commit whose change
     is the same, by `git patch-id`), on a profile other than the lead's.
+    For a project with `post_answers`, the verification session's verdict
+    checks also need a pull request comment that holds that answer whole,
+    as `loop.py post` writes it.
   - `tests-weakened`: no removed test file, added skip or focus marker,
     edited CI file, changed coverage threshold, or edited agent instructions
     (`.claude/`, `CLAUDE.md`, `AGENTS.md`), except what `allow` names.
@@ -555,7 +558,8 @@ Pass conditions are code, not prose (`scripts/gate.py`).
   dir`). Every record of the task is there. A project skill that a step uses
   may also write its usual output, such as labels and comments. Apart from
   that, nothing goes in issue or pull request comments except the pull
-  request body.
+  request body and, for a project with `post_answers`, the verification
+  session's answers, which the foreman posts whole (`loop.py post`).
 
   | File | Written by | Holds |
   | --- | --- | --- |
@@ -589,6 +593,11 @@ Pass conditions are code, not prose (`scripts/gate.py`).
   open items (`setup` log event) and each retro's changes and expectations
   (`retro` log event), so the next retro checks them. No skill file is
   edited.
+- **Error reports**: `error-reports/E<n>.json` in the same folder, one per
+  problem, in one form (`errors.py`, `error-report.md`): what happened, the
+  evidence, how to reproduce it, the cause, the fixes and their owners.
+  `errors.py collect` copies the task's records into `E<n>/`, so they
+  outlast the clean-up.
 - **The foreman's place**: `~/.local/state/agent-foreman/foreman/<owner>-<repo>.json`,
   the project's last foreman session (id, transcript, folder, time). The
   plugin's `Stop` hook writes it at each turn's end; its `SessionStart` hook,

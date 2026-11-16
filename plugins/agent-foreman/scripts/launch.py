@@ -43,7 +43,9 @@ to --out, and one line of JSON is printed: ok, session_id, cost, denials,
 out, and verdict (the word on the answer's last `Verdict:` line). Next to
 --out it writes `<out without .json>.meta.json`: the role (--role), the
 agent's name, the profile and its model, the commit checked out where the
-agent ran, its verdict, and when it started and ended. The gate reads
+agent ran, its verdict, when it started and ended, and the agent's exit
+code and the last 2000 characters of its stderr. A run whose result says
+success but whose exit code is not 0 is not ok. The gate reads
 verdicts from there, so --role needs --task-dir and --name, an --out inside
 the task folder's reviews/, and a git checkout to run in (`loop.py prompt`
 prints this command whole).
@@ -212,16 +214,24 @@ def run_once(adapter, argv, env, prompt_file, out, meta=None):
     with open(prompt_file, "rb") as prompt:
         proc = subprocess.run(argv, stdin=prompt, capture_output=True, env=env)
     text = proc.stdout.decode("utf-8", "replace")
+    stderr = proc.stderr.decode("utf-8", "replace")
     write_atomic(out, text)
     summary = adapter.parse_print(text)
     ok = summary["ok"] and proc.returncode == 0
     verdict = last_verdict(summary["result"]) if ok else ""
     write_atomic(meta_path(out), json.dumps({**(meta or {}), "started": started, "ended": now_iso(), "ok": ok,
-                                             "verdict": verdict, "session_id": summary["session_id"]},
+                                             "verdict": verdict, "session_id": summary["session_id"],
+                                             "exit_code": proc.returncode, "stderr": stderr[-2000:]},
                                             indent=2) + "\n")
+    if ok:
+        error = None
+    elif summary["ok"]:
+        error = f"exit {proc.returncode} after a result: {stderr[-300:]}"
+    else:
+        error = (summary["result"] or stderr)[-300:]
     print(json.dumps({"ok": ok, "session_id": summary["session_id"], "cost": summary["cost"],
                       "denials": len(summary["denials"]), "out": os.path.abspath(out), "verdict": verdict,
-                      "error": None if ok else (summary["result"] or proc.stderr.decode("utf-8", "replace"))[-300:]}))
+                      "error": error}))
     return 0 if ok else EXIT_AGENT_ERROR
 
 

@@ -118,7 +118,7 @@ class Run:
         os.makedirs(project, exist_ok=True)
         with open(os.path.join(project, "project.json"), "w") as f:
             json.dump({"repo": REPO, "workspace": "repo", "machines": {"local": self.checkout},
-                       "tests": {"full": "make test"}}, f)
+                       "tests": {"full": "make test"}, "post_answers": True}, f)
         out = json.loads(self.script("bundle.py", "push", "local", "--project", REPO).stdout)
         self.bundle = out["path"]
         say(f"bundle {out['hash']} with {len(out['skills'])} skills")
@@ -378,6 +378,10 @@ class Run:
                 self.script("status.py", "note", "--file", os.path.join(task_dir, "status.jsonl"), "--stage",
                             step["stage"], "--step", step["id"], "--event", "end", "--outcome", outcome, "--round",
                             str(round_), "--done", f"{role}-1: Verdict {verdict}, {summary.get('out')}")
+                posted = self.script("loop.py", "post", "--step", step["id"], "--task-dir", task_dir, "--pr", str(pr),
+                                     check=False, where=os.path.join(self.bundle, "scripts"))
+                results[step["id"]]["posted"] = (json.loads(posted.stdout)["status"] if posted.returncode == 0
+                                                 else f"not posted: {posted.stderr.strip()[-200:]}")
 
         threads = [threading.Thread(target=one, args=(s,)) for s in check_steps]
         for t in threads:
@@ -462,6 +466,7 @@ class Run:
             for r in rec["roles"]:
                 md.append(f"- Round {r['round']}: " + "; ".join(
                     f"{k} {v['verdict'] or 'no verdict'}" + (f" ({v['error']})" if v.get("error") else "")
+                    + (f", {v['posted']}" if v.get("posted") else "")
                     for k, v in r.items() if k != "round"))
             for key in ("gate_before_ready", "gate_merge"):
                 if rec.get(key):

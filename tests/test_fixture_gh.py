@@ -108,6 +108,31 @@ class FakeGh(unittest.TestCase):
         self.assertEqual(self.gh("repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner").stdout.strip(),
                          "o/r")
 
+    def test_comments_and_a_posted_answer(self):
+        self.create()
+        body = self.home.write("c.md", "line one\nline two\n")
+        self.assertEqual(self.gh("pr", "comment", "1", "--repo", "o/r", "--body-file", body).returncode, 0)
+        self.assertEqual(self.gh("pr", "comment", "1", "--body", "short").returncode, 0)
+        got = json.loads(self.gh("api", "--paginate", "repos/o/r/issues/1/comments?per_page=100").stdout)
+        self.assertEqual([(c["body"], c["user"]["login"]) for c in got],
+                         [("line one\nline two\n", "lead"), ("short", "lead")])
+        task = os.path.join(self.home.root, "task")
+        self.home.write("task/loop.json", task_loop(difficulty="low", repo="o/r"))
+        self.home.write("task/reviews/qa-1-1.json", {"result": "ran: make test — exit 0\nVerdict: pass"})
+        self.home.write("task/reviews/qa-1-1.meta.json", {"role": "qa", "agent": "qa-1", "profile": "opus",
+                                                         "head": self.head, "ended": "2026-11-16T00:00:00Z", "ok": True})
+        bindir = os.path.join(self.home.root, "bin")
+        os.makedirs(bindir)
+        shutil.copy(GH, os.path.join(bindir, "gh"))
+        env = {**self.env, "PATH": bindir + os.pathsep + os.environ["PATH"], "AF_AGENT": "foreman"}
+        for status in ("posted", "posted before"):
+            r = run("loop.py", "post", "--step", "test", "--task-dir", task, "--pr", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(r.stdout)["status"], status)
+        comments = self.read()["prs"]["1"]["comments"]
+        self.assertEqual(len(comments), 3)
+        self.assertTrue(comments[2]["body"].startswith(f"## qa answer by qa-1 on #1 at {self.head[:7]}"))
+
     def test_what_it_does_not_know_is_refused_and_logged(self):
         for args in (["release", "list"], ["api", "-X", "PUT", "repos/o/r/pulls/1/merge"]):
             r = self.gh(*args)

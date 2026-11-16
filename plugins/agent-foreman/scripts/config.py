@@ -33,7 +33,7 @@ Usage:
   config.py paths [--project OWNER/REPO]
   config.py providers [--init]   (the models file: its path and problems; --init copies the sample when missing)
   config.py show [--project OWNER/REPO]
-  config.py check [--project OWNER/REPO]
+  config.py check [--project OWNER/REPO] [--models]
   config.py save user|project [--project OWNER/REPO] [--dry-run]   (full settings as JSON on stdin)
   config.py check-machine MACHINE PATH --project OWNER/REPO   (is the machine ready for the project's agents)
   config.py plugin-dir-candidates   (this session's --plugin-dir directories, agent-foreman left out, then
@@ -42,6 +42,13 @@ Usage:
   config.py tier --difficulty low|mid|high --role ROLE [--skip PROFILE,...]
       (a role other than the lead gets its tier and higher ones, never the lead's profile)
   config.py profiles | projects | machines | skills
+
+`check --models` also asks each provider with a base_url for its model list
+(`<base_url>/v1/models`, with the provider's auth and the key from its
+token_env, never printed) and prints each model as listed, not listed, or
+unknown. Only a model missing from a list the provider gave is a problem. A
+provider without a list there, a missing key or a network error leaves its
+models unknown. It uses the network; plain `check` does not.
 
 `plugin_dirs` in the settings lists plugin directories the person loads with
 `--plugin-dir` (often through a `claude` shell wrapper). Skill lookups pass
@@ -78,7 +85,7 @@ LABEL_EVENTS = ["blocked", "exited", "owner-decision"]
 PLACEHOLDERS = ["task", "stage", "round", "machine", "profile", "project"]
 SECTIONS = ["plugin_dirs", "gateways", "profiles", "tiers", "difficulty", "launch", "bundle", "skills", "loop", "labels",
             "report", "ops"]
-PROJECT_KEYS = ["repo", "workspace", "machines", "tests", "gate"]
+PROJECT_KEYS = ["repo", "workspace", "machines", "tests", "gate", "post_answers"]
 MODEL_KEYS = ["gateways", "profiles", "tiers"]  # from providers.json, never from config.json or project.json
 PROVIDER_KEYS = ["id", "name", "base_url", "auth", "token_env", "models"]
 MODEL_ENTRY_KEYS = ["id", "name", "context", "roles", "agent"]
@@ -392,6 +399,64 @@ def providers_problems(data):
     return problems
 
 
+def _model_ids(url, headers, opener):
+    """Every model id the provider lists at url, following Anthropic's pages (has_more, last_id)."""
+    import urllib.parse
+    import urllib.request
+    ids, after = [], None
+    for _ in range(20):
+        query = {"limit": 1000, **({"after_id": after} if after else {})}
+        request = urllib.request.Request(f"{url}?{urllib.parse.urlencode(query)}", headers=headers)
+        with opener(request, timeout=15) as response:
+            page = json.loads(response.read().decode("utf-8"))
+        data = page.get("data") if isinstance(page, dict) else None
+        if not isinstance(data, list):
+            raise ValueError("the answer has no data list")
+        ids += [m["id"] for m in data if isinstance(m, dict) and isinstance(m.get("id"), str)]
+        if not (page.get("has_more") and page.get("last_id")):
+            return ids
+        after = page["last_id"]
+    return ids
+
+
+def model_lists(cfg, env=None, opener=None):
+    """For each anthropic-compatible gateway's model: (gateway, profile name, model id, state, why). state is
+    listed, not listed or unknown. The key is read from the gateway's token_env and only sent to its base_url."""
+    import urllib.error
+    import urllib.request
+    env = os.environ if env is None else env
+    opener = opener or urllib.request.urlopen
+    out = []
+    for gw_name, gw in sorted(cfg.get("gateways", {}).items()):
+        if gw.get("kind") != "anthropic-compatible":
+            continue
+        models = sorted((name, m.get("id", name)) for name, m in (gw.get("models") or {}).items())
+        url = gw["base_url"].rstrip("/") + "/v1/models"
+        token = env.get(gw.get("token_env") or "")
+        ids, why = None, ""
+        if not token:
+            why = f"token variable {gw.get('token_env')} is not set"
+        else:
+            headers = {"anthropic-version": "2023-06-01", "Accept": "application/json"}
+            if gw.get("auth") == "x-api-key":
+                headers["x-api-key"] = token
+            else:
+                headers["Authorization"] = f"Bearer {token}"
+            try:
+                ids = set(_model_ids(url, headers, opener))
+            except urllib.error.HTTPError as e:
+                why = f"{url} answered HTTP {e.code}"
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                why = f"no model list from {url}: {getattr(e, 'reason', e)}"
+        for name, model_id in models:
+            if ids is None:
+                out.append((gw_name, name, model_id, "unknown", why))
+            else:
+                out.append((gw_name, name, model_id, "listed" if model_id in ids else "not listed",
+                            "" if model_id in ids else f"{url} lists {len(ids)} models, not this one"))
+    return out
+
+
 def with_providers(cfg):
     """`cfg` with the models of providers.json, when the file exists."""
     if not os.path.exists(providers_path()):
@@ -625,6 +690,8 @@ def validate(cfg, saved=None, skills=None, project=False):
         elif "full" in tests and not (isinstance(tests["full"], str) and tests["full"].strip()):
             problems.append("project: tests.full must be a command")
         problems += [f"project: {p}" for p in gates.project_check_problems(cfg.get("gate", []))]
+        if not isinstance(cfg.get("post_answers", False), bool):
+            problems.append("project: post_answers must be true or false")
         if not REPO.match(str(cfg.get("repo", ""))):
             problems.append("project: repo must look like owner/name")
         if not str(cfg.get("workspace", "")).strip():
@@ -958,6 +1025,7 @@ def _cli(argv):
     ap.add_argument("--task", default="<task>")
     ap.add_argument("--agent", default=adapters.DEFAULT, choices=adapters.KINDS)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--models", action="store_true", help="check: ask each provider for its model list")
     args = ap.parse_args(argv)
     if args.project and not REPO.match(args.project):
         print(f"config.py: --project must look like owner/name, not {args.project!r}", file=sys.stderr)
@@ -989,6 +1057,10 @@ def _cli(argv):
                                      skills=local_skills(plugin_list(plugin_dirs(cfg))))
         if args.project and not os.path.exists(project_path(args.project)):
             problems.insert(0, f"project {args.project} has no settings yet ({project_path(args.project)})")
+        if args.models:
+            for gw, name, model_id, state, why in model_lists(cfg):
+                line = f"model {name} ({model_id}) at {gw}: {state}" + (f": {why}" if why else "")
+                (problems.append(line) if state == "not listed" else print(line))
         for p in problems:
             print(p)
         if problems:

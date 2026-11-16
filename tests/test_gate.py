@@ -130,6 +130,17 @@ class CommandChecks(unittest.TestCase):
         self.assertFalse(gate.evaluate(pr(baseRefName="dev"), g, cwd=os.getcwd(), task_dir="/t")["pass"])
         self.assertEqual(gate.evaluate(pr(), g)["checks"][0]["evidence"], "needs --cwd")
 
+    def test_the_full_tests_run_one_at_a_time_and_not_under_the_disk_floor(self):
+        home = TempHome()
+        self.addCleanup(home.close)
+        g = {"repo": "o/r", "pr": 7, "checks": [{"check": "command", "run": "true", "full": True, "min_free_gb": 1e9}]}
+        report = gate.evaluate(pr(), g, cwd=home.root)
+        self.assertEqual((report["pass"], report["blocked"]), (False, ["command"]))
+        self.assertIn("exit 75: fulltest.py: not run:", report["checks"][0]["evidence"])
+        g["checks"][0]["min_free_gb"] = 0
+        self.assertTrue(gate.evaluate(pr(), g, cwd=home.root)["pass"])
+        self.assertTrue(os.path.exists(os.path.join(home.root, "cache", "agent-foreman", "locks", "full-test.lock")))
+
     def test_named_commands_report_and_skip_apart(self):
         g = {"repo": "o/r", "pr": 7, "checks": [{"check": "command", "run": "true"},
                                                 {"check": "command", "name": "closing-keyword", "run": "false"},
@@ -433,6 +444,40 @@ class RoleChecks(unittest.TestCase):
         self.assertIn("changed after the brief", check("loop-file", pr(), task_dir=root, sha256=sha)[1])
 
 
+class PostedAnswers(unittest.TestCase):
+    """post_answers: a verification verdict counts only when its saved answer is on the pull request, whole."""
+
+    def setUp(self):
+        self.home = TempHome()
+        self.addCleanup(self.home.close)
+        self.task = task_folder(self.home, [("redteam-1", "redteam", "opus", "approved", HEAD, "2026-11-14T02:00:00Z")])
+        with open(os.path.join(self.task, "reviews", "redteam-1-2026-11-14T02:00:00Z.meta.json")) as f:
+            self.body = gate.answer_comment("redteam", "redteam-1", 7, json.load(f), "must-fix: none\nVerdict: approved")
+
+    def verdict(self, comments, posted=True):
+        return check("verdict", pr(comments=comments), role="redteam", task_dir=self.task, posted=posted)
+
+    def test_only_the_saved_answer_whole_counts(self):
+        self.assertTrue(self.body.startswith(f"## redteam answer by redteam-1 on #7 at {HEAD[:7]}\n\n"
+                                             "must-fix: none\nVerdict: approved\n\n---\n"))
+        ok, why = self.verdict([])
+        self.assertFalse(ok)
+        self.assertIn("redteam-1 opus a1b2c3d approved (not on the pull request as saved)", why)
+        self.assertTrue(self.verdict([{"body": "other"}, {"body": self.body.replace("\n", "\r\n") + "  \n"}])[0])
+        edited = self.body.replace("must-fix: none", "must-fix: none, all checked")
+        self.assertFalse(self.verdict([{"body": edited}])[0])  # a posted answer that differs from the saved one
+        self.assertTrue(self.verdict([], posted=False)[0])  # without post_answers, nothing is looked up
+
+    def test_the_template_asks_for_it_at_merge_only(self):
+        data = task_loop(config.merge(config.load(), {"post_answers": True}), difficulty="mid", lead="sonnet")
+        self.assertTrue(data["post_answers"])
+        verdicts = [c for c in gate.template(data)["checks"] if c["check"] == "verdict"]
+        self.assertEqual([(c["role"], c.get("at"), c.get("posted")) for c in verdicts],
+                         [("pair", None, None), ("redteam", "merge", True), ("qa", "merge", True)])
+        plain = gate.template(task_loop(difficulty="mid", lead="sonnet"))
+        self.assertFalse([c for c in plain["checks"] if c.get("posted")])
+
+
 class Template(unittest.TestCase):
     def setUp(self):
         self.home = TempHome()
@@ -461,7 +506,10 @@ class Template(unittest.TestCase):
         self.assertEqual([c for c in low["checks"] if c["check"] == "size"][0]["severity"], "warn")
         self.assertFalse([c for c in low["checks"] if c["check"] in ("command", "loop-file")])
         cmd = gate.template(task_loop(config.merge(self.cfg, {"tests": {"full": "make test"}}), difficulty="low"))
-        self.assertEqual([c["run"] for c in cmd["checks"] if c["check"] == "command"], ["make test"])
+        self.assertEqual([c for c in cmd["checks"] if c["check"] == "command"],
+                         [{"check": "command", "run": "make test", "full": True, "min_free_gb": 20}])
+        off = config.merge(self.cfg, {"tests": {"full": "make test"}, "ops": {"disk_check": False}})
+        self.assertEqual([c["min_free_gb"] for c in gate.template(task_loop(off))["checks"] if c.get("full")], [0])
 
 
 def git_repo(home):

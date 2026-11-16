@@ -201,6 +201,9 @@ REPORT: <ready | decision | blocked | waiting> — <one line: the pull request, 
 Run commands from outside any directory you are about to remove. When a
 removal is refused, do not retry it or work around it: write the exact paths
 under `--blocked` in the status file and go on with what does not need them.
+Remove only what your run made. When the disk is full, do not free space by
+removing anything else, such as another clone: report `blocked` with the
+free space.
 
 ## Clean-up
 

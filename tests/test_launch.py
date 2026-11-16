@@ -145,6 +145,9 @@ if os.environ.get("FAKE_RESULT"):
 if mode == "error":
     out.update(is_error=True, subtype="error_during_execution", result="rate limited")
 print(json.dumps(out))
+if mode == "exit-after-result":
+    sys.stderr.write("x" * 3000 + "disk full")
+    sys.exit(2)
 """
 
 
@@ -194,6 +197,22 @@ class PromptMode(unittest.TestCase):
             summary = json.loads(r.stdout)
             self.assertFalse(summary["ok"])
             self.assertIn(words, summary["error"])
+
+    def test_exit_code_and_stderr_are_recorded(self):
+        r = self.launch("opus", FAKE_MODE="exit-after-result", FAKE_RESULT="done\nVerdict: approved")
+        self.assertEqual(r.returncode, 5)
+        summary = json.loads(r.stdout)
+        self.assertEqual((summary["ok"], summary["verdict"]), (False, ""))
+        self.assertTrue(summary["error"].startswith("exit 2 after a result: "), summary["error"])
+        self.assertTrue(summary["error"].endswith("disk full"))
+        with open(self.out[:-5] + ".meta.json") as f:
+            meta = json.load(f)
+        self.assertEqual((meta["ok"], meta["exit_code"], len(meta["stderr"])), (False, 2, 2000))
+        self.assertTrue(meta["stderr"].endswith("disk full"))
+        self.launch("opus")
+        with open(self.out[:-5] + ".meta.json") as f:
+            meta = json.load(f)
+        self.assertEqual((meta["ok"], meta["exit_code"], meta["stderr"]), (True, 0, ""))
 
     def test_status_file_is_handed_over_or_cleared(self):
         r = self.launch("opus", "--status", "~/runs/o-r/7/status.jsonl", HOME=self.home.root)

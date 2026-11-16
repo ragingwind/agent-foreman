@@ -94,5 +94,17 @@ provider) and one example: `python3 <skill>/scripts/config.py tier
 variable must be set on every machine that runs its agents; the project
 part's machine check shows where it is missing.
 
+When the file has a provider with a `base_url`, check its model ids against
+the provider's own list too. This uses the network and the providers' keys
+from this shell; it never prints a key:
+
+```bash
+python3 <skill>/scripts/config.py check --models
+```
+
+A model `not listed` is a wrong id: the person fixes it in the file, and
+the check runs again. A model `unknown` was not checked (no key in this
+shell, or no list from the provider); say so, with the reason it prints.
+
 Running agents keep the models they started with; a change applies to the
 agents started after it.

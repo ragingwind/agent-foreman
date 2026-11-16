@@ -9,8 +9,8 @@ several agents can call at once. A pull request's check runs the state's
 It answers what the foreman's scripts and its agents use: `pr create`,
 `view`, `edit`, `ready`, `checks`, `list`, `diff`, `merge`, `close`,
 `comment`; `issue view` and `issue list` (from the state's tasks folder);
-`repo view`; `auth status`; and `api` for a pull request, its files, a
-compare, a commit and the repository. `--json FIELDS` and `-q`/`--jq EXPR`
+`repo view`; `auth status`; and `api` for a pull request, its files, its
+comments, a compare, a commit and the repository. `--json FIELDS` and `-q`/`--jq EXPR`
 work as in gh (jq when it is on PATH). Every call is logged in the state
 with the calling agent (AF_AGENT); anything else is refused with exit 1 and
 logged as unsupported, so a run's report shows what an agent tried.
@@ -278,8 +278,9 @@ def pr(hub, args, fields, query, cwd):
         print(git("--git-dir", hub.origin, "diff", f"{hub.sha('refs/heads/' + p['base'])}...{hub.head_sha(p)}"))
         return 0
     if cmd == "comment":
-        p.setdefault("comments", []).append({"body": take(rest, "--body", "-b") or "",
-                                             "author": os.environ.get("AF_AGENT", "?")})
+        body_file = take(rest, "--body-file", "-F")
+        body = open(body_file, encoding="utf-8").read() if body_file else (take(rest, "--body", "-b") or "")
+        p.setdefault("comments", []).append({"body": body, "author": os.environ.get("AF_AGENT", "?")})
         print(hub.url(p["number"]))
         return 0
     if cmd == "close":
@@ -336,6 +337,11 @@ def api(hub, args, query):
     m = re.fullmatch(rf"repos/{re.escape(repo)}/pulls/(\d+)/files", path)
     if m:
         emit(hub.files(hub.find(m.group(1))), None, query)
+        return 0
+    m = re.fullmatch(rf"repos/{re.escape(repo)}/issues/(\d+)/comments", path)
+    if m:
+        emit([{"body": c.get("body", ""), "user": {"login": c.get("author", "?")}}
+              for c in hub.find(m.group(1)).get("comments", [])], None, query)
         return 0
     m = re.fullmatch(rf"repos/{re.escape(repo)}/pulls/(\d+)", path)
     if m:

@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import unittest
 import zipfile
 from unittest import mock
@@ -43,7 +44,8 @@ class Bundle(unittest.TestCase):
         self.assertNotIn("skills/tidy/__pycache__/x.pyc", files)
         for rel in ("bundle.json", ".claude-plugin/plugin.json", "config.json", "loop.md", "scripts/launch.py",
                     "scripts/config.py", "scripts/transcript.py", "scripts/gate.py", "scripts/status.py",
-                    "scripts/clone.py", "scripts/loop.py", "scripts/heartbeat.py", "scripts/adapters/__init__.py",
+                    "scripts/clone.py", "scripts/loop.py", "scripts/heartbeat.py", "scripts/fulltest.py",
+                    "scripts/adapters/__init__.py",
                     "scripts/adapters/base.py", "scripts/adapters/claude.py"):
             self.assertIn(rel, files)
         self.home.write("skills/tidy/SKILL.md", "---\nname: tidy\n---\nTidy more.")
@@ -58,6 +60,14 @@ class Bundle(unittest.TestCase):
                 continue  # a hook command with no --help; test_status runs it
             r = run(name, "--help", cwd=os.path.join(path, "scripts"))
             self.assertEqual(r.returncode, 0, f"{name}: {r.stderr[-300:]}")
+
+    def test_a_script_that_a_bundled_script_runs_is_bundled(self):
+        here = os.path.dirname(os.path.abspath(bundle.__file__))
+        scripts = {n for n in os.listdir(here) if n.endswith(".py")}
+        for name in bundle.BUNDLED:
+            with open(os.path.join(here, name)) as f:
+                named = set(re.findall(r'"([a-z_]+\.py)"', f.read())) & scripts
+            self.assertEqual(named - set(bundle.BUNDLED), set(), name)  # gate.py and loop.py run fulltest.py
 
     def test_heartbeat_hooks_point_at_the_bundled_script(self):
         _, files, _, _ = bundle.build("o/r", [])

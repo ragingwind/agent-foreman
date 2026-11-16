@@ -91,9 +91,9 @@ foreman session. This session keeps the old path.
 
 | File | What it does |
 | --- | --- |
-| `scripts/config.py` | Settings: `providers` (the models file; `--init` makes it), `check`, `show`, `paths`, `save`, `check-machine`, `machines`, `projects`, `profiles`, `tier`, `skills` |
+| `scripts/config.py` | Settings: `providers` (the models file; `--init` makes it), `check` (`--models` also asks each provider for its model list), `show`, `paths`, `save`, `check-machine`, `machines`, `projects`, `profiles`, `tier`, `skills` |
 | `scripts/score.py` | A task's difficulty: `estimate` from an issue, `diff` from a change (only goes up) |
-| `scripts/loop.py` | Loops: `show` the stages and steps, `render` one task's loop (`--json` for `loop.json`), `prompt` a role agent's prompt and launch commands from `loop.json` |
+| `scripts/loop.py` | Loops: `show` the stages and steps, `render` one task's loop (`--json` for `loop.json`), `prompt` a role agent's prompt and launch commands from `loop.json`, `post` a saved answer on the pull request |
 | `scripts/gate.py` | Pass conditions as code: `record` checks one step's evidence when it ends, `template` writes a task's gate file from its `loop.json`, `hash` its hash for the ledger, `run` checks it |
 | `scripts/bundle.py` | `push <machine>`: the project's bundle (skills, scripts, lead guide), put on a machine once |
 | `scripts/clone.py` | Agent clones: `make`, `check` (made by the foreman), `remove` (refuses to lose work), `archive` (the task folder to the foreman's project folder) |
@@ -103,12 +103,15 @@ foreman session. This session keeps the old path.
 | `scripts/retro.py` | `facts`: what the project's finished tasks show (steps gone back to, minutes, findings, gate blocks, stops, stalls), for the retro |
 | `scripts/transcript.py` | A session's last answers, whole |
 | `scripts/remote.py` | A command on a machine, inside its login shell |
+| `scripts/fulltest.py` | The full test command, one run at a time on a machine, and none under the disk floor; the gate and QA run it |
+| `scripts/errors.py` | Error reports: `new`, `collect` (the task's records into the report), `set`, `add`, `list`, `show`, `check` |
 | `scripts/session.py` | The plugin's hooks: each turn's end notes where this conversation is; a new foreman session starts with the earlier one's last exchanges |
 | `terminals/herdr.md`, `terminals/prompt.md` | How to open, start, send to, read, wait on and close an agent, in a herdr pane or in prompt mode |
 | `adapters/<kind>.md` | What differs per agent kind: trust question, input line, exit. Only `claude` today |
 | `loop.md` | The lead's guide to its build session; every bundle carries it |
 | `kit/skills/` | The default skills, one per loop action; every bundle carries them as `foreman-kit:<name>` |
 | `setup/` | Setting up: `setup.md` runs the parts in order; `models.md`, `project.md`, `loop.md`, `other.md` hold each part |
+| `error-report.md` | How to write an error report: open, collect, reproduce, cause, fix, tell the person |
 | `defaults.json` | The standard settings |
 | `providers.json.sample` | The standard models by provider; `config.py providers --init` copies it for the person to edit |
 
@@ -159,6 +162,13 @@ When the person runs `setup`, or a check below fails, read `setup/setup.md`
 and follow it first: it runs every part, and each question offers the value
 already set first. A request in words to change one setting ("add machine
 build-02") goes only to the part that holds it.
+
+## Error report
+
+When the person says that something went wrong, or something fails in a
+way that no rule in this file covers, read `error-report.md` and write a
+report. Reports stay in the project's folder on this machine; `errors.py
+list --project <repo>` shows them.
 
 ## Preflight, per project
 
@@ -396,9 +406,11 @@ value.
 
 On `REPORT: ready`, check the claim first: run the gate with `--before-ready`
 as the lead did (the command in "Merge gate", plus `--before-ready`). When it
-blocks, send the lead what it lists. When it passes, for each step of the
-check loop in `loop.json` (`redteam-review` by the red team, `test` by QA),
-both at once:
+blocks, send the lead what it lists. When it passes, read the free disk of
+the task's machine (`status.py read`, `disk`). When it is `low`, free space
+first, as for a `low` machine in "Watch", and start the roles after it is
+above the floor. Then, for each step of the check loop in `loop.json`
+(`redteam-review` by the red team, `test` by QA), both at once:
 
 1. A clone at the lead's head, whose agent-instruction files come from the
    base: `clone.py make --project <repo> --task <task> --agent <role>-1
@@ -415,7 +427,11 @@ both at once:
    start` on the task's machine (`remote.py <machine> -- python3
    <bundle>/scripts/status.py note ...` for a remote), then run the first
    command in the clone in
-   the background (`terminals/prompt.md`). Exit 5: the next command.
+   the background (`terminals/prompt.md`). Exit 5: the next command. Exit
+   0 with an empty `verdict`: read the answer (`result` in the `out` file).
+   With no `Verdict` anywhere in it, the agent stopped before its end: run
+   the next command, once per step and round. Otherwise the answer goes to
+   the person ("no verdict" below).
 4. The summary's `verdict` is the outcome, except when QA's `fail` comes
    only from `mismatch (script)` lines: then the outcome is `script`. Write
    `status.py note --file <task folder>/status.jsonl --stage <step> --event
@@ -423,6 +439,11 @@ both at once:
    file>"`. The `--done` text is the step's evidence. The command prints the
    step the task goes to next. Then run `gate.py record --step <step>`
    ("Evidence at every step").
+5. When `loop.json` has `"post_answers": true`, post the answer on the pull
+   request, on the task's machine: `python3 <bundle>/scripts/loop.py post
+   --step <step> --task-dir <task folder> --pr <N>`. It posts the saved
+   answer whole, once. The merge gate counts the role's verdict only when
+   that comment is there. On exit 1, tell the person what it printed.
 
 When both print `stop`: the merge gate. When one names a work step: copy the
 findings (the `must-fix`, `should-fix` and `mismatch` lines with their
@@ -432,11 +453,16 @@ When the two name different steps, send the earlier one in the build
 session. After the lead is ready again, start only the roles whose verdict
 check the merge gate lists as blocked.
 
+A `not run` full test because the disk was under the floor (`fulltest.py:
+not run`) is not QA's finding: free space on the machine and start QA
+again.
+
 These go to the person instead, with the answer's lines: no verdict, an
-`environment` mismatch, a `not run` test (other than `no full test command`), or a failure that also fails on the
-base. When the person says to merge anyway, run the merge gate with `--skip
-verdict:<role>` for that role only and log the person's words. After 3 rounds
-that still find something, stop and ask the person, with the open findings.
+`environment` mismatch, any other `not run` test (other than `no full test
+command`), or a failure that also fails on the base. When the person says
+to merge anyway, run the merge gate with `--skip verdict:<role>` for that
+role only and log the person's words. After 3 rounds that still find
+something, stop and ask the person, with the open findings.
 
 ### Merge gate
 
@@ -453,7 +479,13 @@ python3 <skill>/scripts/remote.py <machine> --cwd <lead's clone> -- \
 lead, except in two cases. `gate-file` or `loop-file` blocked means the lead
 changed a file it must not: tell the person, and merge nothing.
 
-When the full tests (`command`) block, first run only the failing tests
+The full tests run one at a time on a machine (`scripts/fulltest.py`), so
+the gate may wait for another task's run. When `command` blocks with
+`fulltest.py: not run`, the disk is under the floor: free space on the
+machine, as for a `low` machine in "Watch", and run the gate again. Do not
+send it to the lead.
+
+When the full tests (`command`) fail, first run only the failing tests
 again, alone, at the head in the lead's clone. When they fail again, send
 them to the lead. When they pass alone, the test is flaky: tell the person
 the test and both results. When the person says to merge anyway, run the
@@ -597,7 +629,8 @@ not to the ledger.
   repositories.
 - No AI attribution in git or GitHub text.
 - Never have one agent post another agent's answer or verdict. The lead
-  least of all: its work is what the answer judges.
+  least of all: its work is what the answer judges. You post a saved answer
+  only with `loop.py post`, which posts it whole.
 - Before you tell the person that a record exists (a comment, a label, a
   test run), open it. Check its content, who wrote it, the commit it names
   and when it was written.

@@ -377,6 +377,94 @@ def git_clone(home, name="clone"):
     return path, subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
 
 
+POST_GH = """#!/usr/bin/env python3
+import json, os, sys
+state = os.environ["FAKE_GH_COMMENTS"]
+comments = json.load(open(state)) if os.path.exists(state) else []
+args = sys.argv[1:]
+if os.environ.get("FAKE_GH_FAIL"):
+    sys.exit("gh: HTTP 403")
+if args[0] == "api" and args[-1] == "repos/o/r/issues/7/comments?per_page=100":
+    print(json.dumps(comments[:1]))
+    print(json.dumps(comments[1:]))  # gh prints one array per page
+elif args[:3] == ["pr", "comment", "7"] and args[3:5] == ["--repo", "o/r"] and args[5] == "--body-file":
+    comments.append({"body": open(args[6]).read()})
+    json.dump(comments, open(state, "w"))
+    print(f"https://github.com/o/r/pull/7#issuecomment-{len(comments)}")
+else:
+    sys.exit(1)
+"""
+
+
+class Post(unittest.TestCase):
+    """loop.py post: the foreman posts a saved answer on the pull request, whole."""
+
+    def setUp(self):
+        self.home = TempHome()
+        self.addCleanup(self.home.close)
+        self.task = os.path.join(self.home.root, "task")
+        self.home.write("task/loop.json", task_loop(difficulty="mid", lead="sonnet"))
+        bindir = os.path.join(self.home.root, "bin")
+        os.makedirs(bindir)
+        with open(os.path.join(bindir, "gh"), "w") as f:
+            f.write(POST_GH)
+        os.chmod(os.path.join(bindir, "gh"), 0o755)
+        self.state = os.path.join(self.home.root, "comments.json")
+        self.home.write("comments.json", [{"body": "## Manual test for #12"}])
+        self.env = {"PATH": bindir + os.pathsep + os.environ["PATH"], "FAKE_GH_COMMENTS": self.state}
+        self.meta = {"role": "redteam", "agent": "redteam-1", "profile": "opus", "model": "opus", "head": "a" * 40,
+                     "ended": "2026-11-16T02:00:00.000000Z", "ok": True, "session_id": "s-1"}
+        self.answer("must-fix: none\nVerdict: approved")
+
+    def answer(self, text, n=1, **meta):
+        self.home.write(f"task/reviews/redteam-1-{n}.json", {"result": text})
+        self.home.write(f"task/reviews/redteam-1-{n}.meta.json", {**self.meta, **meta})
+
+    def post(self, *args, **env):
+        return run("loop.py", "post", "--task-dir", self.task, "--pr", "7", *args, env={**self.env, **env})
+
+    def comments(self):
+        with open(self.state) as f:
+            return [c["body"] for c in json.load(f)]
+
+    def test_posts_the_saved_answer_once(self):
+        r = self.post("--step", "redteam-review")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual((out["status"], out["agent"], out["verdict"], out["url"]),
+                         ("posted", "redteam-1", "approved", "https://github.com/o/r/pull/7#issuecomment-2"))
+        import gate
+        body = gate.answer_comment("redteam", "redteam-1", 7, self.meta, "must-fix: none\nVerdict: approved")
+        self.assertEqual(self.comments()[1], body)
+        r = self.post("--step", "redteam-review")
+        self.assertEqual(json.loads(r.stdout)["status"], "posted before")  # found on the second page
+        self.assertEqual(len(self.comments()), 2)
+        self.answer("must-fix: x\nVerdict: changes", n=2, ended="2026-11-16T03:00:00.000000Z", head="b" * 40)
+        r = self.post("--step", "redteam-review")
+        self.assertEqual((json.loads(r.stdout)["status"], json.loads(r.stdout)["verdict"]), ("posted", "changes"))
+        self.assertIn("must-fix: x", self.comments()[2])  # the latest run of the role
+
+    def test_refusals(self):
+        for args, code, words in (
+                (["--step", "build"], 2, "build is not a step of a role agent"),
+                (["--step", "test"], 1, "no saved qa answer"),
+                (["--step", "redteam-review", "--agent", "redteam-2"], 1, "no saved redteam answer"),
+                (["--pr", "7"], 2, "post needs --step")):
+            r = self.post(*args)
+            self.assertEqual(r.returncode, code, args)
+            self.assertIn(words, r.stderr)
+        self.assertEqual(self.post("--step", "redteam-review", FAKE_GH_FAIL="1").returncode, 1)
+        self.answer("Verdict: approved", ok=False)
+        r = self.post("--step", "redteam-review")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("the last run of redteam-1 failed", r.stderr)
+        self.answer("x" * 70000 + "\nVerdict: approved")
+        r = self.post("--step", "redteam-review")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("one comment holds 65536", r.stderr)
+        self.assertEqual(len(self.comments()), 1)  # nothing was posted
+
+
 class Prompt(unittest.TestCase):
     def setUp(self):
         self.home = TempHome()
@@ -437,6 +525,14 @@ class Prompt(unittest.TestCase):
         with open(out["prompt"]) as f:
             text = f.read()
         self.assertIn("full tests: none is set; write `not run: no full test command`", text)
+        data = task_loop(config.merge(config.load(), {"tests": {"full": "make test"}}), difficulty="mid", lead="sonnet")
+        self.home.write("task/loop.json", data)
+        out = json.loads(self.prompt("--step", "test", "--task-dir", self.task).stdout)
+        with open(out["prompt"]) as f:
+            filled = f.read()
+        self.assertIn(f"full tests: python3 {os.path.join(SCRIPTS, 'fulltest.py')} --min-free-gb 20 -- 'make test'.",
+                      filled)
+        self.home.write("task/loop.json", task_loop(difficulty="mid", lead="sonnet"))
         self.assertIn("Trivial task: no.", text)
         self.assertIn("skills foreman-kit:full, foreman-kit:cross-check say", text)
         self.assertIn("and the base branch is main.", text)  # the full skill compares failures with the base

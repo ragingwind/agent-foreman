@@ -59,7 +59,9 @@ Checks (each may say "severity": "warn" to report without blocking):
                   task folder's reviews/ (launch.py --role) ends with a
                   `Verdict:` in "accept", given at the head SHA (with --cwd,
                   also at an earlier SHA whose change is the same), on a
-                  profile not in "not_profiles" (the lead's)
+                  profile not in "not_profiles" (the lead's). With "posted":
+                  true, that answer also counts only when a comment on the
+                  pull request holds it whole, as `loop.py post` writes it
   tests-weakened  no removed test file, added skip marker, edited CI file,
                   changed coverage threshold or edited agent instructions
                   (`.claude/`, `CLAUDE.md`, `AGENTS.md`), except the kinds in
@@ -79,7 +81,10 @@ Checks (each may say "severity": "warn" to report without blocking):
 A project's own checks (`gate` in its settings, carried in loop.json) are
 command checks with a "name", appended by `template`; the name stands for the
 check in the report and in --skip. An unnamed command check is the project's
-full tests (`tests.full`), named `command`.
+full tests (`tests.full`), named `command`. It has "full": true and runs
+through fulltest.py: one full test run at a time on the machine, and none
+when the disk has less than "min_free_gb" free (exit 75, `fulltest.py: not
+run`).
 
 --before-ready skips `ready` and every check marked "at": "merge": the lead
 runs the gate before the verification session. --skip names checks to leave
@@ -115,6 +120,7 @@ HANDOFF_SECTIONS = ("Purpose", "Decisions", "Tests", "Not touched", "Follow-ups"
 VERDICT = re.compile(r"^Verdict:\s*([A-Za-z][\w-]*)\W*$", re.I)
 CHECK_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 PROJECT_CHECK_KEYS = {"check", "name", "run", "from_base", "severity", "at"}
+FULLTEST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fulltest.py")
 
 
 def matches(path, pattern):
@@ -138,6 +144,38 @@ def last_verdict(text):
     return found
 
 
+def answer_comment(role, agent, number, meta, text):
+    """The pull request comment that holds a saved answer whole: `loop.py post` writes it, and a verdict check
+    with "posted" looks for it."""
+    head = meta.get("head") or ""
+    return (f"## {role} answer by {agent} on #{number} at {head[:7]}\n\n{str(text).strip()}\n\n---\n"
+            f"{agent} ran on {meta.get('profile')} ({meta.get('model')}) at {head}, and ended at "
+            f"{meta.get('ended')}. The answer is saved in the task folder's reviews/, session "
+            f"{meta.get('session_id')}.\n")
+
+
+def same_body(a, b):
+    """Two comment bodies are the same text, line endings and trailing spaces aside."""
+    def norm(t):
+        return "\n".join(line.rstrip() for line in str(t).replace("\r\n", "\n").strip().splitlines())
+    return norm(a) == norm(b)
+
+
+def gh_pages(*args):
+    """Every item of a `gh api --paginate` list: gh prints one JSON array per page. RuntimeError when gh fails."""
+    out = subprocess.run(["gh", *args], capture_output=True, text=True)
+    if out.returncode != 0:
+        raise RuntimeError(f"gh {' '.join(args[:3])} failed: {out.stderr.strip()[:300]}")
+    items, i, decoder, text = [], 0, json.JSONDecoder(), out.stdout
+    while True:
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i == len(text):
+            return items
+        page, i = decoder.raw_decode(text, i)
+        items += page if isinstance(page, list) else [page]
+
+
 def gh_json(*args):
     out = subprocess.run(["gh", *args], capture_output=True, text=True)
     if out.returncode != 0:
@@ -146,14 +184,20 @@ def gh_json(*args):
     return json.loads(out.stdout or "null")
 
 
-def fetch(repo, pr):
-    """Everything the checks read about one pull request."""
+def fetch(repo, pr, comments=False):
+    """Everything the checks read about one pull request; its comments too when a check needs them."""
     view = gh_json("pr", "view", str(pr), "--repo", repo, "--json",
                    "number,state,isDraft,baseRefName,baseRefOid,headRefOid,additions,deletions,statusCheckRollup")
     files = gh_json("api", "--paginate", f"repos/{repo}/pulls/{pr}/files?per_page=100")
     compare = gh_json("api", f"repos/{repo}/compare/{view['baseRefName']}...{view['headRefOid']}")
     view["files"] = files
     view["behind_by"] = compare.get("behind_by")
+    if comments:
+        try:
+            view["comments"] = gh_pages("api", "--paginate", f"repos/{repo}/issues/{pr}/comments?per_page=100")
+        except RuntimeError as e:
+            print(f"gate.py: {e}", file=sys.stderr)
+            sys.exit(1)
     return view
 
 
@@ -344,17 +388,22 @@ def check_verdict(pr, spec, ctx):
         return False, "needs --task-dir"
     accept = [a.lower() for a in spec.get("accept", ["approved"])]
     banned = set(spec.get("not_profiles", []))
+    comments = [c.get("body") or "" for c in pr.get("comments") or [] if isinstance(c, dict)]
     good, seen = 0, []
     for agent, meta, text in latest_answers(ctx["task_dir"], spec["role"]):
         verdict = last_verdict(text)
         head = meta.get("head") or ""
         at_head = bool(head) and (same_sha(head, pr["headRefOid"]) or bool(
             ctx.get("cwd") and same_change(ctx["cwd"], pr["baseRefName"], head, pr["headRefOid"])))
-        ok = verdict in accept and at_head and meta.get("profile") not in banned and meta.get("ok") is True
+        posted = not spec.get("posted") or any(
+            same_body(c, answer_comment(spec["role"], agent, pr.get("number"), meta, text)) for c in comments)
+        ok = (verdict in accept and at_head and meta.get("profile") not in banned and meta.get("ok") is True
+              and posted)
         good += ok
         seen.append(f"{agent} {meta.get('profile')} {head[:7] or '?'} {verdict or 'no verdict'}"
                     + ("" if meta.get("ok") is True else " (the run failed)")
-                    + ("" if meta.get("profile") not in banned else " (the lead's profile)"))
+                    + ("" if meta.get("profile") not in banned else " (the lead's profile)")
+                    + ("" if posted else " (not on the pull request as saved)"))
     return good > 0, f"{good} accepted {spec['role']} answer(s) at the head; seen: {', '.join(seen) or 'none'}"
 
 
@@ -570,6 +619,9 @@ def check_command(pr, spec, ctx):
             out = subprocess.run(argv, cwd=ctx["cwd"], capture_output=True, text=True, env=env)
         finally:
             os.unlink(f.name)
+    elif spec.get("full"):
+        argv = [sys.executable, FULLTEST, "--min-free-gb", str(spec.get("min_free_gb", 0)), "--", spec["run"]]
+        out = subprocess.run(argv, cwd=ctx["cwd"], capture_output=True, text=True, env=env)
     else:
         out = subprocess.run(spec["run"], shell=True, cwd=ctx["cwd"], capture_output=True, text=True, env=env)
     tail = (out.stdout + out.stderr).strip().splitlines()[-3:]
@@ -709,9 +761,12 @@ def template(task_loop, loop_sha=None, pr=None):
                     "not_profiles": [lead] if lead else []}
             if at:
                 spec["at"] = at
+                if task_loop.get("post_answers"):
+                    spec["posted"] = True
             checks.append(spec)
     if task_loop.get("tests_full"):
-        checks.append({"check": "command", "run": task_loop["tests_full"]})
+        checks.append({"check": "command", "run": task_loop["tests_full"], "full": True,
+                       "min_free_gb": task_loop.get("disk_min_free_gb", 0)})
     checks += [dict(spec) for spec in task_loop.get("gate") or []]
     checks += [{"check": "tests-weakened", "allow": []},
                {"check": "size", "max_lines": task_loop.get("max_lines", 400), "severity": "warn"},
@@ -812,7 +867,8 @@ def main(argv):
             append_gate_run(task_dir, report, args.before_ready, skip, sha_checked=True)
         return EXIT_GATE_FAILED
     cwd = os.path.expanduser(args.cwd) if args.cwd else None
-    report = evaluate(fetch(gate["repo"], gate["pr"]), gate, cwd, skip, task_dir, args.before_ready)
+    comments = any(s.get("posted") for s in gate["checks"] if isinstance(s, dict))
+    report = evaluate(fetch(gate["repo"], gate["pr"], comments), gate, cwd, skip, task_dir, args.before_ready)
     print(json.dumps(report, indent=2, ensure_ascii=False))
     if task_dir:
         append_gate_run(task_dir, report, args.before_ready, skip, sha_checked=bool(args.sha))
