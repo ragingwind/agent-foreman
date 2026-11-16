@@ -87,4 +87,4 @@ Verdict: <pass or fail>
 - With nothing to bring up, write `Environment: none — <reason>`.
 - A hand act writes one imperative sentence after `**Do** —` in place of the fence, naming the control and the page.
 - The first line under `## Closing` is `Verdict: pass` or `Verdict: fail`, for the last full run. The gate blocks until it is `pass` and every Agent block holds real output.
-- The test step writes no file. launch.py saves QA's answer under `$AF_TASK_DIR/reviews/`. Each mismatch is one line, `mismatch (script|environment|product): step N — <what differed>`, with a fence of the differing output under it. The answer ends with one plain line, `Verdict: pass` (every step ran and matched) or `Verdict: fail`.
+- The test step writes no file. launch.py saves QA's answer under `$AF_TASK_DIR/reviews/`. Each mismatch is one list item, `- mismatch (script|environment|product): step N — <what differed>`, with a fence of the differing output under it, indented two spaces. The answer ends with a blank line and one plain line that is not a list item, `Verdict: pass` (every step ran and matched) or `Verdict: fail`.

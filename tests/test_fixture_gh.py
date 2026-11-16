@@ -133,6 +133,17 @@ class FakeGh(unittest.TestCase):
         self.assertEqual(len(comments), 3)
         self.assertTrue(comments[2]["body"].startswith(f"## qa answer by qa-1 on #1 at {self.head[:7]}"))
 
+    def test_the_runner_reads_listed_mismatches(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("fixture_run", os.path.join(ROOT, "fixture", "run.py"))
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        script = "- mismatch (script): step 2 — no input file named\n\nVerdict: fail"
+        self.assertEqual(runner.outcome_of("fail", script), "script")
+        self.assertEqual(runner.outcome_of("fail", "mismatch (script): step 2 — x\nVerdict: fail"), "script")
+        self.assertEqual(runner.outcome_of("fail", script + "\n- mismatch (product): step 3 — y"), "fail")
+        self.assertEqual(runner.outcome_of("pass", script), "pass")
+
     def test_what_it_does_not_know_is_refused_and_logged(self):
         for args in (["release", "list"], ["api", "-X", "PUT", "repos/o/r/pulls/1/merge"]):
             r = self.gh(*args)

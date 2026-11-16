@@ -370,8 +370,7 @@ class Run:
                     text = json.load(f).get("result", "")
             except (OSError, ValueError):
                 pass
-            lines = [l for l in text.splitlines() if l.strip().lower().startswith("mismatch")]
-            outcome = "script" if (verdict == "fail" and lines and all("(script)" in l for l in lines)) else verdict
+            outcome = outcome_of(verdict, text)
             results[step["id"]] = {"role": role, "verdict": verdict, "outcome": outcome,
                                    "cost": summary.get("cost"), "answer": summary.get("out")}
             if outcome in step["next"]:
@@ -482,6 +481,13 @@ class Run:
         with open(os.path.join(self.root, "report.md"), "w") as f:
             f.write("\n".join(md) + "\n")
         say(f"report: {os.path.join(self.root, 'report.md')}")
+
+
+def outcome_of(verdict, text):
+    """A QA `fail` whose mismatches are all `(script)` is the outcome `script` (SKILL.md "Verification session").
+    A mismatch is a line or a list item that starts with `mismatch`."""
+    lines = [l for l in text.splitlines() if re.sub(r"^[-*+]\s+", "", l.strip()).lower().startswith("mismatch")]
+    return "script" if (verdict == "fail" and lines and all("(script)" in l for l in lines)) else verdict
 
 
 def now():

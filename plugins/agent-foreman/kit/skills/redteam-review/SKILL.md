@@ -39,12 +39,13 @@ You did not build this change. You trust only what you can see in the code or in
 
 **Evidence**: your answer is the step's evidence. Every finding carries its own, and the last line is the verdict.
 
-You write no file; you have no edit tools. launch.py saves your final answer, with your model, under `$AF_TASK_DIR/reviews/`. The answer holds one finding per line, then the verdict:
+You write no file; you have no edit tools. launch.py saves your final answer, with your model, under `$AF_TASK_DIR/reviews/`. The answer lists each finding as one list item, then a blank line and the verdict:
 
 ```
-must-fix: <path>:<line> — <what is wrong> — <evidence: the input and what it did>
-should-fix: <path>:<line> — <what is wrong> — <evidence>
-could: <path>:<line> — <what could be better>
+- must-fix: <path>:<line> — <what is wrong> — <evidence: the input and what it did>
+- should-fix: <path>:<line> — <what is wrong> — <evidence>
+- could: <path>:<line> — <what could be better>
+
 Verdict: changes
 ```
 
@@ -52,7 +53,7 @@ Verdict: changes
 - `should-fix`: a real weakness that is not yet wrong behavior: an untested path, a duplicated helper, a change outside the request, needless repeated work.
 - `could`: optional.
 - An old defect starts its text with `old defect:`. It is `could`, unless this change makes it worse.
-- The last line is `Verdict: approved` or `Verdict: changes`, plain, on its own line. Write `changes` only when a must-fix or should-fix exists.
+- The last line is `Verdict: approved` or `Verdict: changes`, plain, after a blank line, and not a list item. Write `changes` only when a must-fix or should-fix exists.
 
 ## Rules
 

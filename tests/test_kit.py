@@ -35,6 +35,31 @@ class RealKit(unittest.TestCase):
                 self.assertIn(section, text, name)
             self.assertNotRegex(text, r"\b([PBVRFT][1-4]|X1)\b", name)  # step ids, not action codes
 
+    def test_answers_are_markdown_a_no_hard_wrap_policy_accepts(self):
+        """A project may post answers under a policy that allows a single newline only between list items
+        (loop.py post posts the saved answer unchanged). So the answer shapes are list items, a blank line,
+        and a plain Verdict line that the gate reads."""
+        def wrapped(text):  # two lines in a row outside a fence where one is not a list item
+            lines, bad, fenced = text.splitlines(), [], False
+            for a, b in zip(lines, lines[1:]):
+                fenced = fenced != a.lstrip().startswith("```")
+                if not fenced and a.strip() and b.strip() and not b.lstrip().startswith("```") and not (
+                        a.startswith("- ") and b.startswith("- ")):
+                    bad.append((a, b))
+            return bad
+
+        for name, last in (("review", "changes"), ("redteam-review", "changes"), ("full", "fail")):
+            block = re.search(r"## Record.*?\n```\n(.*?)```", skill(name), re.S).group(1)
+            self.assertEqual(wrapped(block), [], name)
+            self.assertEqual(gate.last_verdict(block), last, name)
+            self.assertEqual(block.splitlines()[-2:], ["", f"Verdict: {last}"], name)
+        self.assertIn("`- mismatch (script|environment|product): step N", skill("cross-check"))
+        self.assertEqual(gate.last_verdict("- must-fix: x\n- Verdict: pass"), "")  # a list item is no verdict
+        prompts = config.standard()["loop"]["prompts"]
+        for role in ("review", "redteam", "qa"):
+            self.assertIn("one plain line that is not a list item", prompts[role], role)
+        self.assertIn("`- must-fix:`", prompts["redteam"])
+
     def test_steps_and_outcomes_the_skills_name_are_in_the_loop(self):
         std = config.standard()["loop"]
         steps = {s["id"]: s for w in ("work", "check") for s in std[w]}
