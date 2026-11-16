@@ -18,7 +18,10 @@ against the records (gate.py record) before the task goes on.
 When the task folder holds `loop.json` (loop.py render --json), `note` refuses
 a stage or step that is not in the task's loop, and an `end` line without an
 --outcome that the step has. When the next step is the foreman's, it says to
-stop there and wait. It prints what to do next: at `start`, the step
+stop there and wait. It refuses an `end` line for a step of the foreman's
+without --file. A lead never passes --file, so this stops a lead that would
+end the foreman's step itself by mistake. It does not stop one that passes
+--file on purpose; the foreman's log catches that (SKILL.md, Merge gate). It prints what to do next: at `start`, the step
 itself; at `end`, the step the outcome leads to, which it also records as
 `to`. An `end` line whose outcome leads to `stop` is a stop point. At a
 `start` line written to AF_STATUS_FILE, it renames the agent's herdr tab to
@@ -236,7 +239,10 @@ def main(argv):
             entry, problem = check_note(task_loop, args.stage, args.step)
             if not problem and args.event == "end":
                 outcomes = list(entry["next"])
-                if args.outcome not in outcomes:
+                if entry["actor"] == "foreman" and not args.file:
+                    problem = (f"step {entry['id']} is the foreman's, and the foreman writes its end line: write "
+                               f"a stop line and report waiting (loop.md, Stop points)")
+                elif args.outcome not in outcomes:
                     problem = (f"--event end needs --outcome, one of {', '.join(outcomes)} "
                                f"(step {entry['id']}), not {args.outcome!r}")
                 else:

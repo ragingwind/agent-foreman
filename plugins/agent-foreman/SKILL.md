@@ -71,9 +71,23 @@ python3 <skill>/scripts/status.py note --file <task folder>/status.jsonl --stage
 ```
 
 Send the lead one line: "Go on to build." or "Go back to plan: <what is
-missing>."
+missing>." Then log it. The lead can write the status file but not your
+log, so you compare the two before the merge ("Merge gate"):
+
+```bash
+python3 <skill>/scripts/log.py add --project <repo> --event plan-check --task <task> \
+  --data '{"round": <N>, "outcome": "<go or back>"}'
+```
+
+Your `--done` names files, counts and commits, as the lead's does. Do not
+copy a program's output into it; name the file and the step or line that
+holds the output. To correct the evidence of an `end` line, yours or the
+lead's, write the line again with the same outcome and the corrected
+`--done`. The last `end` line of a step counts.
 
 `<skill>` is the directory of this file. Run every script with `python3`.
+When this directory moves (the plugin is moved or renamed), start a new
+foreman session. This session keeps the old path.
 
 | File | What it does |
 | --- | --- |
@@ -346,7 +360,7 @@ value.
 | --- | --- | --- |
 | started | the first wait after launch returns idle | Records the row, sends the brief |
 | stage | a new stage line in the status file | Updates the row's stage and step. For an `end` line, first check its evidence ("Evidence at every step") |
-| report | `status.py read` shows the task `stopped`, or a wait returns idle and the last lines hold `REPORT:` | The stop line's `done` holds the report. `ready`: check finalize's evidence, then the verification session. `waiting`: `plan-check` ("Evidence at every step"). `decision`: add it to "Waiting on the person". `blocked`: fix what it needs or ask the person. A cut report is read from the transcript |
+| report | `status.py read` shows the task `stopped`, or a wait returns idle and the last lines hold `REPORT:` | The stop line's `done` holds the report. `ready`: check finalize's evidence, then the verification session. `waiting`: `plan-check` ("Evidence at every step"), or what you told the lead to wait for ("Coordinate"). `decision`: add it to "Waiting on the person". `blocked`: fix what it needs or ask the person. A cut report is read from the transcript |
 | question | the agent asks inside the task's scope | Answer with the recommended option; only a choice that changes behavior, an interface, a schema or a core module goes to the person |
 | blocked | a dialog on screen | A permission prompt goes to the person with the agent and the command; never answer it. A trust question: the adapter page. A question dialog is closed only when the person already answered it |
 | stalled | `status.py read` marks the task `stalled` | Read the screen; move it on when it waits for a yes the brief already gave; otherwise ask what blocks it |
@@ -373,6 +387,10 @@ value.
 - After a merge, tell each lead on the same base to rebase in its next
   finalize.
 - Tasks that touch the same files run as "Place" says.
+- To make a lead wait (for another task, or for the person), tell it to
+  write a stop line, `--event stop --done "waiting: <for what>"`, and to
+  report `waiting`. Without that line, `status.py read` marks the waiting
+  lead `stalled`.
 
 ### Verification session
 
@@ -432,10 +450,27 @@ python3 <skill>/scripts/remote.py <machine> --cwd <lead's clone> -- \
 ```
 
 (`local`: run it there directly.) Exit 6 lists what blocks; send it to the
-lead. `gate-file` or `loop-file` blocked means the lead changed a file it must
-not: tell the person, and merge nothing. Exit 0: before you merge, log the
-pass: `log.py add --project <repo> --event merge-gate --task <task> --data
-'{"head": "<head SHA>", "pass": true, "gate_hash": "<the ledger's hash>"}'`.
+lead, except in two cases. `gate-file` or `loop-file` blocked means the lead
+changed a file it must not: tell the person, and merge nothing.
+
+When the full tests (`command`) block, first run only the failing tests
+again, alone, at the head in the lead's clone. When they fail again, send
+them to the lead. When they pass alone, the test is flaky: tell the person
+the test and both results. When the person says to merge anyway, run the
+merge gate with `--skip command` and log the person's words. Do not run the
+whole suite again yourself: each run is another full build on the machine's
+disk.
+
+When the task's loop has `plan-check`, compare two lines before the merge:
+the last `plan-check` `end` line in the task folder's `status.jsonl`, and
+your last `plan-check` event (`log.py tail --project <repo> --event
+plan-check --task <task> -n 1`). Both must say `go` for the same round.
+When they differ, or your log has no such event, the lead went on to build
+without your plan-check: tell the person, and merge nothing.
+
+Exit 0: before you merge, log the pass: `log.py add --project <repo> --event
+merge-gate --task <task> --data '{"head": "<head SHA>", "pass": true,
+"gate_hash": "<the ledger's hash>"}'`.
 This log is yours, and the lead cannot write it. The lead can write the task
 folder's `gates.jsonl`. A clean rebase after approval keeps
 its verdicts when the change is the same: the gate compares patches with
@@ -561,6 +596,11 @@ not to the ledger.
 - Settings, ledgers, task folders, bundles and clones stay out of product
   repositories.
 - No AI attribution in git or GitHub text.
+- Never have one agent post another agent's answer or verdict. The lead
+  least of all: its work is what the answer judges.
+- Before you tell the person that a record exists (a comment, a label, a
+  test run), open it. Check its content, who wrote it, the commit it names
+  and when it was written.
 - No secrets in records: settings, ledgers and logs hold variable names only.
 - Close only the agents, tabs, panes and workspaces the foreman created,
   unless the person asks.

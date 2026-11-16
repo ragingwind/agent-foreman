@@ -200,7 +200,11 @@ Go into the chosen parts only.
   command>` and `<trivial>`; write no other `<...>` in a prompt. A judging
   prompt must keep its `Verdict:` line, and each verdict word must be an
   outcome of the role's steps: the gate reads the last one in the answer that
-  `launch.py --role` saves in the task folder.
+  `launch.py --role` saves in the task folder. When the prompt also has the
+  agent post its answer (a pull request comment), say that the final message
+  is still the whole answer, ending with the plain `Verdict:` line. An agent
+  told to post often ends with a note about the post instead, with the
+  verdict inside a sentence, and the gate finds no verdict.
 - **Project gate** (step 4): save the chosen checks in `gate`, at the
   project's level.
 

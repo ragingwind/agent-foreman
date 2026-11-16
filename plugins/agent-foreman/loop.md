@@ -27,6 +27,11 @@ you back to the step. A project skill in the table counts the same way. Its
 own result, such as commits or a pull request, goes in the line, with the
 record of the default skill it replaces.
 
+Evidence names files, counts and commits. Do not copy a program's output
+into it; name the file and the step or line that holds the output. To
+correct a step's evidence, write its `end` line again with the same outcome
+and the corrected `--done`. The last `end` line of a step counts.
+
 ## What you get
 
 - **The task folder**: `$AF_TASK_DIR` (also written in the brief). Every
@@ -157,7 +162,9 @@ Stop only at these, and report:
 3. **Blocked**: something you cannot get or do, after trying once more.
 4. **Waiting for the foreman**: the next step is the foreman's (`plan-check`,
    at high difficulty). Write the stop line on that step (`--step
-   plan-check`).
+   plan-check`). Only the foreman writes that step's `end` line. When the
+   foreman tells you to wait for something else, write the stop line on
+   your current step, with `--done "waiting: <for what>"`.
 
 For a decision, blocked or waiting, write the stop line yourself:
 

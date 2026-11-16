@@ -50,6 +50,8 @@ TASKS = {"1": "mid", "2": "high"}
 LEAD_TIMEOUT = 90 * 60
 ROLE_TIMEOUT = 30 * 60
 GIT = ["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"]
+# Every lead run is a new session (launch.py --print takes no --resume), so each word after the first says so.
+RESTARTED = "You were restarted: read the brief, plan.md and the last lines of status.jsonl, and go on."
 
 
 def say(text):
@@ -184,14 +186,18 @@ class Run:
                 return self.finish(task, rec)
             findings = self.findings(task_dir, round_)
             out = self.lead(task, lead, task_dir, clone,
-                            f"Read {findings} and go back to {back} with --round {round_ + 1}.", len(rec["lead_runs"]) + 1)
+                            f"Read {findings} and go back to {back} with --round {round_ + 1}. {RESTARTED}",
+                            len(rec["lead_runs"]) + 1)
             if not out["report"].startswith("REPORT: ready"):
                 rec["result"] = f"the lead stopped with {out['report'] or 'no report'}"
                 return self.finish(task, rec)
 
         merge = self.gate(gate_json, rec["pr"], clone, task_dir, sha, before_ready=False)
         rec["gate_merge"] = merge
-        if merge["pass"]:
+        unmatched = self.plan_check_unmatched(task, task_dir)
+        if unmatched:
+            rec["result"] = f"plan-check: {unmatched}"
+        elif merge["pass"]:
             head = json.loads(self.gh("pr", "view", rec["pr"], "--json", "headRefOid,headRefName"))
             self.script("log.py", "add", "--project", REPO, "--event", "merge-gate", "--task", task,
                         "--data", json.dumps({"head": head["headRefOid"], "pass": True, "gate_hash": sha}))
@@ -258,9 +264,9 @@ class Run:
         prompt = (f"You are the foreman of agent-foreman for project {REPO}. Read {PLUGIN}/SKILL.md, the section "
                   f"\"Evidence at every step\", and do the plan-check for task {task} now: its lead is waiting. The "
                   f"task folder is {task_dir}, and the lead's clone is {rec['clone']}. Run the scripts with python3 "
-                  f"from {SCRIPTS}. Write plan-check's end line "
-                  f"with `status.py note --file {task_dir}/status.jsonl` as that section says. Start no agent and "
-                  f"message none. End with one line: `PLAN-CHECK: go — <why>` or `PLAN-CHECK: back — <what is "
+                  f"from {SCRIPTS}. Do all that section says for plan-check, its end line with `status.py note "
+                  f"--file {task_dir}/status.jsonl` and its log event included, except sending the lead its line: "
+                  f"this script sends it. Start no agent and message none. End with one line: `PLAN-CHECK: go — <why>` or `PLAN-CHECK: back — <what is "
                   f"missing>`.")
         # The prompt goes on stdin: --disallowedTools takes every value after it, a prompt argument too.
         r = self.sh(["claude", "-p", "--model", "opus", "--dangerously-skip-permissions", "--output-format", "json",
@@ -282,8 +288,23 @@ class Run:
             return None
         go = new.get("outcome") == "go"
         why = line.split("—", 1)[1].strip() if "—" in line else ""
-        return ("The foreman says: Go on to build. " if go else f"The foreman says: Go back to plan: {why}. ") + \
-            "You were restarted: read the brief, plan.md and the last lines of status.jsonl, and go on."
+        return ("The foreman says: Go on to build. " if go else f"The foreman says: Go back to plan: {why}. ") + RESTARTED
+
+    def plan_check_unmatched(self, task, task_dir):
+        """SKILL.md "Merge gate": the last plan-check end line and the foreman's last plan-check event both say
+        go for the same round. Returns what differs, or "" (also when the loop has no plan-check)."""
+        with open(os.path.join(task_dir, "loop.json")) as f:
+            if not any(s["id"] == "plan-check" for s in json.load(f)["work"]):
+                return ""
+        ends = [r for r in rows(os.path.join(task_dir, "status.jsonl"))
+                if r.get("step") == "plan-check" and r.get("event") == "end"]
+        out = self.script("log.py", "tail", "--project", REPO, "--event", "plan-check", "--task", task, "-n", "1")
+        logged = [json.loads(l)["data"] for l in out.stdout.splitlines() if l.strip()]
+        line = (ends[-1].get("outcome"), str(ends[-1].get("round"))) if ends else None
+        event = (logged[-1].get("outcome"), str(logged[-1].get("round"))) if logged else None
+        if line is None or line != event or line[0] != "go":
+            return f"the end line says {line}, the foreman's log says {event}"
+        return ""
 
     def steps(self, rec, task_dir, clone):
         """Each step's evidence line, and gate.py record on it, as the foreman does when a step ends."""

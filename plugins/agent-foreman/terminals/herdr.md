@@ -26,6 +26,12 @@ workspace goes too, and the next task makes it again. Record its id in the
 ledger each time. A workspace the person made is used as it is, and the
 foreman never closes it.
 
+Panes start from the machine's herdr server, so they have the user groups
+the server had when it started. After the user joins a group on a machine
+(such as `kvm`), a pane lacks it until that machine's herdr server restarts.
+To check, compare `id -nG` in a pane with `remote.py <machine> -- id -nG`.
+Ask the person to restart the server when no agent runs there.
+
 ## Open a task tab
 
 Every agent starts in its own clone, never in the person's checkout. Make

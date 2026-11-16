@@ -124,6 +124,27 @@ class Note(unittest.TestCase):
                 env={"AF_STATUS_FILE": ""})  # the foreman, for a check step
         self.assertIn("next: verify (verify, lead): Check it.", r.stdout)
 
+    def test_only_the_foreman_ends_its_own_step(self):
+        self.home.write("loop.json", {"work": [
+            {"id": "plan", "stage": "plan", "label": "7 plan", "actor": "lead", "does": "Plan it.", "skills": [],
+             "next": {"done": "plan-check"}},
+            {"id": "plan-check", "stage": "plan", "label": "7 plan-check", "actor": "foreman", "does": "Check it.",
+             "skills": [], "next": {"back": "plan", "go": "stop"}}]})
+        lead = {"AF_STATUS_FILE": self.file, "HERDR_TAB_ID": ""}
+        r = run("status.py", "note", "--stage", "plan", "--step", "plan-check", "--event", "end", "--outcome", "go",
+                "--round", "1", "--done", "self-approved", env=lead)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("step plan-check is the foreman's, and the foreman writes its end line", r.stderr)
+        self.assertFalse(os.path.exists(self.file))
+        r = run("status.py", "note", "--stage", "plan", "--step", "plan-check", "--event", "stop",
+                "--done", "waiting: plan-check round 1", env=lead)
+        self.assertEqual(r.returncode, 0, r.stderr)  # the lead's wait is a stop line on the step
+        r = run("status.py", "note", "--file", self.file, "--stage", "plan", "--step", "plan-check", "--event", "end",
+                "--outcome", "go", "--round", "1", "--done", "plan.md 4 rows match task.md",
+                env={"AF_STATUS_FILE": ""})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([(x["event"], x.get("outcome")) for x in lines(self.file)], [("stop", None), ("end", "go")])
+
     def test_only_the_agents_own_note_renames_its_tab(self):
         self.home.write("loop.json", {"work": [{"id": "verify", "stage": "verify", "label": "7 verify <N>",
                                                 "actor": "lead", "does": "x", "skills": [], "next": {"done": "stop"}}]})
