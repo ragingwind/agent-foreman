@@ -19,7 +19,7 @@ def git(cwd, *args):
     return subprocess.run(G + ["-C", cwd, *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
-class Clone(unittest.TestCase):
+class Repo(unittest.TestCase):
     def setUp(self):
         self.home = TempHome()
         self.origin = os.path.join(self.home.root, "origin.git")
@@ -50,6 +50,8 @@ class Clone(unittest.TestCase):
     def make(self, agent="lead", *extra):
         return self.clone("make", "--project", "o/r", "--task", "t1", "--agent", agent, "--ref", "origin/main", *extra)
 
+
+class Clone(Repo):
     def test_make_points_origin_at_github_and_starts_clean(self):
         code, out, err = self.make()
         self.assertEqual(code, 0, err)
@@ -224,6 +226,117 @@ class Clone(unittest.TestCase):
                            capture_output=True, text=True, env={**os.environ, **self.env}, cwd=self.home.root)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(json.loads(r.stdout)["ours"])
+
+
+FAKE_HERDR = r'''#!/usr/bin/env python3
+import json, os, sys
+path = os.environ["FAKE_HERDR"]
+with open(path) as f:
+    st = json.load(f)
+args = sys.argv[1:]
+st["calls"].append(args)
+if args[:1] == ["--machine"]:
+    args = args[2:]
+step = st["steps"][min(st["at"], len(st["steps"]) - 1)]
+if args[:2] == ["pane", "get"]:
+    print(json.dumps({"id": "cli:pane:get", "result": {"pane": {
+        "pane_id": args[2], "agent": step.get("agent"), "agent_status": step.get("status"),
+        "foreground_cwd": step.get("cwd", st["cwd"])}}}))
+elif args[:2] == ["pane", "read"]:
+    print(step["screen"])
+    st["at"] += 1
+elif args[:2] == ["pane", "send-keys"]:
+    st["keys"] += args[3:]
+    if st["then"] and st["keys"] == ["Down", "Enter"]:
+        st["steps"], st["at"] = st["then"], 0
+else:
+    sys.exit(2)
+with open(path, "w") as f:
+    json.dump(st, f)
+'''
+
+SHELL = {"screen": "$ python3 launch.py opus --name 7", "status": None, "agent": None}
+ASKING = {"screen": " Accessing workspace:\n\n <folder>\n ❯ No, exit\n   Yes, I trust this folder", "status": "unknown",
+          "agent": "claude"}
+READY = {"screen": "❯ Try \"refactor <filepath>\"\n  ⏵⏵ bypass permissions on", "status": "idle", "agent": "claude"}
+
+
+class Trust(Repo):
+    def setUp(self):
+        super().setUp()
+        self.path = self.make()[1]["path"]
+        bin_dir = os.path.join(self.home.root, "bin")
+        put(os.path.join(bin_dir, "herdr"), FAKE_HERDR)
+        os.chmod(os.path.join(bin_dir, "herdr"), 0o755)
+        self.state = os.path.join(self.home.root, "herdr.json")
+        self.env.update(PATH=bin_dir + os.pathsep + os.environ["PATH"], FAKE_HERDR=self.state)
+
+    def screens(self, steps, then=None, cwd=None):
+        with open(self.state, "w") as f:
+            json.dump({"steps": steps, "then": then, "at": 0, "keys": [], "calls": [], "cwd": cwd or self.path}, f)
+
+    def herdr(self):
+        with open(self.state) as f:
+            return json.load(f)
+
+    def trust(self, path=None, *extra):
+        return self.clone("trust", path or self.path, "--pane", "w1:p2", *extra)
+
+    def test_answers_yes_for_its_own_clone_and_returns_at_the_input_line(self):
+        self.screens([SHELL, ASKING], then=[READY])
+        code, out, err = self.trust()
+        self.assertEqual(code, 0, err)
+        self.assertEqual((out["ready"], out["answered"]), (True, True))
+        self.assertEqual(self.herdr()["keys"], ["Down", "Enter"])
+        sent = [c for c in self.herdr()["calls"] if c[:2] == ["pane", "send-keys"]]
+        self.assertEqual(sent, [["pane", "send-keys", "w1:p2", "Down"], ["pane", "send-keys", "w1:p2", "Enter"]])
+
+    def test_a_folder_already_trusted_needs_no_keys(self):
+        self.screens([SHELL, READY])
+        code, out, err = self.trust()
+        self.assertEqual(code, 0, err)
+        self.assertEqual((out["ready"], out["answered"]), (True, False))
+        self.assertEqual(self.herdr()["keys"], [])
+
+    def test_never_answers_for_a_folder_it_did_not_make(self):
+        self.screens([ASKING], then=[READY])
+        code, out, _ = self.trust(self.checkout)
+        self.assertEqual(code, 1)
+        self.assertIn("goes to the person", out["error"])
+        self.assertEqual(self.herdr()["calls"], [])
+
+    def test_never_answers_for_a_pane_that_runs_elsewhere(self):
+        self.screens([ASKING], then=[READY], cwd=self.checkout)
+        code, out, _ = self.trust()
+        self.assertEqual(code, 1)
+        self.assertIn(f"runs in {self.checkout}", out["error"])
+        self.assertEqual(self.herdr()["keys"], [])
+
+    def test_stops_when_launch_py_stopped(self):
+        self.screens([{"screen": "launch.py: GATEWAY_TOKEN is not set\n$ ", "status": None, "agent": None}])
+        code, out, _ = self.trust()
+        self.assertEqual(code, 1)
+        self.assertIn("launch.py stopped", out["error"])
+        self.assertIn("GATEWAY_TOKEN is not set", out["screen"])
+
+    def test_answers_once_and_gives_up_after_the_timeout(self):
+        self.screens([ASKING])
+        code, out, _ = self.trust(None, "--timeout", "2")
+        self.assertEqual(code, 1)
+        self.assertEqual((out["ready"], out["answered"]), (False, True))
+        self.assertIn("no input line within 2 seconds", out["error"])
+        self.assertEqual(self.herdr()["keys"], ["Down", "Enter"])
+
+    def test_bad_arguments(self):
+        self.screens([READY])
+        for extra in ([], ["--kind", "nope"], ["--timeout", "0"]):
+            args = ["trust", self.path, *extra] if extra else ["trust", self.path]
+            if extra:
+                args += ["--pane", "w1:p2"]
+            self.assertEqual(self.clone(*args)[0], 2, args)
+        self.assertEqual(self.clone("trust", "--pane", "w1:p2")[0], 2)
+        self.assertEqual(self.trust(None, "--machine", "ghost")[0], 1)
+        self.assertEqual(self.herdr()["calls"], [])
 
 
 if __name__ == "__main__":

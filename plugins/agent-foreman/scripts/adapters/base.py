@@ -23,4 +23,6 @@ REQUIRED = [
     "bundle_layout",   # {skill name: {relative path: bytes}} -> {bundle path: bytes}, manifest included
     "skill_name",      # skill ref -> the name the agent calls it by
     "last_answers",    # (session id, n) -> the final text of the last n turns
+    "TRUST_SCREEN",    # text on the screen while the agent asks whether to trust its folder
+    "TRUST_KEYS",      # herdr keys that answer Yes to that question, sent one at a time
 ]

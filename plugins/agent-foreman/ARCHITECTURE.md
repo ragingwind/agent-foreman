@@ -537,15 +537,19 @@ Pass conditions are code, not prose (`scripts/gate.py`).
 - `launch.py --role` runs only with `--task-dir`, `--name`, an `--out` inside
   the task folder's `reviews/`, and a git checkout to run in; the commit
   checked out goes into the meta file the gate reads.
-- A new clone is an untrusted folder, and a trusted parent does not count
-  (checked 2026-11-13: `/` was trusted, a folder under it still asked).
+- A new clone is an untrusted folder, and a trusted parent does not count:
+  Claude Code looks for a trusted folder only up to the git repository's
+  root, and a clone is its own root (checked 2026-11-17 with 2.1.326).
   - Prompt mode needs no trust step and still loads the clone's project
     skills (checked 2026-11-13).
   - In a pane, Claude Code asks first, with the cursor on "No, exit"; herdr
-    shows the agent `unknown` or `blocked`, so the foreman reads the pane. When `clone.py check` says the folder is a
-    clone the foreman made, the foreman (or the lead, for its own panes)
-    answers Yes with herdr keys: `Down`, `Enter`. Any other folder's trust
-    question goes to the person. (The person allowed this on 2026-11-13.)
+    shows the agent `unknown` or `blocked`, so the screen is read, not the
+    state. Right after starting the agent, the foreman runs `clone.py
+    trust`. It reads the pane every second and answers Yes with herdr keys
+    (`Down`, `Enter`) when `clone.py check` says the folder is a clone the
+    foreman made and the pane runs in it. Any other folder's trust question
+    goes to the person. (The person allowed answering on 2026-11-13, and
+    asked for an answer at once on 2026-11-17.)
 - Cleanup (`clone.py remove`) removes the task's clones and task folder.
   It refuses a folder without the marker, one holding the caller's working
   directory, and, unless forced, a clone with changes to tracked files or,

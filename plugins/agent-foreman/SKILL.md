@@ -331,9 +331,11 @@ Write the task's files into its task folder on the lead's machine
 3. In the tab's pane: `python3 <bundle>/scripts/launch.py <profile> --name
    <task> --session-id <id> --task-dir <task folder>` (`terminals/herdr.md`
    "Start an agent").
-4. A new clone asks the trust question first: the adapter page, "Trust
-   question". Then wait for idle and rename the agent to `<task>`; the
-   rename succeeding is the proof it runs.
+4. Right after step 3, run `clone.py trust <clone> --pane <pane> --machine
+   <machine>`. It answers a new clone's trust question as soon as it shows,
+   and returns when the agent is idle (the adapter page, "Trust question").
+   Then rename the agent to `<task>`; the rename succeeding is the proof it
+   runs.
 5. Send the brief: one line, "Read <absolute path> and do what it says.",
    as a background command that also waits.
 6. Record the row in the ledger and `log.py add --event launch`.

@@ -74,7 +74,7 @@ The new pane id is `.result.pane.pane_id`.
 
 ```bash
 H pane run <pane> 'python3 <bundle>/scripts/launch.py <profile> --name <name> --session-id <id> --task-dir <task folder>'
-H agent wait <pane> --until idle --until blocked --timeout 20000
+python3 <skill>/scripts/clone.py trust <clone> --pane <pane> --machine <machine>
 H agent rename <pane> <name>
 ```
 
@@ -85,15 +85,14 @@ H agent rename <pane> <name>
 - `pane run` types into whatever runs in the pane. Run it only on a pane at
   a shell prompt: when `H agent list` shows an agent in that pane, the
   command would go to the agent as a prompt.
-- The first waits right after `pane run` fail with `agent_not_found` while
-  the app starts. Repeat the wait up to six times; do not run the command
-  again.
 - A new clone first shows the agent's trust question; herdr may show it as
-  `unknown` or `blocked`. When a wait does not return idle, read the pane and
-  follow the adapter page, "Trust question".
-- A wait that returns is not proof the agent runs: an agent that fails at
-  start is seen for a moment, then exits. `H agent rename` succeeding is the
-  proof; on `agent_not_found`, read the pane.
+  `unknown` or `blocked`. `clone.py trust`, run right after `pane run`,
+  reads the screen every second, answers the question, and returns when the
+  agent is idle (the adapter page, "Trust question"). On exit 1, read its
+  `error` and `screen`; do not run the command again.
+- An idle agent is not proof it runs: an agent that fails at start is seen
+  for a moment, then exits. `H agent rename` succeeding is the proof; on
+  `agent_not_found`, read the pane.
 - When the pane shows `launch.py:` and a shell prompt instead of the agent,
   read the exit line and go to `SKILL.md` "Launch".
 

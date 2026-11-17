@@ -17,6 +17,7 @@ Usage:
                 [--from PATH] [--machine MACHINE] [--no-push] [--fresh] [--force]
                 [--instructions-from SHA]
   clone.py check PATH [--machine MACHINE]
+  clone.py trust PATH --pane PANE [--machine MACHINE] [--kind KIND] [--timeout SECONDS]
   clone.py remove --project OWNER/REPO --task TASK [--agent AGENT] [--machine MACHINE] [--force]
   clone.py archive --project OWNER/REPO --task TASK [--machine MACHINE]
 
@@ -33,6 +34,15 @@ commits', unchanged. A SHA it cannot get is an error.
 
 check: whether PATH is a clone agent-foreman made under the work root. Only
 such a folder's trust question may be answered for the person.
+
+trust: run right after starting an agent in herdr pane PANE, in clone PATH.
+It reads the pane every second. When the agent asks whether to trust its
+folder, it answers Yes, but only when check says PATH is ours and the pane
+runs in PATH. It returns when the agent is idle at its input line, with
+"answered" saying whether there was a question. Anything else (not our
+clone, `launch.py:` on the screen, no input line within --timeout, default
+90) is an error with the screen's last rows; a question it did not answer
+goes to the person. KIND is the profile's agent kind (default claude).
 
 remove: one agent's clone, or with no --agent every clone of the task and
 its task folder (`~/.local/state/agent-foreman/tasks/<owner>-<repo>/<task>`, the
@@ -233,6 +243,67 @@ def on_machine(label, request, saved=None):
     return json.loads(r.stdout)
 
 
+TRUST_POLL = 1
+
+
+def _herdr(label, *args):
+    command = (["herdr"] if label == "local" else ["herdr", "--machine", label]) + list(args)
+    r = subprocess.run(command, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"{' '.join(command)}: {(r.stderr or r.stdout).strip()[:200]}")
+    return r.stdout
+
+
+def _pane(label, pane):
+    try:
+        data = json.loads(_herdr(label, "pane", "get", pane))
+    except ValueError:
+        raise RuntimeError(f"herdr pane get {pane} printed no JSON") from None
+    if "error" in data:
+        raise RuntimeError(f"herdr pane get {pane}: {data['error'].get('message', data['error'])}")
+    return data["result"]["pane"]
+
+
+def _last_rows(screen, n=12):
+    return "\n".join([line for line in screen.splitlines() if line.strip()][-n:])
+
+
+def trust(label, pane, path, kind, timeout, saved=None):
+    import adapters
+    adapter = adapters.get(kind)
+    found = on_machine(label, {"op": "check", "path": path}, saved)
+    if found.get("error"):
+        return {"ready": False, "answered": False, "error": found["error"]}
+    if not found["ours"]:
+        return {"ready": False, "answered": False,
+                "error": f"{found['path']} is not a clone agent-foreman made ({found['reason']}); "
+                         "its trust question goes to the person"}
+    answered = False
+    end = time.monotonic() + timeout
+    while True:
+        info = _pane(label, pane)
+        screen = _herdr(label, "pane", "read", pane, "--source", "visible", "--lines", "40")
+        if adapter.TRUST_SCREEN in screen:
+            if not answered:
+                where = info.get("foreground_cwd") or info.get("cwd") or ""
+                if os.path.normpath(where) != found["path"]:
+                    return {"ready": False, "answered": False,
+                            "error": f"pane {pane} runs in {where}, not in {found['path']}; "
+                                     "its trust question goes to the person"}
+                for key in adapter.TRUST_KEYS:
+                    _herdr(label, "pane", "send-keys", pane, key)
+                answered = True
+        elif info.get("agent_status") == "idle":
+            return {"ready": True, "answered": answered}
+        elif "launch.py:" in screen and not info.get("agent"):
+            return {"ready": False, "answered": answered, "error": "launch.py stopped; read its exit line",
+                    "screen": _last_rows(screen)}
+        if time.monotonic() >= end:
+            return {"ready": False, "answered": answered,
+                    "error": f"no input line within {timeout} seconds", "screen": _last_rows(screen)}
+        time.sleep(TRUST_POLL)
+
+
 def archive(label, key, task, dest, saved=None):
     """Copy a task folder from a machine to `dest` on this one, then compare
     the file lists. Returns {"archived": dest, "files": n} or {"error": ...}."""
@@ -276,8 +347,11 @@ def main(argv):
         return 0
     from config import EXIT_SETUP_NEEDED, NAME, REPO, load
     ap = argparse.ArgumentParser(prog="clone.py", description="agent-foreman agent clones")
-    ap.add_argument("command", choices=["make", "check", "remove", "archive"])
+    ap.add_argument("command", choices=["make", "check", "trust", "remove", "archive"])
     ap.add_argument("path", nargs="?")
+    ap.add_argument("--pane", help="trust: the herdr pane the agent starts in")
+    ap.add_argument("--kind", default="claude", help="trust: the profile's agent kind")
+    ap.add_argument("--timeout", type=int, default=90, help="trust: seconds to wait for the input line")
     ap.add_argument("--project", metavar="OWNER/REPO")
     ap.add_argument("--task")
     ap.add_argument("--agent")
@@ -299,6 +373,21 @@ def main(argv):
         if not args.path:
             return bad("check needs a path")
         request = {"op": "check", "path": args.path}
+    elif args.command == "trust":
+        if not (args.path and args.pane):
+            return bad("trust needs the clone's path and --pane")
+        if args.timeout < 1:
+            return bad("--timeout must be at least 1")
+        import adapters
+        if args.kind not in adapters.KINDS:
+            return bad(f"--kind must be one of: {', '.join(adapters.KINDS)}")
+        try:
+            out = trust(args.machine, args.pane, args.path, args.kind, args.timeout)
+        except (ValueError, RuntimeError) as e:
+            print(f"clone.py: {e}", file=sys.stderr)
+            return 1
+        print(json.dumps({"machine": args.machine, **out}, indent=2))
+        return 0 if out["ready"] else 1
     else:
         if not (args.project and REPO.match(args.project)):
             return bad("--project must look like owner/name")

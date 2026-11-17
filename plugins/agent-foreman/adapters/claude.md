@@ -11,7 +11,7 @@ What is particular to Claude Code agents. The code side is
 | Skills in a brief | `foreman-kit:<skill>` |
 | Transcript | `~/.claude/projects/*/<session id>.jsonl`, read by `transcript.py` |
 | Prompt mode | `claude -p --output-format json` with the prompt on stdin; `launch.py --print` runs it and keeps the JSON |
-| Trust | Asked once per folder; a trusted parent folder does not count. Answered for clones the foreman made ("Trust question") |
+| Trust | Asked once per folder; a trusted parent folder does not count for a clone. `clone.py trust` answers it for clones the foreman made ("Trust question") |
 
 ## Trust question
 
@@ -32,14 +32,22 @@ A new folder, such as a fresh clone, opens with this before the input line:
   `blocked` about 30 seconds later in another. Do not wait on the state; read
   the pane.
 - The cursor starts on **No, exit**; Enter alone ends the agent.
-- Answer it only when `clone.py check <folder>` (on that machine) says
-  `"ours": true`: `H pane send-keys <pane> Down`, then `H pane send-keys
-  <pane> Enter`. The input line follows. Claude Code then records the folder
-  as trusted in `~/.claude.json`.
-- Any other folder's trust question goes to the person. Never answer it.
-- Checked 2026-11-13 with Claude Code 2.1.322: `/` was trusted and a folder
-  under it still asked. A machine where bypass mode was never accepted may
-  show that confirmation next; it was not seen here, so it goes to the person.
+- Right after `pane run` starts the agent, run `python3 <skill>/scripts/clone.py
+  trust <clone> --pane <pane> --machine <machine>`. It reads the pane every
+  second. When the question shows, and `clone.py check` says the folder is
+  ours, and the pane runs in it, it sends `Down`, then `Enter`. It returns
+  when the agent is idle at its input line: `"answered"` says whether there
+  was a question. Claude Code then records the folder as trusted in
+  `~/.claude.json`.
+- When it exits 1, read its `error` and `screen`. A question it did not
+  answer goes to the person. Never answer it for a folder that is not ours.
+- A trusted parent folder does not cover a clone: Claude Code looks for a
+  trusted folder only up to the git repository's root, and a clone is its own
+  root. Checked 2026-11-17 with Claude Code 2.1.326: a trusted parent covered
+  a plain folder under it but not a git repository under it, and
+  `--dangerously-skip-permissions` still asked. A machine where bypass mode
+  was never accepted may show that confirmation next; it was not seen here,
+  so it goes to the person.
 
 ## Screen
 

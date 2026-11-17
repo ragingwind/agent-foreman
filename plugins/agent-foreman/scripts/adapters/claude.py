@@ -12,6 +12,8 @@ PLUGIN = "foreman-kit"
 ROLES = ["opus", "sonnet", "haiku"]
 HEARTBEAT = 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/heartbeat.py"'
 NEVER = ["Bash(gh pr merge:*)"]
+TRUST_SCREEN = "Accessing workspace"
+TRUST_KEYS = ["Down", "Enter"]
 
 # Variables a gateway may set. They are cleared first, so a value inherited
 # from the parent shell never leaks into another gateway's agent.
