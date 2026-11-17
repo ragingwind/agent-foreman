@@ -495,7 +495,7 @@ class Skills(unittest.TestCase):
                 "--plugin-dir", "/no/such/dir", "--model", "x"]
         self.assertEqual(config.session_plugin_dirs(argv), [other])
         plugins = [{"id": "other@inline", "enabled": True, "installPath": other},
-                   {"id": "agent-foreman@agent-foreman", "enabled": True, "installPath": config.SELF_DIR}]
+                   {"id": "agent-foreman@ragingwind-agent-skills", "enabled": True, "installPath": config.SELF_DIR}]
         found = config.local_skills(plugins, user_skills_dir=os.path.join(self.home.root, "none"))
         self.assertEqual(list(found), ["other:tidy"])
         p = config.validate(config.merge(config.load(), {"plugin_dirs": [config.SELF_DIR, copy]}))

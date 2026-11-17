@@ -117,8 +117,8 @@ it from writing a fake answer file into `reviews/`.
 1. **Install the plugin** (in Claude Code):
 
    ```
-   /plugin marketplace add ragingwind/agent-foreman
-   /plugin install agent-foreman@agent-foreman
+   /plugin marketplace add ragingwind/agent-skills
+   /plugin install agent-foreman@ragingwind-agent-skills
    ```
 
 2. **Set up**, in a checkout of the repository:
@@ -181,8 +181,8 @@ in setup. The foreman never answers a permission prompt.
 ## Updating and uninstalling
 
 ```bash
-claude plugin update agent-foreman@agent-foreman
-claude plugin uninstall agent-foreman@agent-foreman
+claude plugin update agent-foreman@ragingwind-agent-skills
+claude plugin uninstall agent-foreman@ragingwind-agent-skills
 ```
 
 Uninstalling leaves your settings and records; remove them by hand:

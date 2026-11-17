@@ -6,7 +6,7 @@
     "name": "Jimmy Moon",
     "url": "https://github.com/ragingwind"
   },
-  "homepage": "https://github.com/ragingwind/agent-foreman/tree/main/plugins/agent-foreman",
-  "repository": "https://github.com/ragingwind/agent-foreman",
+  "homepage": "https://github.com/ragingwind/agent-skills/tree/main/plugins/agent-foreman",
+  "repository": "https://github.com/ragingwind/agent-skills",
   "license": "MIT"
 }
